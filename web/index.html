@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>web-muse</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <button id="btn-sessions" title="Toggle sessions (Ctrl+B)" aria-label="Toggle sessions">◧</button>
+    <div id="brand" title="web-muse — localhost bridge to muse serve">
+      <span id="conn-dot" class="dot off" title="connection"></span>
+      <span id="session-title">web-muse</span>
+    </div>
+    <select id="model-picker" title="Model" aria-label="Model"><option value="">model…</option></select>
+    <button id="btn-inspector" title="Toggle inspector (Ctrl+.)" aria-label="Inspector">ⓘ</button>
+    <a id="btn-progress" href="/progress.html" title="Live bridge status page" aria-label="Progress">⏱</a>
+    <button id="btn-new" title="New session (/new)">＋</button>
+  </header>
+
+  <div id="layout">
+    <aside id="sessions" aria-label="Sessions">
+      <div class="side-head">
+        <input id="session-filter" type="search" placeholder="Filter sessions…" aria-label="Filter sessions">
+        <button id="btn-close-sessions" title="Close">✕</button>
+      </div>
+      <div id="session-list" role="listbox" aria-label="Session list"></div>
+      <div class="side-foot">
+        <button id="btn-refresh-sessions" title="Refresh list (/list)">↻ Refresh</button>
+        <a id="btn-status-drawer" href="/progress.html" title="Live bridge status page">⏱ Bridge status</a>
+      </div>
+    </aside>
+    <div id="scrim" hidden></div>
+
+    <main id="center">
+      <div id="notice" hidden></div>
+      <div id="toolbar">
+        <span id="run-chip" class="chip idle" title="Turn state">idle</span>
+        <button id="btn-older" title="Load older history">↑ older</button>
+        <span id="cursor-chip" class="chip dim" title="View cursor"></span>
+        <span class="spacer"></span>
+        <span id="sess-meta" class="dim"></span>
+      </div>
+
+      <section id="terminal" aria-label="Session transcript" aria-live="off"></section>
+      <button id="jump-latest" hidden title="Jump to latest">↓ latest</button>
+
+      <section id="cards" aria-label="Approvals and input requests"></section>
+
+      <footer id="composer-wrap">
+        <div id="slash-popup" hidden role="listbox" aria-label="Slash commands"></div>
+        <form id="composer">
+          <textarea id="input" rows="2" placeholder="Ask Muse…  (Enter send · Shift+Enter newline · / for commands)"
+            aria-label="Prompt input" autocomplete="off" spellcheck="true"></textarea>
+          <div class="composer-btns">
+            <button type="button" id="btn-stop" title="Interrupt turn (/interrupt)" disabled>⏹</button>
+            <button type="submit" id="btn-send" title="Send (Enter)">Send</button>
+          </div>
+        </form>
+        <div id="hintbar">
+          <span id="status">connecting…</span>
+          <span id="sess-usage" title="Session tokens"></span>
+          <span id="usage" title="Token usage"></span>
+        </div>
+      </footer>
+    </main>
+
+    <aside id="inspector" aria-label="Inspector">
+      <div class="tabs" role="tablist">
+        <button data-tab="approvals" class="tab active" role="tab">Approvals</button>
+        <button data-tab="tools" class="tab" role="tab">Tools</button>
+        <button data-tab="session" class="tab" role="tab">Session</button>
+        <button id="btn-close-inspector" title="Close panel" aria-label="Close panel">✕</button>
+      </div>
+      <div id="tab-approvals" class="tabpanel"></div>
+      <div id="tab-tools" class="tabpanel" hidden></div>
+      <div id="tab-session" class="tabpanel" hidden>
+        <label>Approval mode
+          <select id="approval-mode">
+            <option value="onRequest">onRequest</option>
+            <option value="promptUnmatched">promptUnmatched</option>
+            <option value="denyUnmatched">denyUnmatched</option>
+          </select>
+        </label>
+        <div class="row-btns">
+          <button id="btn-compact" title="Compact session (/compact)">Compact</button>
+          <button id="btn-usage" title="Refresh usage (/usage)">Usage</button>
+          <button id="btn-pending" title="List pending approvals (/pending)">Pending</button>
+        </div>
+        <pre id="session-detail" class="detail"></pre>
+      </div>
+    </aside>
+  </div>
+</div>
+<div id="toast" hidden role="status"></div>
+<script src="/app.js"></script>
+</body>
+</html>
