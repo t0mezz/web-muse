@@ -108,6 +108,14 @@ by sending `workspaceRoot`, change the base with `--workspace-base DIR`,
 or pass `--workspace-base ""` to restore the old workspaceless behavior.
 Deleting a session does not delete its workspace directory.
 
+To work on an existing on-device directory instead, root the session
+there at creation: `/new --path /dir` in the composer, or press `+`
+and type the directory (blank keeps the default workspace). Any path
+is allowed, but the first session touching one asks for an explicit
+allow in the browser (remembered per browser); the bridge also
+rejects roots that are not existing directories and creates nothing
+outside its workspace base.
+
 ## HTTP notes
 
 Loopback bind plus a Host allowlist (`127.0.0.1`, `localhost`, `::1`;

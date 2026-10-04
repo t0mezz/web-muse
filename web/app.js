@@ -222,19 +222,56 @@ function handleSubscribeResult(r) {
 }
 
 function parseNewArgs(args) {
-  // /new [name] [--mcp a,b] — --mcp may repeat; names are comma/space split.
+  // /new [name] [--mcp a,b] [--path <dir>] — --mcp may repeat; names are
+  // comma/space split. First --path wins (whitespace-split args, so no
+  // spaces in paths here — the + button has no such limit).
   const names = [];
   const rest = [];
+  let workspaceRoot;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--mcp" && i + 1 < args.length) {
       names.push(...args[++i].split(",").map((s) => s.trim()).filter(Boolean));
     } else if (args[i].startsWith("--mcp=")) {
       names.push(...args[i].slice(6).split(",").map((s) => s.trim()).filter(Boolean));
+    } else if (args[i] === "--path" && i + 1 < args.length) {
+      if (workspaceRoot === undefined) workspaceRoot = args[++i];
+      else i++;
+    } else if (args[i].startsWith("--path=")) {
+      if (workspaceRoot === undefined) workspaceRoot = args[i].slice(7);
     } else {
       rest.push(args[i]);
     }
   }
-  return { name: rest.join(" ") || undefined, mcpAttach: [...new Set(names)] };
+  const out = { name: rest.join(" ") || undefined,
+    mcpAttach: [...new Set(names)] };
+  if (workspaceRoot !== undefined) out.workspaceRoot = workspaceRoot;
+  return out;
+}
+
+// Manual session directories: any on-device path is allowed, but the
+// first session touching one needs an explicit allow. Allowed roots
+// persist per browser.
+const ALLOWED_ROOTS_KEY = "webmuse.allowedRoots";
+function confirmedRoots() {
+  try {
+    const v = JSON.parse(localStorage.getItem(ALLOWED_ROOTS_KEY) || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+function normalizeRoot(p) {
+  p = (p || "").trim();
+  if (p.length > 1) p = p.replace(/\/+$/, "");
+  return p;
+}
+function ensureRootConfirmed(path) {
+  const norm = normalizeRoot(path);
+  if (!norm) return false;
+  const known = confirmedRoots();
+  if (known.includes(norm)) return true;
+  if (!window.confirm(`Allow this session to access ${norm}?\n\nThe agent will read and write files there.`)) return false;
+  known.push(norm);
+  try { localStorage.setItem(ALLOWED_ROOTS_KEY, JSON.stringify(known)); } catch (_) {}
+  return true;
 }
 
 async function newSession(name, opts) {
@@ -243,13 +280,19 @@ async function newSession(name, opts) {
   el("session-title").textContent = "new session";
   updateSessionDetail();
   const mcpAttach = (opts && opts.mcpAttach) || [];
-  if (name || mcpAttach.length) {
+  const root = normalizeRoot(opts && opts.workspaceRoot);
+  if (root && !ensureRootConfirmed(root)) {
+    toast("session not created: directory not confirmed", true);
+    return;
+  }
+  if (name || mcpAttach.length || root) {
     // Create eagerly so the name sticks and MCP attaches at construction
     // (session/start is the only wire touchpoint for per-session MCP);
     // otherwise creation is lazy on first prompt.
     try {
       const req = { type: "new" };
       if (mcpAttach.length) req.mcpAttach = mcpAttach;
+      if (root) req.workspaceRoot = root;
       const r = await send(req);
       const sid = r.session && r.session.sessionId;
       if (sid) {
@@ -1197,7 +1240,7 @@ async function refreshUsage() {
 /* ---------- slash commands (TUI parity) ---------- */
 const SLASH = [
   { name: "help", usage: "/help", desc: "List slash commands", run: () => cmdHelp() },
-  { name: "new", usage: "/new [name] [--mcp a,b]", desc: "Start a new session", run: (a) => { const p = parseNewArgs(a); return newSession(p.name, p); } },
+  { name: "new", usage: "/new [name] [--mcp a,b] [--path <dir>]", desc: "Start a new session", run: (a) => { const p = parseNewArgs(a); return newSession(p.name, p); } },
   { name: "list", usage: "/list", desc: "Refresh session list", run: () => refreshSessions().then(() => toast("sessions refreshed")) },
   { name: "sessions", usage: "/sessions", desc: "Alias for /list", run: () => refreshSessions().then(() => toast("sessions refreshed")) },
   { name: "resume", usage: "/resume <id-prefix>", desc: "Open a session by id prefix", run: (a) => cmdResume(a) },
@@ -1627,7 +1670,13 @@ document.addEventListener("keydown", (ev) => {
 });
 el("btn-close-sessions").onclick = closeDrawer;
 el("scrim").onclick = () => { closeDrawer(); closeInspector(); };
-el("btn-new").onclick = () => { newSession(); closeDrawer(); };
+el("btn-new").onclick = () => {
+  const p = prompt("Session directory (blank for the default workspace):");
+  if (p == null) return; // cancelled
+  if (p.trim()) newSession(undefined, { workspaceRoot: p });
+  else newSession();
+  closeDrawer();
+};
 el("btn-refresh-sessions").onclick = () => refreshSessions().catch((e) => toast(e.message, true));
 el("session-filter").oninput = () => renderSessionList(state.sessionsCache);
 el("btn-older").onclick = loadOlder;
