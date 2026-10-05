@@ -63,6 +63,20 @@ class TestEchoReconciliation(unittest.TestCase):
                       fn_body(APP_JS, "renderItem"))
 
 
+class TestReminderHidden(unittest.TestCase):
+    def test_helper_detects_reminder_kinds(self):
+        body = fn_body(APP_JS, "isReminder")
+        self.assertIn("toLowerCase()", body)
+        self.assertIn('"reminder"', body)
+
+    def test_render_paths_drop_reminders(self):
+        for name in ("renderItem", "renderItemPrepend"):
+            body = fn_body(APP_JS, name)
+            self.assertIn("isReminder(it)", body,
+                          f"{name} never drops reminders")
+            self.assertIn("return;", body)
+
+
 class TestReminderDemotion(unittest.TestCase):
     def test_reminder_kinds_map_to_system(self):
         body = fn_body(APP_JS, "itemKind")

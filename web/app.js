@@ -633,7 +633,8 @@ function itemKind(it) {
   const k = String(it.kind || it.type || "");
   if (k === "userMessage" || k.includes("user")) return "user";
   // Reminder child sessions are host-side reminder activity, not agent
-  // output: demote to faint system lines instead of agent rows.
+  // output: never rendered (renderItem drops them; the mapping stays
+  // "system" so nothing else treats them as agent rows).
   if (k.toLowerCase().includes("reminder")) return "system";
   if (k.includes("tool") || k.includes("Tool") || k.includes("command") || k.includes("Command")) return "tool";
   if (k.includes("system") || k.includes("System")) return "system";
@@ -641,6 +642,12 @@ function itemKind(it) {
   return "agent";
 }
 const GUTTER = { user: "❯", agent: "●", tool: "⚙", system: "◦", error: "⚠" };
+
+// Reminder items (reminderChild and kin) are host-internal activity:
+// hidden from the transcript entirely.
+function isReminder(it) {
+  return String((it && (it.kind || it.type)) || "").toLowerCase().includes("reminder");
+}
 
 function toolType(it) {
   // The tool call type as the wire sends it (tool:"bash"), with fallbacks.
@@ -852,6 +859,10 @@ function renderItem(it, streaming) {
   }
   let rec = state.items.get(it.itemId);
   const kind = itemKind(it);
+  if (isReminder(it)) {
+    if (rec) { rec.line.remove(); state.items.delete(it.itemId); }
+    return;
+  }
   if (!rec) {
     const line = document.createElement("div");
     line.className = `tline ${kind}`;
@@ -1008,6 +1019,7 @@ async function loadOlder() {
 function renderItemPrepend(it) {
   if (!it || !it.itemId || state.items.has(it.itemId)) return;
   if (!it.itemId.startsWith("local-")) reconcileLocalEcho(it);
+  if (isReminder(it)) return;
   const kind = itemKind(it);
   const line = document.createElement("div");
   line.className = `tline ${kind}`;
