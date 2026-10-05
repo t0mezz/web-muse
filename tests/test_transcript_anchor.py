@@ -45,13 +45,14 @@ class TestChatAlignment(unittest.TestCase):
         self.assertIsNotNone(m, ".tline.user rule missing")
         self.assertIn("justify-content: flex-end;", m.group(1))
 
-    def test_user_body_has_no_box_background(self):
+    def test_user_body_is_scaling_pill_capped_at_half(self):
         m = re.search(r"\.tline\.user \.body \{(.*?)\}", STYLE_CSS,
                       re.S)
         self.assertIsNotNone(m, ".tline.user .body rule missing")
         body = m.group(1)
-        self.assertIn("background: none;", body)
-        self.assertIn("max-width:", body)
+        self.assertIn("background: var(--panel2);", body)
+        self.assertIn("border-radius: 999px;", body)
+        self.assertIn("max-width: 50%;", body)
 
     def test_agent_lines_stay_left(self):
         # Agent rows keep the default full-width left flow: no right

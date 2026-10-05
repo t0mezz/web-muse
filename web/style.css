@@ -134,9 +134,9 @@ body {
 .tline .head { font-size: 11px; color: var(--faint); margin-bottom: 2px; }
 .tline.user { justify-content: flex-end; }
 .tline.user .body {
-  flex: 0 1 auto; max-width: 85%;
-  background: none; border: none; border-radius: 16px;
-  padding: 10px 14px;
+  flex: 0 1 auto; max-width: 50%;
+  background: var(--panel2); border: none; border-radius: 999px;
+  padding: 10px 16px;
 }
 .tline.agent { background: none; border: none; }
 .tline.tool { color: var(--dim); font-size: 12.5px; font-family: var(--mono); border: none; background: none; }
