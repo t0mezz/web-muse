@@ -624,6 +624,12 @@ function hideThinking() {
   const line = document.getElementById("thinking-row");
   if (line) line.remove();
 }
+/* Keep the thinking row pinned below new lines: tool logs stack above
+   it while it stays fixed at the end of the turn's block. */
+function pinThinking() {
+  const think = document.getElementById("thinking-row");
+  if (think) el("terminal").append(think);
+}
 
 function scrollDown(force) {
   const t = el("terminal");
@@ -641,6 +647,7 @@ function sysLine(text, isErr) {
   body.className = "body"; body.textContent = text;
   line.append(gut, body);
   el("terminal").append(line);
+  pinThinking();
   scrollDown();
   return line;
 }
@@ -944,6 +951,7 @@ function renderItem(it, streaming) {
   }
   rec.line.classList.toggle("streaming", !!streaming);
   updateWelcome();
+  pinThinking();
   scrollDown();
 }
 
@@ -1095,6 +1103,9 @@ function onEvent(method, p) {
     }
     case "item/completed":
     case "item/updated":
+      // The model's answer fired: drop the thinking status now instead
+      // of waiting for turn/completed (which can lag behind).
+      if (p.item && itemKind(p.item) === "agent") hideThinking();
       renderItem(p.item || { itemId: p.itemId, kind: p.kind, text: p.text }, false);
       break;
     case "turn/started":

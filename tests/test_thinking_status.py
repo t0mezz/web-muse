@@ -1,9 +1,9 @@
-"""Thinking status: TUI-style turn header in the transcript.
+"""Thinking status: TUI-style turn footer in the transcript.
 
-A "Thinking… (Ns)" row heads each running turn (tool logs and the
-answer print below it) and is removed as soon as generation finishes,
-leaving the final answer. The timer interval is always cleared, including
-on transcript reset.
+A "Thinking… (Ns)" row stays pinned below each running turn's lines
+(tool logs stack above it) and is removed as soon as the model's answer
+fires — turn/completed and retraction clear it as a backstop. The timer
+interval is always cleared, including on transcript reset.
 
 No JS harness in this repo, so the contract is guarded at the source
 level, following tests/test_session_toggle.py.
@@ -47,6 +47,17 @@ class TestThinkingStatus(unittest.TestCase):
 
     def test_turn_started_shows_status(self):
         self.assertIn("showThinking();", case_body("turn/started"))
+
+    def test_answer_firing_clears_status(self):
+        body = case_body("item/completed")
+        self.assertIn("hideThinking();", body)
+        self.assertIn('=== "agent"', body)
+
+    def test_new_lines_pin_status_below(self):
+        self.assertIn("function pinThinking()", APP_JS)
+        for name in ("renderItem", "sysLine"):
+            self.assertIn("pinThinking();", fn_body(name),
+                          f"{name} lets lines pile below the status")
 
     def test_settled_turns_clear_status(self):
         for marker in ("turn/completed", "turn/retracted"):
