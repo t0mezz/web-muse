@@ -123,6 +123,11 @@ body {
   display: flex; flex-direction: column; gap: 10px;
   border: none;
 }
+/* Bottom-anchored like a terminal: first lines print just above the
+   composer, history pushes up as new lines arrive, and the pane scrolls
+   once content exceeds the viewport. margin-top:auto (not
+   justify-content) keeps the top reachable when overflowing. */
+#terminal > :first-child { margin-top: auto; }
 .tline { display: flex; gap: 10px; padding: 2px 0; border: none; background: none; scroll-margin: 8px; }
 .tline .gut { display: none; }
 .tline .body { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
