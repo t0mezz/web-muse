@@ -132,9 +132,11 @@ body {
 .tline .gut { display: none; }
 .tline .body { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
 .tline .head { font-size: 11px; color: var(--faint); margin-bottom: 2px; }
+.tline.user { justify-content: flex-end; }
 .tline.user .body {
-  background: var(--panel2); border: none; border-radius: 16px;
-  padding: 10px 14px; width: fit-content; max-width: 100%;
+  flex: 0 1 auto; max-width: 85%;
+  background: none; border: none; border-radius: 16px;
+  padding: 10px 14px;
 }
 .tline.agent { background: none; border: none; }
 .tline.tool { color: var(--dim); font-size: 12.5px; font-family: var(--mono); border: none; background: none; }
@@ -232,7 +234,7 @@ body {
 .card button.submit:not(.armed) { opacity: .45; }
 
 /* composer: rounded pill, centered, icon buttons */
-#composer-wrap { flex: none; border-top: 1px solid var(--line); background: var(--panel); position: relative; }
+#composer-wrap { flex: none; border-top: none; background: none; position: relative; }
 #composer {
   display: flex; gap: 8px; align-items: flex-end;
   width: min(760px, 100%); margin: 0 auto; padding: 10px 12px 6px;

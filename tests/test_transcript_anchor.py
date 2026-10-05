@@ -39,5 +39,38 @@ class TestTranscriptAnchor(unittest.TestCase):
         self.assertIn("overflow-y: auto;", body)
 
 
+class TestChatAlignment(unittest.TestCase):
+    def test_user_lines_dock_right(self):
+        m = re.search(r"\.tline\.user \{(.*?)\}", STYLE_CSS, re.S)
+        self.assertIsNotNone(m, ".tline.user rule missing")
+        self.assertIn("justify-content: flex-end;", m.group(1))
+
+    def test_user_body_has_no_box_background(self):
+        m = re.search(r"\.tline\.user \.body \{(.*?)\}", STYLE_CSS,
+                      re.S)
+        self.assertIsNotNone(m, ".tline.user .body rule missing")
+        body = m.group(1)
+        self.assertIn("background: none;", body)
+        self.assertIn("max-width:", body)
+
+    def test_agent_lines_stay_left(self):
+        # Agent rows keep the default full-width left flow: no right
+        # docking of any kind.
+        m = re.search(r"\.tline\.agent \{(.*?)\}", STYLE_CSS, re.S)
+        self.assertIsNotNone(m, ".tline.agent rule missing")
+        self.assertNotIn("flex-end", m.group(1))
+        self.assertNotIn("margin-left: auto", m.group(1))
+
+    def test_composer_wrap_has_no_background_or_top_line(self):
+        # The base rule (line-anchored: the welcome override also
+        # mentions #composer-wrap).
+        m = re.search(r"^#composer-wrap \{(.*?)\}", STYLE_CSS,
+                      re.S | re.M)
+        self.assertIsNotNone(m, "#composer-wrap rule missing")
+        body = m.group(1)
+        self.assertIn("background: none;", body)
+        self.assertIn("border-top: none;", body)
+
+
 if __name__ == "__main__":
     unittest.main()
