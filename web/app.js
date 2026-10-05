@@ -595,46 +595,6 @@ function updateWelcome() {
   el("center").classList.toggle("is-welcome", state.items.size === 0);
 }
 
-/* Generating indicator: flip-loader row while a turn runs. Shown on
-   turn/started, swapped out for real content on first item/started,
-   cleared when the turn settles. */
-function showLoader() {
-  if (document.getElementById("loader-row")) { scrollDown(); return; }
-  // Agent-shaped row so the indicator sits exactly where the answer's
-  // first line will print.
-  const line = document.createElement("div");
-  line.className = "tline agent generating";
-  line.id = "loader-row";
-  const wrap = document.createElement("span");
-  wrap.className = "body";
-  const text = document.createElement("span");
-  text.className = "txt";
-  const loader = document.createElement("div");
-  loader.className = "loader";
-  loader.id = "loader";
-  loader.setAttribute("role", "status");
-  loader.setAttribute("aria-label", "Generating");
-  text.append(loader);
-  wrap.append(text);
-  line.append(wrap);
-  el("terminal").append(line);
-  scrollDown();
-}
-/* Dock the spinner at the left of the live output line: it keeps
-   spinning beside streaming answers and tool calls until the turn ends. */
-function dockLoader(line) {
-  const loader = document.getElementById("loader");
-  const row = document.getElementById("loader-row");
-  if (row) row.remove();
-  if (loader && line && !line.contains(loader)) line.prepend(loader);
-}
-function hideLoader() {
-  const loader = document.getElementById("loader");
-  if (loader) loader.remove();
-  const row = document.getElementById("loader-row");
-  if (row) row.remove();
-}
-
 function scrollDown(force) {
   const t = el("terminal");
   if (state.stick || force) t.scrollTop = t.scrollHeight;
@@ -953,7 +913,6 @@ function renderItem(it, streaming) {
     rec.body.append(c);
   }
   rec.line.classList.toggle("streaming", !!streaming);
-  if (streaming && (kind === "agent" || kind === "tool")) dockLoader(rec.line);
   updateWelcome();
   scrollDown();
 }
@@ -1110,14 +1069,12 @@ function onEvent(method, p) {
       break;
     case "turn/started":
       state.running = true; state.turnId = p.turnId || null; updateRunChip();
-      showLoader();
       if (state.queuedTurnId && p.turnId === state.queuedTurnId) {
         state.queuedTurnId = null;
         sysLine("queued turn started.");
       }
       break;
     case "turn/completed": {
-      hideLoader();
       // Single terminal event: p.terminal is completed|failed|cancelled.
       // (There are no turn/cancelled or turn/failed notifications on MSP v1.)
       state.running = false; state.turnId = null; updateRunChip();
@@ -1139,7 +1096,6 @@ function onEvent(method, p) {
       break;
     }
     case "turn/retracted":
-      hideLoader();
       sysLine("turn retracted — prompt restored to the composer.");
       if (p.promptText) { el("input").value = p.promptText; autosize(); }
       break;
