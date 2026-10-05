@@ -92,12 +92,6 @@ body {
 .row-opt.danger:hover { color: var(--err); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
 .status-dot.running { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
-.side-foot { display: none; padding: 8px 10px; border-top: 1px solid var(--line); }
-#btn-status-drawer {
-  display: none; margin-top: 8px; text-align: center; text-decoration: none;
-  padding: 7px; border-radius: 999px; background: var(--bg); color: var(--fg);
-  border: 1px solid var(--line); font-size: 13px;
-}
 #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 25; }
 
 /* center column */
@@ -554,8 +548,6 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
       0 0 14px 1px rgba(var(--glow-color), .2);
   }
   #btn-progress { display: none; }
-  .side-foot { display: block; }
-  #btn-status-drawer { display: block; }
   #model-picker { max-width: 26vw; }
   #sess-meta { display: none; }
   #cursor-chip { max-width: 30vw; }
