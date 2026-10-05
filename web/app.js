@@ -606,6 +606,25 @@ function showThinking() {
   const line = document.createElement("div");
   line.className = "tline thinking";
   line.id = "thinking-row";
+  // Pyramid indicator left of the thinking text.
+  const pyrBox = document.createElement("span");
+  pyrBox.className = "pyr-box";
+  const pyr = document.createElement("div");
+  pyr.className = "pyramid-loader";
+  pyr.setAttribute("aria-hidden", "true");
+  const spin = document.createElement("div");
+  spin.className = "wrapper";
+  for (const side of ["side1", "side2", "side3", "side4"]) {
+    const s = document.createElement("span");
+    s.className = "side " + side;
+    spin.append(s);
+  }
+  const shadow = document.createElement("span");
+  shadow.className = "shadow";
+  spin.append(shadow);
+  pyr.append(spin);
+  pyrBox.append(pyr);
+  line.append(pyrBox);
   const status = document.createElement("span");
   status.className = "body";
   // Static prefix as per-character wave spans (built once so the loop

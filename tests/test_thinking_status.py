@@ -86,6 +86,19 @@ class TestThinkingStatus(unittest.TestCase):
     def test_status_styling_present(self):
         self.assertIn(".tline.thinking", STYLE_CSS)
 
+    def test_pyramid_built_left_of_text(self):
+        body = fn_body("showThinking")
+        for cls in ('"pyr-box"', '"pyramid-loader"', '"shadow"'):
+            self.assertIn(cls, body)
+        self.assertLess(body.index("line.append(pyrBox)"),
+                        body.index("line.append(status)"))
+
+    def test_pyramid_assets_present(self):
+        for marker in (".pyramid-loader .wrapper {", "@keyframes pyr-spin",
+                       ".pyramid-loader .wrapper .side",
+                       ".pyramid-loader .wrapper .shadow"):
+            self.assertIn(marker, STYLE_CSS)
+
 
 if __name__ == "__main__":
     unittest.main()
