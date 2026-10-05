@@ -148,11 +148,22 @@ body {
 .tline.system { color: var(--faint); font-style: italic; font-size: 12.5px; }
 .tline.thinking { color: var(--dim); font-size: 13px; }
 .tline.thinking .body { white-space: pre-wrap; }
+/* Looping bold wave sweeping through the thinking text. */
+.tline.thinking .wv {
+  display: inline-block;
+  animation: think-wave 1.4s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.08s);
+}
+@keyframes think-wave {
+  0%, 100% { font-weight: 400; }
+  50% { font-weight: 700; }
+}
 .tline.error { border: none; color: #ffb4ae; }
 .tline.streaming { border: none; }
 @keyframes blink { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) {
   .tline.streaming .gut, .tline .caret { animation: none; }
+  .tline.thinking .wv { animation: none; }
 }
 .tline details { margin-top: 4px; }
 .tline summary { cursor: pointer; color: var(--faint); font-size: 11px; }

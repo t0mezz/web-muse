@@ -608,12 +608,23 @@ function showThinking() {
   line.id = "thinking-row";
   const status = document.createElement("span");
   status.className = "body";
+  // Static prefix as per-character wave spans (built once so the loop
+  // never restarts); only the clock suffix updates on tick.
+  [..."✻ Thinking… "].forEach((ch, i) => {
+    const s = document.createElement("span");
+    s.className = "wv";
+    s.style.setProperty("--i", i);
+    s.textContent = ch;
+    status.append(s);
+  });
+  const clock = document.createElement("span");
+  status.append(clock);
   line.append(status);
   el("terminal").append(line);
   thinkingStartedAt = Date.now();
   const tick = () => {
     const s = Math.max(0, Math.round((Date.now() - thinkingStartedAt) / 1000));
-    status.textContent = `✻ Thinking… (${s}s)`;
+    clock.textContent = `(${s}s)`;
   };
   tick();
   thinkingTimer = setInterval(tick, 1000);

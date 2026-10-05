@@ -45,6 +45,22 @@ class TestThinkingStatus(unittest.TestCase):
     def test_timer_cleared_on_hide(self):
         self.assertIn("clearInterval", fn_body("hideThinking"))
 
+    def test_wave_built_per_character(self):
+        body = fn_body("showThinking")
+        self.assertIn('"wv"', body)
+        self.assertIn('"--i"', body)
+
+    def test_wave_animation_present(self):
+        self.assertIn("@keyframes think-wave", STYLE_CSS)
+        self.assertIn(".tline.thinking .wv", STYLE_CSS)
+
+    def test_wave_freezes_under_reduced_motion(self):
+        m = re.search(
+            r"@media \(prefers-reduced-motion: reduce\) \{(.*?)\n\}",
+            STYLE_CSS, re.S)
+        self.assertIsNotNone(m, "reduced-motion block missing")
+        self.assertIn(".wv", m.group(1))
+
     def test_turn_started_shows_status(self):
         self.assertIn("showThinking();", case_body("turn/started"))
 
