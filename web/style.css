@@ -135,9 +135,14 @@ body {
 .tline.user { justify-content: flex-end; }
 .tline.user .body {
   flex: 0 1 auto; max-width: 50%;
-  background: var(--panel2); border: none; border-radius: 999px;
-  padding: 10px 16px;
+  display: flex; flex-direction: column; align-items: flex-end;
+  background: none; border: none; padding: 0;
 }
+.tline.user .txt {
+  background: var(--panel2); border-radius: 999px;
+  padding: 10px 16px; max-width: 100%;
+}
+.tline.user .head { order: 2; margin-top: 3px; }
 .tline.agent { background: none; border: none; }
 .tline.tool { color: var(--dim); font-size: 12.5px; font-family: var(--mono); border: none; background: none; }
 .tline.system { color: var(--faint); font-style: italic; font-size: 12.5px; }

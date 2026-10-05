@@ -45,14 +45,30 @@ class TestChatAlignment(unittest.TestCase):
         self.assertIsNotNone(m, ".tline.user rule missing")
         self.assertIn("justify-content: flex-end;", m.group(1))
 
-    def test_user_body_is_scaling_pill_capped_at_half(self):
+    def test_user_body_is_narrow_right_column(self):
         m = re.search(r"\.tline\.user \.body \{(.*?)\}", STYLE_CSS,
                       re.S)
         self.assertIsNotNone(m, ".tline.user .body rule missing")
         body = m.group(1)
+        self.assertIn("max-width: 50%;", body)
+        self.assertIn("flex-direction: column;", body)
+        self.assertIn("align-items: flex-end;", body)
+
+    def test_user_text_is_scaling_pill(self):
+        m = re.search(r"\.tline\.user \.txt \{(.*?)\}", STYLE_CSS,
+                      re.S)
+        self.assertIsNotNone(m, ".tline.user .txt rule missing")
+        body = m.group(1)
         self.assertIn("background: var(--panel2);", body)
         self.assertIn("border-radius: 999px;", body)
-        self.assertIn("max-width: 50%;", body)
+
+    def test_user_head_sits_below_pinned_right(self):
+        # Caption renders after the pill (order) and docks right via
+        # the column's align-items, outside any bubble background.
+        m = re.search(r"\.tline\.user \.head \{(.*?)\}", STYLE_CSS,
+                      re.S)
+        self.assertIsNotNone(m, ".tline.user .head rule missing")
+        self.assertIn("order: 2;", m.group(1))
 
     def test_agent_lines_stay_left(self):
         # Agent rows keep the default full-width left flow: no right
