@@ -1,0 +1,64 @@
+"""Thinking status: TUI-style turn header in the transcript.
+
+A "Thinking… (Ns)" row heads each running turn (tool logs and the
+answer print below it) and is removed as soon as generation finishes,
+leaving the final answer. The timer interval is always cleared, including
+on transcript reset.
+
+No JS harness in this repo, so the contract is guarded at the source
+level, following tests/test_session_toggle.py.
+"""
+
+import re
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+APP_JS = (ROOT / "web" / "app.js").read_text()
+STYLE_CSS = (ROOT / "web" / "style.css").read_text()
+
+
+def case_body(marker):
+    m = re.search(r'case "' + marker + r'":(.*?)break;', APP_JS, re.S)
+    assert m, f'case "{marker}" missing'
+    return m.group(1)
+
+
+def fn_body(name):
+    m = re.search(r"function " + re.escape(name) + r"\(.*?\) \{(.*?)\n\}",
+                  APP_JS, re.S)
+    assert m, f"{name} missing"
+    return m.group(1)
+
+
+class TestThinkingStatus(unittest.TestCase):
+    def test_helpers_exist(self):
+        self.assertIn("function showThinking()", APP_JS)
+        self.assertIn("function hideThinking()", APP_JS)
+        self.assertIn('id = "thinking-row"', APP_JS)
+
+    def test_status_row_heads_the_turn(self):
+        body = fn_body("showThinking")
+        self.assertIn('"tline thinking"', body)
+        self.assertIn("setInterval", body)
+
+    def test_timer_cleared_on_hide(self):
+        self.assertIn("clearInterval", fn_body("hideThinking"))
+
+    def test_turn_started_shows_status(self):
+        self.assertIn("showThinking();", case_body("turn/started"))
+
+    def test_settled_turns_clear_status(self):
+        for marker in ("turn/completed", "turn/retracted"):
+            self.assertIn("hideThinking();", case_body(marker),
+                          f"{marker} leaves the status behind")
+
+    def test_reset_clears_status(self):
+        self.assertIn("hideThinking();", fn_body("clearTranscript"))
+
+    def test_status_styling_present(self):
+        self.assertIn(".tline.thinking", STYLE_CSS)
+
+
+if __name__ == "__main__":
+    unittest.main()

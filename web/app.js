@@ -588,11 +588,41 @@ function clearTranscript() {
   state.lastCumulative = null; state.lastContext = null; state.sessionMcp = [];
   el("sess-usage").textContent = ""; el("sess-usage").title = "";
   updateRunChip(); updateOlderBtn(); updateCursorChip(); updateWelcome();
+  hideThinking();
 }
 
 /* Welcome state: centered composer until the first message opens the transcript. */
 function updateWelcome() {
   el("center").classList.toggle("is-welcome", state.items.size === 0);
+}
+
+/* TUI-style thinking status: heads the turn's block while it runs (tool
+   logs and the answer print below it), replaced by the final answer —
+   i.e. removed — as soon as generation finishes. */
+let thinkingTimer = null;
+let thinkingStartedAt = 0;
+function showThinking() {
+  hideThinking();
+  const line = document.createElement("div");
+  line.className = "tline thinking";
+  line.id = "thinking-row";
+  const status = document.createElement("span");
+  status.className = "body";
+  line.append(status);
+  el("terminal").append(line);
+  thinkingStartedAt = Date.now();
+  const tick = () => {
+    const s = Math.max(0, Math.round((Date.now() - thinkingStartedAt) / 1000));
+    status.textContent = `✻ Thinking… (${s}s)`;
+  };
+  tick();
+  thinkingTimer = setInterval(tick, 1000);
+  scrollDown();
+}
+function hideThinking() {
+  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+  const line = document.getElementById("thinking-row");
+  if (line) line.remove();
 }
 
 function scrollDown(force) {
@@ -1069,12 +1099,14 @@ function onEvent(method, p) {
       break;
     case "turn/started":
       state.running = true; state.turnId = p.turnId || null; updateRunChip();
+      showThinking();
       if (state.queuedTurnId && p.turnId === state.queuedTurnId) {
         state.queuedTurnId = null;
         sysLine("queued turn started.");
       }
       break;
     case "turn/completed": {
+      hideThinking();
       // Single terminal event: p.terminal is completed|failed|cancelled.
       // (There are no turn/cancelled or turn/failed notifications on MSP v1.)
       state.running = false; state.turnId = null; updateRunChip();
@@ -1096,6 +1128,7 @@ function onEvent(method, p) {
       break;
     }
     case "turn/retracted":
+      hideThinking();
       sysLine("turn retracted — prompt restored to the composer.");
       if (p.promptText) { el("input").value = p.promptText; autosize(); }
       break;

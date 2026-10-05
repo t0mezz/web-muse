@@ -146,6 +146,8 @@ body {
 .tline.agent { background: none; border: none; }
 .tline.tool { color: var(--dim); font-size: 12.5px; font-family: var(--mono); border: none; background: none; }
 .tline.system { color: var(--faint); font-style: italic; font-size: 12.5px; }
+.tline.thinking { color: var(--dim); font-size: 13px; }
+.tline.thinking .body { white-space: pre-wrap; }
 .tline.error { border: none; color: #ffb4ae; }
 .tline.streaming { border: none; }
 @keyframes blink { 50% { opacity: .25; } }
