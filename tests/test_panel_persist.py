@@ -1,8 +1,8 @@
 """Panel-state persistence: toggles survive reload via localStorage.
 
 Every panel mutator saves both panels' `.open` state; page init restores
-the stored state, falling back to the width-based defaults only when
-nothing was stored yet.
+the stored state, falling back to both bars hidden only when nothing
+was stored yet.
 
 No JS harness in this repo, so the contract is guarded at the source
 level, following tests/test_session_toggle.py.
@@ -45,13 +45,8 @@ class TestPanelPersistence(unittest.TestCase):
         # Stored state wins...
         self.assertIn('classList.toggle("open", s === "1")', body)
         self.assertIn('classList.toggle("open", insp === "1")', body)
-        # ...first run keeps the old width defaults.
-        self.assertIn(
-            'if (!isNarrow()) el("sessions").classList.add("open");',
-            body)
-        self.assertIn(
-            'if (window.innerWidth >= 1300) '
-            'el("inspector").classList.add("open");', body)
+        # ...first run hides both bars: no width-based auto-open.
+        self.assertNotIn('classList.add("open")', body)
 
     def test_init_restores_instead_of_width_only(self):
         self.assertIn("restorePanelState();", APP_JS)

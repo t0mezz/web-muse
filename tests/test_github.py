@@ -1,10 +1,12 @@
 """GitHub sessions via `gh` (stage 2, gh-only v1).
 
-Bridge: `owner/repo` validation, gh argv shapes, row parsing/filtering,
-token redaction, error codes, hosts.yml perms, clone-leaf containment —
-plus live runner tests against a stub `gh` on PATH (no network, no auth).
-UI (source-level, no JS harness): /github slash family, drawer picker,
-and clone-progress wiring.
+Bridge: `owner/repo` validation, branch validation, gh argv shapes, row
+parsing/filtering, token redaction, error codes, hosts.yml perms,
+clone-leaf containment — plus live runner tests against a stub `gh` on
+PATH (no network, no auth).
+UI (source-level, no JS harness): /github slash family, composer
+repo/branch pills with staged first-message clone, and clone-progress
+wiring.
 
 Run: python3 -m unittest tests.test_github -v   (from repo root)
 """
@@ -22,16 +24,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import server.github as G  # noqa: E402
 from server.github import (  # noqa: E402
     GithubError,
+    build_branches_argv,
     build_clone_argv,
     build_list_argv,
     filter_repos,
     hosts_file_ok,
     map_gh_error,
     normalize_limit,
+    parse_branch_names,
     parse_repo_rows,
     redact,
+    run_gh_branches,
     run_gh_clone,
     run_gh_list,
+    validate_branch,
     validate_fullname,
 )
 from server.sessions import SessionRouter  # noqa: E402
@@ -39,6 +45,7 @@ from server.sessions import SessionRouter  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 APP_JS = (ROOT / "web" / "app.js").read_text()
 SESSIONS_PY = (ROOT / "server" / "sessions.py").read_text()
+GITHUB_PY = (ROOT / "server" / "github.py").read_text()
 INDEX_HTML = (ROOT / "web" / "index.html").read_text()
 
 LIST_FIXTURE = [
@@ -117,6 +124,53 @@ class TestCloneArgv(unittest.TestCase):
         # Must stay an argv list: joining into a shell string would reopen
         # injection through the validated name.
         self.assertIsInstance(build_clone_argv("a/b", "d"), list)
+
+    def test_branch_pins_clone(self):
+        argv = build_clone_argv("octo/hello", "/tmp/ws/sid/repo",
+                                branch="feature/x")
+        self.assertEqual(argv, ["gh", "repo", "clone", "octo/hello",
+                                "/tmp/ws/sid/repo", "--", "--depth", "1",
+                                "--branch", "feature/x"])
+
+    def test_bad_branch_rejected(self):
+        for bad in ("../escape", "-flags", ".hidden", "a//b", "a/",
+                    "feat.lock", ""):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                build_clone_argv("octo/hello", "d", branch=bad)
+
+    def test_none_branch_clones_default(self):
+        argv = build_clone_argv("octo/hello", "d", branch=None)
+        self.assertNotIn("--branch", argv)
+
+
+class TestValidateBranch(unittest.TestCase):
+    def test_valid_passes_through(self):
+        self.assertEqual(validate_branch("main"), "main")
+        self.assertEqual(validate_branch("feature/x-1.2_y"), "feature/x-1.2_y")
+
+    def test_traversal_and_flags_rejected(self):
+        for bad in ("../escape", "..", "a/../b", "-x", ".hidden",
+                    "a//b", "/lead", "trail/", "a/.git", "a/-x",
+                    "x.lock/y", "", "   ", None, 123):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                validate_branch(bad)
+
+
+class TestBranchesShape(unittest.TestCase):
+    def test_argv_shape(self):
+        argv = build_branches_argv("octo/hello")
+        self.assertEqual(argv[:2], ["gh", "api"])
+        self.assertIn("repos/octo/hello/branches", argv[2])
+        self.assertNotIn("octo/secret", " ".join(argv))
+
+    def test_parse_names(self):
+        payload = [{"name": "main"}, {"name": "dev"},
+                   {"nope": 1}, "junk", {"name": ""}, {"name": None}]
+        self.assertEqual(parse_branch_names(payload), ["main", "dev"])
+
+    def test_parse_non_list_safe(self):
+        self.assertEqual(parse_branch_names({"oops": 1}), [])
+        self.assertEqual(parse_branch_names(None), [])
 
 
 class TestRedact(unittest.TestCase):
@@ -294,6 +348,34 @@ class TestStubClone(GhStubCase):
             self.assertEqual(cm.exception.code, "gh_missing")
 
 
+class TestStubBranches(GhStubCase):
+    BRANCH_FIXTURE = [{"name": "main", "protected": True},
+                      {"name": "dev"},
+                      {"junk": "no name here"}]
+
+    def test_names_and_argv(self):
+        _stub_gh(self.bin, "list")
+        Path(os.environ["GH_JSON_FIXTURE"]).write_text(
+            json.dumps(self.BRANCH_FIXTURE))
+        names = asyncio.run(run_gh_branches("octo/hello"))
+        self.assertEqual(names, ["main", "dev"])
+        argv = self._argv()
+        self.assertEqual(argv[0], "api")
+        self.assertIn("repos/octo/hello/branches", argv[1])
+
+    def test_bad_json_is_branches_failed(self):
+        _stub_gh(self.bin, "list")
+        Path(os.environ["GH_JSON_FIXTURE"]).write_text("{nope")
+        with self.assertRaises(GithubError) as cm:
+            asyncio.run(run_gh_branches("octo/hello"))
+        self.assertEqual(cm.exception.code, "branches_failed")
+
+    def test_invalid_fullname_rejected(self):
+        _stub_gh(self.bin, "list")
+        with self.assertRaises(ValueError):
+            asyncio.run(run_gh_branches("../escape"))
+
+
 class TestCloneLeaf(unittest.TestCase):
     def test_leaf_shape(self):
         with tempfile.TemporaryDirectory() as base:
@@ -468,16 +550,71 @@ class TestRouterCloneDispatch(unittest.TestCase):
         self.assertFalse(reply["ok"])
         self.assertEqual(reply["error"].get("code"), "unknown_op")
 
+    def test_branches_dispatch(self):
+        async def body():
+            with tempfile.TemporaryDirectory() as tmp:
+                router = self._router(
+                    tmp, 'echo \'[{"name": "main"}, {"name": "dev"}]\'\n')
+                conn = FakeConn()
+                reply = await router.handle_client_message(
+                    conn, {"id": 1, "type": "githubBranches",
+                           "fullName": "octo/hello"})
+                self.assertTrue(reply["ok"], reply)
+                self.assertEqual(reply["result"]["branches"],
+                                 ["main", "dev"])
+                bad = await router.handle_client_message(
+                    conn, {"id": 2, "type": "githubBranches",
+                           "fullName": "../escape"})
+                self.assertFalse(bad["ok"])
+        asyncio.run(body())
+
+    def test_clone_with_branch_reaches_gh(self):
+        async def body():
+            with tempfile.TemporaryDirectory() as tmp:
+                router = self._router(
+                    tmp, f'echo "$@" > "{tmp}/argv"\n'
+                         'mkdir -p "$4/.git"\n'
+                         'echo "done." >&2\n')
+                conn = FakeConn()
+                reply = await router.handle_client_message(
+                    conn, {"id": 1, "type": "githubClone",
+                           "fullName": "octo/hello", "opId": "op-b",
+                           "sessionId": "sid-b", "branch": "dev"})
+                self.assertTrue(reply["ok"], reply)
+                self.assertEqual(reply["result"]["branch"], "dev")
+                params = await self._wait_result(conn, "op-b")
+                self.assertTrue(params["ok"], params)
+                argv = Path(tmp, "argv").read_text().split()
+                self.assertEqual(argv[-2:], ["--branch", "dev"])
+                self.assertIn("--depth", argv)
+        asyncio.run(body())
+
+    def test_clone_bad_branch_rejected(self):
+        async def body():
+            with tempfile.TemporaryDirectory() as tmp:
+                router = self._router(tmp, 'mkdir -p "$4/.git"\n')
+                conn = FakeConn()
+                reply = await router.handle_client_message(
+                    conn, {"id": 1, "type": "githubClone",
+                           "fullName": "octo/hello", "opId": "op-bad",
+                           "sessionId": "sid-bad", "branch": "../x"})
+                self.assertFalse(reply["ok"])
+        asyncio.run(body())
+
 
 class TestGithubWiring(unittest.TestCase):
     def test_bridge_dispatch(self):
-        for marker in ('"githubRepos"', '"githubClone"', '"githubCancel"',
-                       '"githubClean"', '"githubOpen"',
+        for marker in ('"githubRepos"', '"githubBranches"', '"githubClone"',
+                       '"githubCancel"', '"githubClean"', '"githubOpen"',
                        "_do_github_clone", "_do_github_open",
                        "_clean_github_clone", "_clone_leaf", "_launch_clone",
                        "_clone_task", "_emit_clone_result",
+                       "run_gh_branches", "validate_branch",
                        "githubCloneProgress", "githubCloneResult"):
             self.assertIn(marker, SESSIONS_PY)
+        for marker in ("build_branches_argv", "parse_branch_names",
+                       "run_gh_branches", "validate_branch"):
+            self.assertIn(marker, GITHUB_PY)
 
     def test_no_shell_in_github_path(self):
         self.assertNotIn("shell=True", SESSIONS_PY)
@@ -490,28 +627,43 @@ class TestGithubWiring(unittest.TestCase):
             self.assertIn(marker, APP_JS)
 
     def test_picker_and_progress(self):
-        for marker in ("btn-github", "github-panel",
-                       "github-status", "github-list", "renderGithubList",
-                       "onGithubProgress", "onGithubResult", "githubPending",
+        for marker in ("onGithubProgress", "onGithubResult", "githubPending",
                        "githubCloneProgress", "githubCloneResult",
                        "markRootAllowed", "private"):
             self.assertIn(marker, APP_JS)
-        # No search bar: the drawer lists every repo; `/github list`
-        # keeps server-side search for the composer.
-        self.assertNotIn("github-search", APP_JS)
+        # Composer pills replaced the sidebar drawer: repo/branch
+        # selectors, drop-up menus, and the staged first-message flow.
+        for marker in ("repo-bar", "repo-pill", "branch-pill", "repo-menu",
+                       "branch-menu", "pendingRepo", "githubBranches",
+                       "updateRepoBar", "selectRepo", "selectBranch",
+                       "submitWithRepo", "sendPromptText", "closeRepoMenus",
+                       "stagedPrompt"):
+            self.assertIn(marker, APP_JS)
+        for gone in ("btn-github", "github-panel", "github-list",
+                     "github-status", "renderGithubList",
+                     "toggleGithubPanel", "github-search"):
+            self.assertNotIn(gone, APP_JS)
 
-    def test_repo_row_press_opens_no_buttons(self):
-        # Pressing a repo row clones + opens; clone-without-open lives
-        # on as `/github clone` (githubCloneRepo stays for the slash).
-        self.assertIn("row.onclick = () => githubOpenRepo(r.fullName)",
-                      APP_JS)
-        self.assertNotIn('mk("clone"', APP_JS)
-        self.assertNotIn("Shallow-clone (no session yet)", APP_JS)
-        for marker in ('id="github-panel"', 'id="github-list"',
-                       'id="github-status"',
-                       'id="btn-github"'):
+    def test_composer_pills_markup(self):
+        # Pill buttons + upward menus live just above the composer input;
+        # the sidebar picker is gone.
+        for marker in ('id="repo-bar"', 'id="repo-pill"',
+                       'id="branch-pill"', 'id="repo-menu"',
+                       'id="branch-menu"', 'id="branch-wrap"',
+                       'id="repo-pill-label"', 'id="branch-pill-label"'):
             self.assertIn(marker, INDEX_HTML)
-        self.assertNotIn("github-search", INDEX_HTML)
+        for gone in ('id="github-panel"', 'id="github-list"',
+                     'id="github-status"', 'id="btn-github"',
+                     "github-search"):
+            self.assertNotIn(gone, INDEX_HTML)
+
+    def test_first_message_clones_before_prompt(self):
+        # Staged text is handed to githubOpen (with branch) and only sent
+        # as a prompt once the rooted session exists.
+        self.assertIn("submitWithRepo(text)", APP_JS)
+        self.assertIn("githubOpenRepo(sel.fullName, { branch: sel.branch })",
+                      APP_JS)
+        self.assertIn("await sendPromptText(t, true)", APP_JS)
 
 
 if __name__ == "__main__":

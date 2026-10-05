@@ -18,6 +18,10 @@ const state = {
   reconnectDelay: 1000, everConnected: false,
   lastCumulative: null, lastContext: null, ctxLine: "", sessionMcp: [],
   githubCache: [], githubOp: null, githubPending: new Map(),
+  // Composer-attached repo for the next session: {fullName, branch|null,
+  // defaultBranch|null}. Shown only while no session is open; the first
+  // sent message clones it (branch) and roots the new session there.
+  pendingRepo: null, stagedPrompt: null, stagedRepo: null, repoBusy: null,
   sessionsHidden: 0,
   // Renames the host has admitted but not yet applied (list still shows
   // the old name): sessionId -> {name, at}. Re-applied over every
@@ -73,7 +77,7 @@ function connect() {
           after: state.cursor || undefined }).then(handleSubscribeResult).catch(() => {});
         fetchPending();
       } else if (!state.everConnected) {
-        sysLine("Connected to web-muse bridge. Type /help for slash commands, or just ask.");
+        sysLine("Connected to web-muse bridge.");
       }
       state.everConnected = true;
     } catch (e) { setStatus("init failed: " + e.message); }
@@ -131,14 +135,6 @@ function onHello(f) {
 }
 
 /* ---------- sessions ---------- */
-// Session-bar directory: tail-ellipsis for readability; the full path
-// stays on the title attribute.
-function shortenDir(p) {
-  const s = String(p == null ? "" : p);
-  if (s.length <= 48) return s;
-  return "…" + s.slice(s.length - 47);
-}
-
 async function refreshSessions() {
   const r = await send({ type: "list", limit: 100 });
   // Rows whose workspace directory was removed from disk stay out of the
@@ -212,43 +208,57 @@ function appendSessionRow(box, s) {
   nm.className = "name";
   nm.textContent = sessionDisplayName(s);
   nm.title = (s.name || "").trim() ? s.name : s.sessionId;
-  top.append(dot, nm);
+  const cfg = document.createElement("button");
+  cfg.className = "config-btn";
+  cfg.title = "Session actions";
+  cfg.setAttribute("aria-label", `Actions for ${sessionDisplayName(s)}`);
+  cfg.setAttribute("aria-haspopup", "menu");
+  cfg.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="8" cy="3.6" r="1.7"/><circle cx="4.4" cy="11.4" r="1.7"/><circle cx="11.6" cy="11.4" r="1.7"/></svg>';
+  top.append(dot, nm, cfg);
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = `${s.status || "—"} · ${s.turnCount || 0} turns · ${esc((s.updatedAt || "").slice(0, 16).replace("T", " "))}`;
-  // Session directory: Session.workspaceRoot from session/list is
-  // additive-optional, so rows without one show no dir line.
-  let dir = null;
-  if (s.workspaceRoot) {
-    dir = document.createElement("div");
-    dir.className = "meta";
-    dir.textContent = shortenDir(s.workspaceRoot);
-    dir.title = s.workspaceRoot;
-  }
-  const acts = document.createElement("div");
-  acts.className = "acts";
-  const mk = (label, title, fn) => {
+  // Path hidden by design; identity stays on the name hover. Row actions
+  // live behind the config button.
+  const menu = document.createElement("div");
+  menu.className = "row-menu"; menu.hidden = true;
+  menu.setAttribute("role", "menu");
+  const mkItem = (label, danger, fn) => {
     const b = document.createElement("button");
-    b.textContent = label; b.title = title;
-    b.onclick = (e) => { e.stopPropagation(); fn(); };
+    b.className = "row-opt" + (danger ? " danger" : "");
+    b.setAttribute("role", "menuitem");
+    b.textContent = label;
+    b.onclick = (e) => {
+      e.stopPropagation();
+      menu.hidden = true; fn();
+    };
     return b;
   };
-  acts.append(
-    mk("open", "Open session", () => openSession(s.sessionId)),
-    mk("rename", "Rename session", () => renameSession(s.sessionId)),
-    mk("fork", "Fork session", () => forkSession(s.sessionId)),
-    mk("delete", "Delete session", () => deleteSession(s.sessionId)),
+  menu.append(
+    mkItem("open", false, () => openSession(s.sessionId)),
+    mkItem("rename", false, () => renameSession(s.sessionId)),
+    mkItem("fork", false, () => forkSession(s.sessionId)),
+    mkItem("delete", true, () => deleteSession(s.sessionId)),
   );
-  row.append(top, meta);
-  if (dir) row.append(dir);
-  row.append(acts);
+  cfg.onclick = (e) => {
+    e.stopPropagation();
+    const was = menu.hidden;
+    closeRowMenus();
+    menu.hidden = !was;
+  };
+  row.append(top, meta, menu);
   row.onclick = () => openSession(s.sessionId);
   box.append(row);
+}
+
+function closeRowMenus() {
+  document.querySelectorAll(".row-menu").forEach((m) => { m.hidden = true; });
 }
 
 async function openSession(sessionId) {
   clearTranscript();
   state.sessionId = sessionId;
+  updateRepoBar();
   closeDrawer();
   el("session-title").textContent = titleForSession(sessionId);
   try {
@@ -376,6 +386,7 @@ function ensureRootConfirmed(path) {
 async function newSession(name, opts) {
   clearTranscript();
   state.sessionId = null; state.session = null;
+  updateRepoBar();
   el("session-title").textContent = "new session";
   updateSessionDetail();
   const mcpAttach = (opts && opts.mcpAttach) || [];
@@ -546,9 +557,8 @@ function closeInspector() {
   savePanelState();
 }
 
-// Panel visibility persists across reloads (localStorage). First run falls
-// back to the width defaults: sessions drawer shut on mobile, open on
-// desktop; inspector open only on very wide screens.
+// Panel visibility persists across reloads (localStorage). First run
+// defaults to both bars hidden; opening them is explicit and persisted.
 const PANEL_KEYS = { sessions: "webmuse.sessionsOpen",
   inspector: "webmuse.inspectorOpen" };
 function savePanelState() {
@@ -566,8 +576,9 @@ function restorePanelState() {
     insp = localStorage.getItem(PANEL_KEYS.inspector);
   } catch (_) {}
   if (s === null && insp === null) {
-    if (!isNarrow()) el("sessions").classList.add("open");
-    if (window.innerWidth >= 1300) el("inspector").classList.add("open");
+    // Hidden by default: no width-based auto-open.
+    el("sessions").classList.remove("open");
+    el("inspector").classList.remove("open");
   } else {
     el("sessions").classList.toggle("open", s === "1");
     el("inspector").classList.toggle("open", insp === "1");
@@ -606,25 +617,16 @@ function showThinking() {
   const line = document.createElement("div");
   line.className = "tline thinking";
   line.id = "thinking-row";
-  // Pyramid indicator left of the thinking text.
-  const pyrBox = document.createElement("span");
-  pyrBox.className = "pyr-box";
-  const pyr = document.createElement("div");
-  pyr.className = "pyramid-loader";
-  pyr.setAttribute("aria-hidden", "true");
-  const spin = document.createElement("div");
-  spin.className = "wrapper";
-  for (const side of ["side1", "side2", "side3", "side4"]) {
-    const s = document.createElement("span");
-    s.className = "side " + side;
-    spin.append(s);
+  // Three-body spinner left of the thinking text (Uiverse.io, dovatgabriel).
+  const spinBox = document.createElement("span");
+  spinBox.className = "three-body";
+  spinBox.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 3; i++) {
+    const d = document.createElement("span");
+    d.className = "three-body__dot";
+    spinBox.append(d);
   }
-  const shadow = document.createElement("span");
-  shadow.className = "shadow";
-  spin.append(shadow);
-  pyr.append(spin);
-  pyrBox.append(pyr);
-  line.append(pyrBox);
+  line.append(spinBox);
   const status = document.createElement("span");
   status.className = "body";
   // Static prefix as per-character wave spans (built once so the loop
@@ -1025,6 +1027,11 @@ function updateRunChip() {
   chip.textContent = state.running ? "● running" : "idle";
   chip.className = "chip " + (state.running ? "running" : "idle");
   el("btn-stop").disabled = !state.running;
+  // Idle composer glows; a running turn drops the aura.
+  el("input").classList.toggle("idle-glow", !state.running);
+  // A running turn keeps streaming transcript behind the popup: give it
+  // a backdrop so the rows stay readable.
+  el("slash-popup").classList.toggle("running", state.running);
   setConn(state.ws && state.ws.readyState === 1 ? (state.running ? "busy" : "on") : "off");
 }
 function updateCursorChip() {
@@ -1632,6 +1639,33 @@ async function fetchPending() {
 }
 
 /* ---------- models & usage ---------- */
+// The model pick survives reloads (localStorage): changing it anywhere
+// saves it, startup restores it, and the picker shows it whenever the
+// catalog still lists it.
+const PICKED_MODEL_KEY = "webmuse.pickedModel";
+function savePickedModel() {
+  try {
+    if (state.pickedModel && state.pickedModel.modelId) {
+      const p = { modelId: state.pickedModel.modelId };
+      if (state.pickedModel.providerId) p.providerId = state.pickedModel.providerId;
+      localStorage.setItem(PICKED_MODEL_KEY, JSON.stringify(p));
+    } else {
+      localStorage.removeItem(PICKED_MODEL_KEY);
+    }
+  } catch (_) { /* storage unavailable: memory-only */ }
+}
+function loadPickedModel() {
+  try {
+    const raw = localStorage.getItem(PICKED_MODEL_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p && typeof p.modelId === "string" && p.modelId) {
+      state.pickedModel = { modelId: p.modelId,
+        providerId: typeof p.providerId === "string" && p.providerId
+          ? p.providerId : undefined };
+    }
+  } catch (_) { /* corrupt or unavailable: no default */ }
+}
 async function refreshModels() {
   const r = await send({ type: "models", sessionId: state.sessionId || undefined });
   state.models = r.models || [];
@@ -1641,12 +1675,15 @@ async function refreshModels() {
   const ph = document.createElement("option");
   ph.value = ""; ph.textContent = "model…";
   sel.append(ph);
+  const want = state.pickedModel && state.pickedModel.modelId;
   for (const m of state.models) {
     const o = document.createElement("option");
     o.value = m.modelId;
     o.textContent = (m.isActive ? "● " : "") + (m.displayLabel || m.modelId);
     o.dataset.provider = m.providerId || "";
-    if (m.isActive) o.selected = true;
+    // A saved pick wins over the host's active mark; without one the
+    // active model shows as before.
+    if (want ? m.modelId === want : m.isActive) o.selected = true;
     sel.append(o);
   }
 }
@@ -1808,6 +1845,7 @@ async function cmdSetModel(args) {
       model: { modelId: hit.modelId, providerId: hit.providerId || undefined } });
     state.pickedModel = { modelId: hit.modelId,
       providerId: hit.providerId || undefined };
+    savePickedModel();
     sysLine("Model → " + hit.modelId + ` (${r.status || "accepted"})` +
       (state.running ? " — applies at the next model-call boundary." : "") +
       " — remembered for new chats.");
@@ -1909,10 +1947,13 @@ function markRootAllowed(path) {
 }
 
 function ghStatus(text, isErr) {
-  const d = el("github-status");
-  if (!d) return;
-  d.textContent = text || "";
-  d.classList.toggle("err", !!isErr);
+  // The sidebar status line is gone (composer pills now): surface clone
+  // progress on the repo pill while a composer clone runs, and stay quiet
+  // otherwise — terminal results already go through sysLine.
+  if (!state.repoBusy) return;
+  const lbl = el("repo-pill-label");
+  if (lbl) lbl.textContent = text || "cloning…";
+  if (isErr) toast(text || "clone failed", true);
 }
 
 function fmtRepoRow(r) {
@@ -1941,7 +1982,6 @@ async function cmdGithubList(search) {
     sysLine(state.githubCache.length
       ? `GitHub repos:\n${state.githubCache.map(fmtRepoRow).join("\n")}\nClone: /github clone <owner/repo> · Open: /github open <owner/repo>`
       : "(no repos returned)");
-    if (!el("github-panel").hidden) renderGithubList(state.githubCache);
   } catch (e) { sysLine("github list failed: " + e.message, true); }
 }
 
@@ -1963,22 +2003,27 @@ async function githubCloneRepo(fullName) {
   }
 }
 
-async function githubOpenRepo(fullName, name) {
+async function githubOpenRepo(fullName, opts) {
+  // opts: legacy name string, or {name, branch} from the composer pills.
+  const o = (opts && typeof opts === "object") ? opts : { name: opts };
   if (!fullName) return sysLine("Usage: /github open <owner/repo> [name]", true);
   const opId = newCloneOpId();
   state.githubOp = opId;
-  state.githubPending.set(opId, { kind: "open", fullName, name });
+  state.githubPending.set(opId, { kind: "open", fullName, name: o.name });
   ghStatus(`cloning ${fullName}…`);
   try {
     // Admitted instantly; the outcome arrives as a githubCloneResult event.
-    const req = { type: "githubOpen", fullName, name, opId };
+    const req = { type: "githubOpen", fullName, name: o.name, opId };
+    if (o.branch) req.branch = o.branch;
     if (state.pickedModel) req.model = state.pickedModel;
     await send(req);
+    return opId;
   } catch (e) {
     state.githubPending.delete(opId);
     state.githubOp = null;
     ghStatus("open failed: " + e.message, true);
     sysLine("github open failed: " + e.message, true);
+    return null;
   }
 }
 
@@ -1987,14 +2032,24 @@ async function onGithubResult(p) {
   const pend = state.githubPending.get(p.opId);
   state.githubPending.delete(p.opId);
   if (state.githubOp === p.opId) state.githubOp = null;
+  const staged = state.stagedPrompt && pend && pend.kind === "open" &&
+    (pend.fullName || (p.result || {}).fullName) === state.stagedRepo;
   if (!p.ok) {
     const err = p.error || {};
     ghStatus("failed: " + (err.message || err.code || "unknown"), true);
     sysLine(`github ${pend ? pend.kind : "clone"} failed` +
       (err.code ? ` [${err.code}]` : "") + ": " + (err.message || "unknown"), true);
+    if (staged) {
+      // The first message was never sent: hand it back so it isn't lost.
+      el("input").value = state.stagedPrompt; autosize();
+      state.stagedPrompt = null; state.stagedRepo = null;
+    }
+    if (state.repoBusy === p.opId) state.repoBusy = null;
+    updateRepoBar();
     return;
   }
   const r = p.result || {};
+  if (state.repoBusy === p.opId) state.repoBusy = null;
   ghStatus("");
   if (pend && pend.kind === "open") {
     const sid = r.session && r.session.sessionId;
@@ -2002,9 +2057,20 @@ async function onGithubResult(p) {
     sysLine(`Opened ${r.fullName} → session ${shortId(sid)} (${r.workspaceRoot || "?"})`);
     if (sid) await openSession(sid);
     refreshSessions().catch(() => {});
+    if (staged) {
+      // Composer repo flow: the session now exists rooted at the clone —
+      // send the staged first message into it.
+      const t = state.stagedPrompt;
+      state.stagedPrompt = null; state.stagedRepo = null;
+      state.pendingRepo = null;
+      updateRepoBar();
+      await sendPromptText(t, true);
+      return;
+    }
   } else {
     sysLine(`Cloned ${r.fullName} → ${r.dest}\nRoot a session there: /new --path ${r.dest}`);
   }
+  updateRepoBar();
 }
 
 async function cmdGithubClean(args) {
@@ -2040,54 +2106,162 @@ function onGithubProgress(p) {
     !(done || p.phase === "started"));
 }
 
-function toggleGithubPanel() {
-  const p = el("github-panel");
-  p.hidden = !p.hidden;
-  if (!p.hidden && !state.githubCache.length) loadGithubRepos("");
+/* ---------- composer repo/branch pills (pre-session attach) ---------- */
+// The pills show only while no session is open. Picking a repo reveals the
+// branch pill (default = repo default branch); the first sent message then
+// clones that branch and roots the new session at the clone.
+function updateRepoBar() {
+  const bar = el("repo-bar");
+  if (!bar) return;
+  bar.hidden = !!state.sessionId;
+  if (bar.hidden) { closeRepoMenus(); return; }
+  const sel = state.pendingRepo;
+  const busy = !!state.repoBusy;
+  const pill = el("repo-pill");
+  pill.disabled = busy;
+  pill.classList.toggle("picked", !!sel);
+  const lbl = el("repo-pill-label");
+  if (!busy) lbl.textContent = sel ? sel.fullName : "select a repo";
+  const bw = el("branch-wrap");
+  bw.hidden = !sel;
+  if (sel) {
+    const bp = el("branch-pill");
+    bp.disabled = busy;
+    bp.classList.toggle("picked", !!sel.branch);
+    if (!busy) el("branch-pill-label").textContent = sel.branch || "default branch";
+    bp.title = sel.branch ? `Branch ${sel.branch} (click to change)`
+      : "Default branch (click to pick one)";
+  }
 }
 
-async function loadGithubRepos(search) {
-  ghStatus("loading…");
+function closeRepoMenus() {
+  const rm = el("repo-menu"), bm = el("branch-menu");
+  if (rm) rm.hidden = true;
+  if (bm) bm.hidden = true;
+}
+
+function repoOptRow(label, sub) {
+  const b = document.createElement("button");
+  b.className = "repo-opt";
+  b.setAttribute("role", "option");
+  b.textContent = label;
+  if (sub) {
+    const s = document.createElement("span");
+    s.className = "sub"; s.textContent = sub;
+    b.append(s);
+  }
+  return b;
+}
+
+function repoDimRow(label) {
+  const d = document.createElement("div");
+  d.className = "repo-opt dim"; d.textContent = label;
+  return d;
+}
+
+async function toggleRepoMenu() {
+  const m = el("repo-menu");
+  if (!m.hidden) { m.hidden = true; return; }
+  closeRepoMenus();
+  m.innerHTML = "";
+  m.append(repoDimRow("loading…"));
+  m.hidden = false;
   try {
-    const r = await send({ type: "githubRepos", search: search || undefined });
+    const r = await send({ type: "githubRepos" });
     state.githubCache = r.repos || [];
-    ghStatus(state.githubCache.length ? "" : "(no repos)");
-    renderGithubList(state.githubCache);
-  } catch (e) { ghStatus("list failed: " + e.message, true); }
-}
-
-function renderGithubList(repos) {
-  const box = el("github-list");
-  box.innerHTML = "";
-  if (!repos.length) {
-    const d = document.createElement("div");
-    d.className = "session-row"; d.textContent = "No repos — is `gh auth login` done?";
-    box.append(d);
+  } catch (e) {
+    m.innerHTML = "";
+    m.append(repoDimRow("list failed: " + e.message));
     return;
   }
-  for (const r of repos) {
-    const row = document.createElement("div");
-    row.className = "session-row"; row.setAttribute("role", "option");
-    const top = document.createElement("div");
-    top.className = "top";
-    const nm = document.createElement("span");
-    nm.className = "name"; nm.textContent = r.fullName;
-    top.append(nm);
-    if (r.private) {
-      const b = document.createElement("span");
-      b.className = "badge"; b.textContent = "private";
-      top.append(b);
-    }
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = [(r.defaultBranch || ""), ((r.updatedAt || "").slice(0, 10))].filter(Boolean).join(" · ") || "—";
-    // No buttons: pressing the row clones + opens. Clone-without-open
-    // stays available as `/github clone <owner/repo>`.
-    row.title = "Clone + open session";
-    row.onclick = () => githubOpenRepo(r.fullName);
-    row.append(top, meta);
-    box.append(row);
+  m.innerHTML = "";
+  if (!state.githubCache.length) {
+    m.append(repoDimRow("No repos — is `gh auth login` done?"));
+    return;
   }
+  for (const r of state.githubCache) {
+    const b = repoOptRow(r.fullName,
+      r.private ? "private" : (r.defaultBranch || ""));
+    b.title = "Attach to the next session";
+    b.onclick = () => selectRepo(r.fullName, r.defaultBranch || null);
+    m.append(b);
+  }
+}
+
+function selectRepo(fullName, defaultBranch) {
+  state.pendingRepo = {
+    fullName, branch: defaultBranch || null,
+    defaultBranch: defaultBranch || null,
+  };
+  closeRepoMenus();
+  updateRepoBar();
+  toggleBranchMenu(true);
+  el("input").focus();
+}
+
+async function toggleBranchMenu(onlyOpen) {
+  const sel = state.pendingRepo;
+  if (!sel) return;
+  const m = el("branch-menu");
+  if (!m.hidden) { if (!onlyOpen) m.hidden = true; return; }
+  closeRepoMenus();
+  m.innerHTML = "";
+  m.append(repoDimRow("loading…"));
+  m.hidden = false;
+  let branches = [];
+  try {
+    const r = await send({ type: "githubBranches", fullName: sel.fullName });
+    branches = r.branches || [];
+  } catch (e) {
+    m.innerHTML = "";
+    m.append(repoDimRow("branches failed: " + e.message));
+    return;
+  }
+  m.innerHTML = "";
+  const current = sel.branch || sel.defaultBranch;
+  const names = branches.slice();
+  if (current && !names.includes(current)) names.unshift(current);
+  if (!names.length) {
+    m.append(repoDimRow("(no branches — clones the default)"));
+    return;
+  }
+  for (const name of names) {
+    const b = repoOptRow(name, name === current ? "selected" : "");
+    b.onclick = () => selectBranch(name);
+    m.append(b);
+  }
+}
+
+function selectBranch(name) {
+  if (state.pendingRepo) state.pendingRepo.branch = name;
+  closeRepoMenus();
+  updateRepoBar();
+  el("input").focus();
+}
+
+async function submitWithRepo(text) {
+  // First message with a repo attached: clone (branch) + root the new
+  // session at the clone, then send the staged message into it. The
+  // result event (onGithubResult) finishes the job.
+  const sel = state.pendingRepo;
+  const box = el("input");
+  box.value = ""; autosize();
+  state.history.unshift(text); state.hidx = -1;
+  // Echo now (as usual); the turn itself starts once the session exists.
+  renderItem({ itemId: "local-" + Date.now(), kind: "userMessage", text }, false);
+  state.stagedPrompt = text;
+  state.stagedRepo = sel.fullName;
+  sysLine(`Cloning ${sel.fullName}${sel.branch ? " (" + sel.branch + ")" : ""} — the session starts rooted there.`);
+  const opId = await githubOpenRepo(sel.fullName, { branch: sel.branch });
+  if (!opId) {
+    // Admit failed synchronously: nothing is coming, hand the text back.
+    box.value = text; autosize();
+    state.stagedPrompt = null; state.stagedRepo = null;
+    return;
+  }
+  state.repoBusy = opId;
+  el("repo-pill-label").textContent = `cloning ${sel.fullName}…`;
+  updateRepoBar();
 }
 
 const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
@@ -2198,6 +2372,8 @@ function updateSlashPopup() {
     pop.append(d);
   });
   pop.hidden = false;
+  const sel = pop.children[state.slashSel];
+  if (sel && typeof sel.scrollIntoView === "function") sel.scrollIntoView({ block: "nearest" });
 }
 function applySlash(i) {
   const c = state.slashList[i != null ? i : state.slashSel];
@@ -2223,16 +2399,27 @@ async function submitComposer() {
   if (!text) return;
   if (!state.ws || state.ws.readyState !== 1) { toast("not connected", true); return; }
   el("slash-popup").hidden = true;
+  closeRepoMenus();
   if (text.startsWith("/")) {
     box.value = ""; autosize();
     state.history.unshift(text); state.hidx = -1;
     await dispatchSlash(text);
     return;
   }
+  if (!state.sessionId && state.pendingRepo && !state.repoBusy) {
+    await submitWithRepo(text);
+    return;
+  }
   box.value = ""; autosize();
-  state.history.unshift(text); state.hidx = -1;
-  // Optimistic user echo (reconciled when the server item arrives).
-  renderItem({ itemId: "local-" + Date.now(), kind: "userMessage", text }, false);
+  await sendPromptText(text);
+}
+
+async function sendPromptText(text, alreadyEchoed) {
+  if (!alreadyEchoed) {
+    state.history.unshift(text); state.hidx = -1;
+    // Optimistic user echo (reconciled when the server item arrives).
+    renderItem({ itemId: "local-" + Date.now(), kind: "userMessage", text }, false);
+  }
   try {
     const req = { type: "prompt", sessionId: state.sessionId || undefined, text };
     // Lazily created session: carry the remembered default model.
@@ -2243,6 +2430,7 @@ async function submitComposer() {
     const r = await send(req);
     if (r.sessionId && !state.sessionId) {
       state.sessionId = r.sessionId;
+      updateRepoBar();
       el("session-title").textContent = titleForSession(r.sessionId);
       await send({ type: "subscribe", sessionId: r.sessionId }).catch(() => {});
       refreshSessions().catch(() => {});
@@ -2318,7 +2506,7 @@ el("input").addEventListener("keydown", (ev) => {
       ev.preventDefault(); applySlash(); return;
     }
   }
-  if (ev.key === "Escape") { el("slash-popup").hidden = true; return; }
+  if (ev.key === "Escape") { el("slash-popup").hidden = true; closeRepoMenus(); return; }
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); el("composer").requestSubmit(); return; }
   if (ev.key === "ArrowUp" && (el("input").selectionStart === 0 || !el("input").value)) {
     // Only hijack Up at top-of-input for history.
@@ -2444,7 +2632,8 @@ el("dir-use").onclick = () => {
 };
 el("btn-refresh-sessions").onclick = () => refreshSessions().catch((e) => toast(e.message, true));
 el("session-filter").oninput = () => renderSessionList(state.sessionsCache);
-el("btn-github").onclick = () => toggleGithubPanel();
+el("repo-pill").onclick = (e) => { e.stopPropagation(); if (!state.repoBusy) toggleRepoMenu(); };
+el("branch-pill").onclick = (e) => { e.stopPropagation(); if (!state.repoBusy) toggleBranchMenu(); };
 el("btn-older").onclick = loadOlder;
 el("jump-latest").onclick = () => { state.stick = true; scrollDown(true); };
 el("terminal").addEventListener("scroll", () => {
@@ -2458,6 +2647,7 @@ el("model-picker").onchange = (ev) => {
   // Remembered as the default for created chats, not just this one.
   state.pickedModel = { modelId: o.value,
     providerId: o.dataset.provider || undefined };
+  savePickedModel();
   if (!state.sessionId) {
     toast("default model → " + o.value + " (applies to new chats)");
     return;
@@ -2483,11 +2673,20 @@ document.addEventListener("click", (ev) => {
   if (!el("slash-popup").hidden && !el("slash-popup").contains(ev.target) && ev.target !== el("input")) {
     el("slash-popup").hidden = true;
   }
+  if ((!el("repo-menu").hidden || !el("branch-menu").hidden) && !ev.target.closest(".pill-wrap")) {
+    closeRepoMenus();
+  }
+  if (!ev.target.closest(".row-menu") && !ev.target.closest(".config-btn")) {
+    closeRowMenus();
+  }
 });
 
-// Panel visibility: stored toggles win, else width-based first-run defaults.
+// Stored UI prefs win; first run falls back to hidden bars, no model pick.
 restorePanelState();
 updateWelcome();
+updateRepoBar();
+loadPickedModel();
+updateRunChip();
 
 connect();
 autosize();

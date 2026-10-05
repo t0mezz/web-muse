@@ -55,11 +55,11 @@ class TestThinkingStatus(unittest.TestCase):
         self.assertIn(".tline.thinking .wv", STYLE_CSS)
 
     def test_wave_freezes_under_reduced_motion(self):
-        m = re.search(
+        blocks = re.findall(
             r"@media \(prefers-reduced-motion: reduce\) \{(.*?)\n\}",
             STYLE_CSS, re.S)
-        self.assertIsNotNone(m, "reduced-motion block missing")
-        self.assertIn(".wv", m.group(1))
+        self.assertTrue(blocks, "reduced-motion block missing")
+        self.assertIn(".wv", "\n".join(blocks))
 
     def test_turn_started_shows_status(self):
         self.assertIn("showThinking();", case_body("turn/started"))
@@ -86,18 +86,32 @@ class TestThinkingStatus(unittest.TestCase):
     def test_status_styling_present(self):
         self.assertIn(".tline.thinking", STYLE_CSS)
 
-    def test_pyramid_built_left_of_text(self):
+    def test_threebody_built_left_of_text(self):
         body = fn_body("showThinking")
-        for cls in ('"pyr-box"', '"pyramid-loader"', '"shadow"'):
+        for cls in ('"three-body"', '"three-body__dot"'):
             self.assertIn(cls, body)
-        self.assertLess(body.index("line.append(pyrBox)"),
+        self.assertNotIn("pyramid-loader", body)
+        self.assertLess(body.index("line.append(spinBox)"),
                         body.index("line.append(status)"))
 
-    def test_pyramid_assets_present(self):
-        for marker in (".pyramid-loader .wrapper {", "@keyframes pyr-spin",
-                       ".pyramid-loader .wrapper .side",
-                       ".pyramid-loader .wrapper .shadow"):
+    def test_threebody_assets_present(self):
+        for marker in (".three-body {", ".three-body__dot",
+                       "@keyframes spin78236", "@keyframes wobble1",
+                       "@keyframes wobble2"):
             self.assertIn(marker, STYLE_CSS)
+        self.assertNotIn("pyr-spin", STYLE_CSS)
+
+    def test_threebody_themed_not_purple(self):
+        m = re.search(r"\.three-body \{(.*?)\n\}", STYLE_CSS, re.S)
+        self.assertIsNotNone(m, ".three-body missing")
+        self.assertIn("--uib-color: #6ea8fe", m.group(1))
+        self.assertNotIn("#5D3FD3", STYLE_CSS)
+
+    def test_threebody_freezes_under_reduced_motion(self):
+        blocks = re.findall(r"@media \(prefers-reduced-motion: reduce\) "
+                            r"\{(.*?)\n\}", STYLE_CSS, re.S)
+        self.assertTrue(blocks, "reduced-motion guard missing")
+        self.assertIn(".three-body", "\n".join(blocks))
 
 
 if __name__ == "__main__":

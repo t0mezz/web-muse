@@ -46,15 +46,13 @@ class TestSessionToggle(unittest.TestCase):
         self.assertIn('if (k === "b") {', APP_JS)
         self.assertIn("toggleSessions();", APP_JS)
 
-    def test_desktop_starts_open(self):
-        # First-run default now lives in restorePanelState (persistence
-        # owns initial visibility); no bare width-only add may remain.
+    def test_desktop_starts_closed(self):
+        # First-run default lives in restorePanelState (persistence owns
+        # initial visibility): both bars start hidden on every width.
         m = re.search(r"function restorePanelState\(\) \{(.*?)\n\}",
                       APP_JS, re.S)
         self.assertIsNotNone(m, "restorePanelState missing")
-        self.assertIn(
-            'if (!isNarrow()) el("sessions").classList.add("open");',
-            m.group(1))
+        self.assertNotIn('classList.add("open")', m.group(1))
 
     def test_open_class_is_the_visibility_switch(self):
         self.assertIn("#sessions.open { display: flex; }", STYLE_CSS)

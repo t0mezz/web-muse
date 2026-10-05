@@ -36,8 +36,11 @@ def fn_body(src, name):
 
 class TestEchoReconciliation(unittest.TestCase):
     def test_echoes_still_optimistic(self):
-        # Both send paths paint an instant local echo (no behavior change).
-        self.assertEqual(APP_JS.count('"local-" + Date.now()'), 2)
+        # All send paths paint an instant local echo (no behavior change):
+        # plain submit, /steer, and the staged repo-first message (which
+        # echoes at staging; the post-clone flush must not echo twice).
+        self.assertEqual(APP_JS.count('"local-" + Date.now()'), 3)
+        self.assertIn("sendPromptText(t, true)", APP_JS)
 
     def test_reconcile_helper_exists_and_matches_by_text(self):
         body = fn_body(APP_JS, "reconcileLocalEcho")

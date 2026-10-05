@@ -123,10 +123,62 @@ def filter_repos(rows, search):
             and r["fullName"].lower().startswith(q)]
 
 
-def build_clone_argv(full_name, dest, gh_bin=GH_BIN):
-    """`gh repo clone` argv (shallow); fullname must already be validated."""
-    return [gh_bin, "repo", "clone", full_name, str(dest),
+def validate_branch(name):
+    """Check a git branch name; return it unchanged or raise ValueError.
+
+    Conservative charset (letters, digits, dot, dash, underscore, slash)
+    with no `..` segments, empty segments, or leading dots/dashes — the
+    value travels as a `git clone --branch` argv element (never a shell),
+    but `-x` still has no place as a branch and `..` never does.
+    """
+    branch = name if isinstance(name, str) else ""
+    branch = branch.strip()
+    parts = branch.split("/")
+    if (not branch or len(branch) > 255
+            or not re.fullmatch(r"[A-Za-z0-9_.\-/]+", branch)
+            or branch.startswith(("-", ".", "/")) or branch.endswith("/")
+            or "//" in branch or ".." in branch
+            or any(p[:1] in (".", "-") or p.endswith(".lock")
+                   for p in parts)):
+        raise ValueError(
+            f"invalid branch {name!r}: letters, digits, dot, dash, "
+            "underscore, slash; no dot-segments or leading dots/dashes")
+    return branch
+
+
+def build_clone_argv(full_name, dest, gh_bin=GH_BIN, branch=None):
+    """`gh repo clone` argv (shallow); fullname must already be validated.
+
+    A validated branch pins the clone to that branch (`git --branch`);
+    None clones the repo default.
+    """
+    argv = [gh_bin, "repo", "clone", full_name, str(dest),
             "--", "--depth", "1"]
+    if branch is not None:
+        argv += ["--branch", validate_branch(branch)]
+    return argv
+
+
+def build_branches_argv(full_name, gh_bin=GH_BIN):
+    """`gh api` argv listing one repo's branches (first page, 100 max)."""
+    return [gh_bin, "api", f"repos/{full_name}/branches?per_page=100"]
+
+
+def parse_branch_names(payload):
+    """Parsed `gh api branches` payload -> [name] (pure; never raises).
+
+    Input: list of {name, ...}. Output: branch names in listed order.
+    """
+    names = []
+    if not isinstance(payload, list):
+        return names
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
 
 
 def redact(text):
@@ -154,7 +206,7 @@ def map_gh_error(stderr, returncode, op):
                            f"repo not found or no access{': ' + tail if tail else ''}")
     if "already exists" in low:
         return GithubError("dest_exists", tail or "destination already exists")
-    verb = "list" if op == "list" else "clone"
+    verb = {"list": "list", "branches": "branches"}.get(op, "clone")
     return GithubError(f"{verb}_failed",
                        f"gh {verb} failed (exit {returncode})"
                        + (f": {tail}" if tail else ""))
@@ -213,13 +265,49 @@ async def run_gh_list(search=None, limit=DEFAULT_LIST_LIMIT, gh_bin=GH_BIN,
     return filter_repos(parse_repo_rows(payload), search)
 
 
-async def run_gh_clone(full_name, dest, gh_bin=GH_BIN, on_line=None):
+async def run_gh_branches(full_name, gh_bin=GH_BIN, timeout=30):
+    """List one repo's branch names via `gh api` (raises GithubError)."""
+    full_name = validate_fullname(full_name)
+    ok, hint = hosts_file_ok()
+    if not ok:
+        low = hint.lower()
+        code = ("gh_unauth" if "auth login" in low else "lax_hosts_perms"
+                if "refusing" in low else "gh_unauth")
+        raise GithubError(code, hint)
+    argv = build_branches_argv(full_name, gh_bin)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE)
+    except FileNotFoundError:
+        raise GithubError("gh_missing",
+                          "gh is not installed (install it, then "
+                          "`gh auth login`)")
+    except OSError as e:
+        raise GithubError("branches_failed", f"cannot run gh: {e}")
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise GithubError("branches_failed", "gh api branches timed out")
+    if proc.returncode != 0:
+        raise map_gh_error(err.decode("utf-8", "replace"), proc.returncode,
+                           "branches")
+    try:
+        payload = json.loads(out.decode("utf-8"))
+    except ValueError as e:
+        raise GithubError("branches_failed", f"gh returned bad JSON: {e}")
+    return parse_branch_names(payload)
+
+
+async def run_gh_clone(full_name, dest, gh_bin=GH_BIN, on_line=None,
+                       branch=None):
     """Run `gh repo clone` (shallow); stream redacted stderr lines.
 
     on_line(line) is called per stderr line (already redacted). Cancellation
     of the awaiting task kills the child. Returns dest on success, else
     raises GithubError. A half-clone left by a failed attempt is removed so
-    a retry starts clean.
+    a retry starts clean. A validated branch pins the clone to that branch.
     """
     ok, hint = hosts_file_ok()
     if not ok:
@@ -227,7 +315,7 @@ async def run_gh_clone(full_name, dest, gh_bin=GH_BIN, on_line=None):
         code = ("gh_unauth" if "auth login" in low else "lax_hosts_perms"
                 if "refusing" in low else "gh_unauth")
         raise GithubError(code, hint)
-    argv = build_clone_argv(full_name, dest, gh_bin)
+    argv = build_clone_argv(full_name, dest, gh_bin, branch=branch)
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv, stdout=asyncio.subprocess.DEVNULL,

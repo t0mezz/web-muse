@@ -54,6 +54,22 @@ class TestModelDefault(unittest.TestCase):
     def test_slash_model_remembers(self):
         self.assertIn("state.pickedModel = { modelId: hit.modelId", APP_JS)
 
+    def test_pick_persisted_across_reloads(self):
+        # Changing the model anywhere saves it; startup restores it.
+        self.assertIn('"webmuse.pickedModel"', APP_JS)
+        self.assertIn("function savePickedModel()", APP_JS)
+        self.assertIn("function loadPickedModel()", APP_JS)
+        self.assertGreaterEqual(APP_JS.count("savePickedModel();"), 2)
+        self.assertIn("loadPickedModel();", APP_JS)
+
+    def test_picker_shows_saved_pick(self):
+        # A saved pick wins over the host's active mark in the picker;
+        # without one the active model shows as before.
+        body = _fn_body("refreshModels")
+        self.assertIn("state.pickedModel && state.pickedModel.modelId",
+                      body)
+        self.assertIn("want ? m.modelId === want : m.isActive", body)
+
 
 class TestApprovalPlacement(unittest.TestCase):
     def test_approval_mounts_only_in_inspector(self):

@@ -14,7 +14,7 @@ import re
 import shutil
 from pathlib import Path
 
-from server.github import GithubError, run_gh_clone, run_gh_list, validate_fullname
+from server.github import GithubError, run_gh_branches, run_gh_clone, run_gh_list, validate_branch, validate_fullname
 from server.msp import MspError, uuid7
 
 LOG = logging.getLogger("web_muse.sessions")
@@ -1053,6 +1053,12 @@ class SessionRouter:
                         msg.get("search"), msg.get("limit"),
                         gh_bin=self._gh_bin),
                 })
+            if mtype == "githubBranches":
+                # Branch picker rows for one repo, served live from `gh`.
+                return reply(True, result={
+                    "branches": await run_gh_branches(
+                        msg.get("fullName"), gh_bin=self._gh_bin),
+                })
             if mtype == "githubClone":
                 # Shallow-clone into workspaces/<sessionId>/repo/, admitted
                 # async: the reply is instant ({accepted, opId, ...}) and
@@ -1253,7 +1259,7 @@ class SessionRouter:
         return op_id.strip()
 
     def _launch_clone(self, conn, full_name, dest, op_id, session_id,
-                      open_opts=None):
+                      open_opts=None, branch=None):
         """Start the clone as a background task; reply accepted at once.
 
         The WS read loop awaits each handler serially, so awaiting a
@@ -1266,11 +1272,11 @@ class SessionRouter:
         self._emit_clone_progress(conn, op_id, full_name, "started")
         task = asyncio.create_task(
             self._clone_task(conn, full_name, dest, op_id, session_id,
-                             open_opts),
+                             open_opts, branch),
             name=f"github-clone-{op_id}")
         self._github_ops[op_id] = [task, conn, full_name]
         return {"accepted": True, "opId": op_id, "fullName": full_name,
-                "dest": dest, "sessionId": session_id}
+                "dest": dest, "sessionId": session_id, "branch": branch}
 
     def _finish_op(self, op_id, task):
         """Take terminal-event ownership iff this task still owns the op."""
@@ -1281,12 +1287,12 @@ class SessionRouter:
         return None
 
     async def _clone_task(self, conn, full_name, dest, op_id, session_id,
-                          open_opts):
+                          open_opts, branch=None):
         """Background clone body: progress, result event, cleanup."""
         me = asyncio.current_task()
         try:
             await run_gh_clone(
-                full_name, dest, gh_bin=self._gh_bin,
+                full_name, dest, gh_bin=self._gh_bin, branch=branch,
                 on_line=lambda line: self._emit_clone_progress(
                     conn, op_id, full_name, "progress", line))
             self._emit_clone_progress(conn, op_id, full_name, "completed")
@@ -1423,7 +1429,11 @@ class SessionRouter:
         sid = msg.get("sessionId") or uuid7()
         op_id = self._check_op_id(msg.get("opId") or uuid7())
         dest = self._clone_leaf(sid)
-        return self._launch_clone(conn, full_name, dest, op_id, sid)
+        branch = msg.get("branch")
+        if branch is not None:
+            branch = validate_branch(branch)
+        return self._launch_clone(conn, full_name, dest, op_id, sid,
+                                  branch=branch)
 
     def _do_github_open(self, conn, msg):
         """Admit a clone + `session/start` rooted at the clone."""
@@ -1431,10 +1441,14 @@ class SessionRouter:
         sid = uuid7()
         op_id = self._check_op_id(msg.get("opId") or uuid7())
         dest = self._clone_leaf(sid)
+        branch = msg.get("branch")
+        if branch is not None:
+            branch = validate_branch(branch)
         return self._launch_clone(conn, full_name, dest, op_id, sid,
                                   {"mcpAttach": msg.get("mcpAttach"),
                                    "name": msg.get("name"),
-                                   "model": msg.get("model")})
+                                   "model": msg.get("model")},
+                                  branch=branch)
 
     async def _prune_missing(self, msg):
         """Remove session files whose workspace dir is gone (scoped, safe).

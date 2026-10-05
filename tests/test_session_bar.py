@@ -1,10 +1,10 @@
 """Session bar: directory tracking + external-delete handling.
 
-UI (source-level, no JS harness): each row shows the session directory
-(`Session.workspaceRoot` from `session/list`, tail-ellipsized with the
-full path on hover); opening a session that was deleted outside the app
-is treated like an in-app delete (best-effort host delete, drop from the
-bar, fresh session) instead of erroring on every open.
+UI (source-level, no JS harness): rows hide the workspace path and keep
+open/rename/fork/delete behind a per-row config button; opening a
+session that was deleted outside the app is treated like an in-app
+delete (best-effort host delete, drop from the bar, fresh session)
+instead of erroring on every open.
 Bridge seam: the resume fallback raises unknown-session for a sid the
 host no longer lists, and `list` passes workspace rows through untouched.
 
@@ -25,6 +25,7 @@ from server.sessions import SessionRouter, flag_missing_workspaces  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 APP_JS = (ROOT / "web" / "app.js").read_text()
 SESSIONS_PY = (ROOT / "server" / "sessions.py").read_text()
+STYLE_CSS = (ROOT / "web" / "style.css").read_text()
 
 
 class FakeConn:
@@ -277,16 +278,34 @@ class TestPruneMissing(unittest.TestCase):
 
 
 class TestSessionBarUI(unittest.TestCase):
-    def test_dir_helper(self):
-        for marker in ("function shortenDir", '"…" + s.slice'):
-            self.assertIn(marker, APP_JS)
+    def test_row_hides_workspace_path(self):
+        # Path hidden by design: no dir line is rendered and the helper
+        # is gone with it. The bridge still passes rows through untouched
+        # (test_list_passes_workspace_rows_through above).
+        self.assertNotIn("shortenDir", APP_JS)
+        self.assertNotIn("shortenDir(s.workspaceRoot)", APP_JS)
+        self.assertNotIn("dir.title = s.workspaceRoot", APP_JS)
 
-    def test_row_shows_workspace_root(self):
-        for marker in ("s.workspaceRoot", "shortenDir(s.workspaceRoot)",
-                       "dir.title = s.workspaceRoot"):
+    def test_row_actions_behind_config(self):
+        # open/rename/fork/delete live in a per-row menu behind the
+        # 3-dot config button — no always-visible action bar remains.
+        for marker in ("config-btn", "row-menu", "row-opt",
+                       "closeRowMenus", "mkItem("):
             self.assertIn(marker, APP_JS)
-        # Additive-optional: rows without a root show no dir line.
-        self.assertIn("if (s.workspaceRoot)", APP_JS)
+        for action in ("openSession(s.sessionId)",
+                       "renameSession(s.sessionId)",
+                       "forkSession(s.sessionId)",
+                       "deleteSession(s.sessionId)"):
+            self.assertIn(action, APP_JS)
+        self.assertNotIn('"acts"', APP_JS)
+
+    def test_config_dots_spin_on_hover(self):
+        # Hover-only, anti-clockwise: clicks just toggle the menu and
+        # carry no spin state.
+        self.assertIn(".config-btn:hover svg", STYLE_CSS)
+        self.assertIn("rotate(-90deg)", STYLE_CSS)
+        self.assertNotIn('cfg.classList.toggle("open"', APP_JS)
+        self.assertNotIn(".config-btn.open", APP_JS + STYLE_CSS)
 
     def test_external_delete_treated_as_manual_delete(self):
         for marker in ("dropExternallyDeleted(sessionId, e.message)",
