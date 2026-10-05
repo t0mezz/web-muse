@@ -587,7 +587,12 @@ function clearTranscript() {
   state.ctxLine = "";
   state.lastCumulative = null; state.lastContext = null; state.sessionMcp = [];
   el("sess-usage").textContent = ""; el("sess-usage").title = "";
-  updateRunChip(); updateOlderBtn(); updateCursorChip();
+  updateRunChip(); updateOlderBtn(); updateCursorChip(); updateWelcome();
+}
+
+/* Welcome state: centered composer until the first message opens the transcript. */
+function updateWelcome() {
+  el("center").classList.toggle("is-welcome", state.items.size === 0);
 }
 
 function scrollDown(force) {
@@ -897,6 +902,7 @@ function renderItem(it, streaming) {
     rec.body.append(c);
   }
   rec.line.classList.toggle("streaming", !!streaming);
+  updateWelcome();
   scrollDown();
 }
 
@@ -1020,6 +1026,7 @@ function renderItemPrepend(it) {
   const rec = { line, body, head, item: it };
   state.items.set(it.itemId, rec);
   setBodyContent(rec, txt, kind, false);
+  updateWelcome();
 }
 
 /* ---------- MSP event fan-in ---------- */
@@ -2394,6 +2401,7 @@ document.addEventListener("click", (ev) => {
 
 // Panel visibility: stored toggles win, else width-based first-run defaults.
 restorePanelState();
+updateWelcome();
 
 connect();
 autosize();
