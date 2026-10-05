@@ -595,6 +595,27 @@ function updateWelcome() {
   el("center").classList.toggle("is-welcome", state.items.size === 0);
 }
 
+/* Generating indicator: flip-loader row while a turn runs. Shown on
+   turn/started, swapped out for real content on first item/started,
+   cleared when the turn settles. */
+function showLoader() {
+  if (document.getElementById("loader-row")) { scrollDown(); return; }
+  const line = document.createElement("div");
+  line.className = "tline generating";
+  line.id = "loader-row";
+  const loader = document.createElement("div");
+  loader.className = "loader";
+  loader.setAttribute("role", "status");
+  loader.setAttribute("aria-label", "Generating");
+  line.append(loader);
+  el("terminal").append(line);
+  scrollDown();
+}
+function hideLoader() {
+  const line = document.getElementById("loader-row");
+  if (line) line.remove();
+}
+
 function scrollDown(force) {
   const t = el("terminal");
   if (state.stick || force) t.scrollTop = t.scrollHeight;
@@ -1053,6 +1074,7 @@ function onEvent(method, p) {
   }
   switch (method) {
     case "item/started":
+      if (p.item && itemKind(p.item) !== "system") hideLoader();
       renderItem(p.item, true);
       break;
     case "item/delta": {
@@ -1069,12 +1091,14 @@ function onEvent(method, p) {
       break;
     case "turn/started":
       state.running = true; state.turnId = p.turnId || null; updateRunChip();
+      showLoader();
       if (state.queuedTurnId && p.turnId === state.queuedTurnId) {
         state.queuedTurnId = null;
         sysLine("queued turn started.");
       }
       break;
     case "turn/completed": {
+      hideLoader();
       // Single terminal event: p.terminal is completed|failed|cancelled.
       // (There are no turn/cancelled or turn/failed notifications on MSP v1.)
       state.running = false; state.turnId = null; updateRunChip();
@@ -1096,6 +1120,7 @@ function onEvent(method, p) {
       break;
     }
     case "turn/retracted":
+      hideLoader();
       sysLine("turn retracted — prompt restored to the composer.");
       if (p.promptText) { el("input").value = p.promptText; autosize(); }
       break;
