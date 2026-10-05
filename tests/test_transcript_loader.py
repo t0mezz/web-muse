@@ -48,6 +48,17 @@ class TestLoaderWiring(unittest.TestCase):
     def test_turn_started_shows_loader(self):
         self.assertIn("showLoader();", case_body("turn/started"))
 
+    def test_loader_sits_where_answer_prints(self):
+        m = re.search(r"function showLoader\(\) \{(.*?)\n\}", APP_JS,
+                      re.S)
+        self.assertIsNotNone(m, "showLoader missing")
+        body = m.group(1)
+        self.assertIn('"tline agent generating"', body)
+        self.assertIn('"txt"', body)
+
+    def test_loader_is_text_sized(self):
+        self.assertIn(".tline.generating .loader", STYLE_CSS)
+
     def test_first_content_item_hides_loader(self):
         body = case_body("item/started")
         self.assertIn("hideLoader();", body)

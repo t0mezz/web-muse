@@ -154,6 +154,7 @@ body {
   .loader, .loader::before { animation: none; }
 }
 /* Generating indicator: 3D flip loader row while a turn runs. */
+.tline.generating .loader { width: 20px; }
 .loader {
   width: 60px;
   aspect-ratio: 1;

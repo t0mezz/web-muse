@@ -600,14 +600,22 @@ function updateWelcome() {
    cleared when the turn settles. */
 function showLoader() {
   if (document.getElementById("loader-row")) { scrollDown(); return; }
+  // Agent-shaped row so the indicator sits exactly where the answer's
+  // first line will print.
   const line = document.createElement("div");
-  line.className = "tline generating";
+  line.className = "tline agent generating";
   line.id = "loader-row";
+  const wrap = document.createElement("span");
+  wrap.className = "body";
+  const text = document.createElement("span");
+  text.className = "txt";
   const loader = document.createElement("div");
   loader.className = "loader";
   loader.setAttribute("role", "status");
   loader.setAttribute("aria-label", "Generating");
-  line.append(loader);
+  text.append(loader);
+  wrap.append(text);
+  line.append(wrap);
   el("terminal").append(line);
   scrollDown();
 }
