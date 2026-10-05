@@ -14,6 +14,8 @@ const state = {
   models: [], modelsMeta: null, slashSel: 0, slashList: [],
   reconnectDelay: 1000, everConnected: false,
   lastCumulative: null, lastContext: null, ctxLine: "", sessionMcp: [],
+  githubCache: [], githubOp: null, githubPending: new Map(),
+  sessionsHidden: 0,
 };
 
 /* ---------- tiny helpers ---------- */
@@ -32,6 +34,17 @@ function notice(msg) {
 }
 function setStatus(t) { el("status").textContent = t; }
 function shortId(id) { return (id || "").slice(0, 8); }
+// Default fallback first: an explicit host name wins; otherwise show the
+// initial-prompt prefix the bridge auto-names (short id until it lands).
+// A later user rename just sets s.name and takes precedence.
+function sessionDisplayName(s) {
+  const n = (s && s.name || "").trim();
+  return n || shortId(s && s.sessionId);
+}
+function titleForSession(sessionId) {
+  const hit = state.sessionsCache.find((s) => s.sessionId === sessionId);
+  return sessionDisplayName(hit || { sessionId });
+}
 function esc(s) { return String(s == null ? "" : s); }
 
 /* ---------- websocket ---------- */
@@ -111,9 +124,21 @@ function onHello(f) {
 }
 
 /* ---------- sessions ---------- */
+// Session-bar directory: tail-ellipsis for readability; the full path
+// stays on the title attribute.
+function shortenDir(p) {
+  const s = String(p == null ? "" : p);
+  if (s.length <= 48) return s;
+  return "…" + s.slice(s.length - 47);
+}
+
 async function refreshSessions() {
   const r = await send({ type: "list", limit: 100 });
-  state.sessionsCache = r.sessions || [];
+  // Rows whose workspace directory was removed from disk stay out of the
+  // bar (the bridge flags them); the count keeps the hiding visible.
+  const rows = r.sessions || [];
+  state.sessionsHidden = rows.filter((s) => s.workspaceMissing).length;
+  state.sessionsCache = rows.filter((s) => !s.workspaceMissing);
   renderSessionList(state.sessionsCache);
   return r;
 }
@@ -123,57 +148,85 @@ function renderSessionList(sessions) {
   const box = el("session-list");
   box.innerHTML = "";
   const rows = sessions.filter((s) =>
-    !q || (s.name || "").toLowerCase().includes(q) || (s.sessionId || "").includes(q));
+    !q || sessionDisplayName(s).toLowerCase().includes(q) || (s.sessionId || "").toLowerCase().includes(q));
   if (!rows.length) {
     const d = document.createElement("div");
     d.className = "session-row"; d.textContent = "No sessions yet — press ＋ or /new.";
     box.append(d);
-    return;
+  } else {
+    for (const s of rows) {
+      appendSessionRow(box, s);
+    }
   }
-  for (const s of rows) {
-    const row = document.createElement("div");
-    row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "");
-    row.setAttribute("role", "option");
-    const top = document.createElement("div");
-    top.className = "top";
-    const dot = document.createElement("span");
-    dot.className = "status-dot" + (s.status === "running" ? " running" : "");
-    const nm = document.createElement("span");
-    nm.className = "name";
-    nm.textContent = s.name || shortId(s.sessionId);
-    top.append(dot, nm);
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = `${s.status || "—"} · ${s.turnCount || 0} turns · ${esc((s.updatedAt || "").slice(0, 16).replace("T", " "))}`;
-    const acts = document.createElement("div");
-    acts.className = "acts";
-    const mk = (label, title, fn) => {
-      const b = document.createElement("button");
-      b.textContent = label; b.title = title;
-      b.onclick = (e) => { e.stopPropagation(); fn(); };
-      return b;
-    };
-    acts.append(
-      mk("open", "Open session", () => openSession(s.sessionId)),
-      mk("rename", "Rename session", () => renameSession(s.sessionId)),
-      mk("fork", "Fork session", () => forkSession(s.sessionId)),
-      mk("delete", "Delete session", () => deleteSession(s.sessionId)),
-    );
-    row.append(top, meta, acts);
-    row.onclick = () => openSession(s.sessionId);
-    box.append(row);
+  if (state.sessionsHidden > 0) {
+    const n = document.createElement("div");
+    n.className = "meta";
+    n.textContent = `${state.sessionsHidden} session(s) hidden — workspace directory removed.`;
+    const b = document.createElement("button");
+    b.className = "sync-btn"; b.textContent = "Sync now";
+    b.title = "Preview and delete host sessions whose workspace directory is gone (/sync)";
+    b.onclick = (e) => { e.stopPropagation(); cmdSync(); };
+    n.append(b);
+    box.append(n);
   }
+  if (!rows.length) return;
+}
+
+function appendSessionRow(box, s) {
+  const row = document.createElement("div");
+  row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "");
+  row.setAttribute("role", "option");
+  const top = document.createElement("div");
+  top.className = "top";
+  const dot = document.createElement("span");
+  dot.className = "status-dot" + (s.status === "running" ? " running" : "");
+  const nm = document.createElement("span");
+  nm.className = "name";
+  nm.textContent = sessionDisplayName(s);
+  nm.title = (s.name || "").trim() ? s.name : s.sessionId;
+  top.append(dot, nm);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `${s.status || "—"} · ${s.turnCount || 0} turns · ${esc((s.updatedAt || "").slice(0, 16).replace("T", " "))}`;
+  // Session directory: Session.workspaceRoot from session/list is
+  // additive-optional, so rows without one show no dir line.
+  let dir = null;
+  if (s.workspaceRoot) {
+    dir = document.createElement("div");
+    dir.className = "meta";
+    dir.textContent = shortenDir(s.workspaceRoot);
+    dir.title = s.workspaceRoot;
+  }
+  const acts = document.createElement("div");
+  acts.className = "acts";
+  const mk = (label, title, fn) => {
+    const b = document.createElement("button");
+    b.textContent = label; b.title = title;
+    b.onclick = (e) => { e.stopPropagation(); fn(); };
+    return b;
+  };
+  acts.append(
+    mk("open", "Open session", () => openSession(s.sessionId)),
+    mk("rename", "Rename session", () => renameSession(s.sessionId)),
+    mk("fork", "Fork session", () => forkSession(s.sessionId)),
+    mk("delete", "Delete session", () => deleteSession(s.sessionId)),
+  );
+  row.append(top, meta);
+  if (dir) row.append(dir);
+  row.append(acts);
+  row.onclick = () => openSession(s.sessionId);
+  box.append(row);
 }
 
 async function openSession(sessionId) {
   clearTranscript();
   state.sessionId = sessionId;
   closeDrawer();
-  el("session-title").textContent = shortId(sessionId);
+  el("session-title").textContent = titleForSession(sessionId);
   try {
     const r = await send({ type: "resume", sessionId });
     state.session = r.session || null;
-    el("session-title").textContent = (state.session && (state.session.name || shortId(sessionId))) || shortId(sessionId);
+    el("session-title").textContent = sessionDisplayName(state.session || { sessionId });
     state.cursor = r.viewCursor || "";
     updateCursorChip();
     // History envelope: {mode, items|null, snapshot|null, noneReason?}.
@@ -207,7 +260,20 @@ async function openSession(sessionId) {
     fetchPending();
     renderSessionList(state.sessionsCache);
     scrollDown(true);
-  } catch (e) { sysLine("resume failed: " + e.message, true); toast("resume failed: " + e.message, true); }
+  } catch (e) {
+    // A session deleted outside the app (host TUI, another client, host
+    // restart) is treated like an in-app delete instead of erroring on
+    // every open. Refresh first — a failed refresh means offline, not
+    // deleted, so fall through to the plain error then.
+    let fresh = false;
+    await refreshSessions().then(() => { fresh = true; }).catch(() => {});
+    const still = state.sessionsCache.some((s) => s.sessionId === sessionId);
+    if (fresh && !still) {
+      await dropExternallyDeleted(sessionId, e.message);
+    } else {
+      sysLine("resume failed: " + e.message, true); toast("resume failed: " + e.message, true);
+    }
+  }
 }
 
 function handleSubscribeResult(r) {
@@ -330,6 +396,52 @@ async function forkSession(sessionId) {
     refreshSessions().catch(() => {});
     if (nid) openSession(nid);
   } catch (e) { toast("fork failed: " + e.message, true); }
+}
+
+// A session already deleted outside the app goes through the same
+// aftermath as the in-app delete below: best-effort host delete (ignored
+// when the host no longer knows it), drop from the bar, fresh session.
+// No confirm — there is nothing left to protect.
+async function dropExternallyDeleted(sessionId, reason) {
+  try { await send({ type: "delete", sessionId }); } catch (_) {}
+  state.sessionsCache = state.sessionsCache.filter((s) => s.sessionId !== sessionId);
+  renderSessionList(state.sessionsCache);
+  toast("deleted " + shortId(sessionId));
+  if (sessionId === state.sessionId) newSession();
+  sysLine(`Session ${shortId(sessionId)} was already deleted outside the app — cleaned up (${reason}).`);
+  refreshSessions().catch(() => {});
+}
+
+// Sync the host store with the workspace dir: delete host sessions
+// whose workspace directory is gone. Always previews first (dry run),
+// then confirms — and only sessions rooted under the bridge's workspace
+// base are candidates; external manual roots are left alone (a missing
+// mount is not a deletion).
+async function cmdSync() {
+  let prev;
+  try {
+    prev = await send({ type: "pruneMissing", dryRun: true });
+  } catch (e) { sysLine("sync failed: " + e.message, true); return; }
+  const cands = prev.candidates || [];
+  const outside = prev.outsideBase || 0;
+  if (!cands.length) {
+    sysLine("Nothing to sync." + (outside
+      ? ` (${outside} missing-dir session(s) outside the workspace base — left alone)` : ""));
+    return;
+  }
+  sysLine("Sessions with removed workspace directories (workspace base only):\n" +
+    cands.map((c) => `  ${shortId(c.sessionId)}  ${c.name || "(unnamed)"}\n    ${c.workspaceRoot}`).join("\n") +
+    (outside ? `\n(${outside} more outside the workspace base — left alone)` : ""));
+  if (!confirm(`Delete these ${cands.length} session(s) from the host? Their transcripts will be lost.`)) return;
+  try {
+    const r = await send({ type: "pruneMissing", dryRun: false });
+    const done = (r.deleted || []).length, bad = (r.failed || []).length;
+    sysLine(`Sync done: ${done} deleted${bad ? `, ${bad} failed` : ""}.` +
+      (r.failed || []).map((f) => `\n  ${shortId(f.sessionId)}: ${f.message}`).join("") +
+      (r.outsideBase ? `\n(${r.outsideBase} outside the workspace base — left alone)` : ""));
+    toast(`sync: ${done} deleted`);
+    refreshSessions().catch(() => {});
+  } catch (e) { sysLine("sync failed: " + e.message, true); }
 }
 
 async function deleteSession(sessionId) {
@@ -466,6 +578,9 @@ function itemText(it) {
 function itemKind(it) {
   const k = String(it.kind || it.type || "");
   if (k === "userMessage" || k.includes("user")) return "user";
+  // Reminder child sessions are host-side reminder activity, not agent
+  // output: demote to faint system lines instead of agent rows.
+  if (k.toLowerCase().includes("reminder")) return "system";
   if (k.includes("tool") || k.includes("Tool") || k.includes("command") || k.includes("Command")) return "tool";
   if (k.includes("system") || k.includes("System")) return "system";
   if (k.includes("error") || k.includes("Error") || it.isError) return "error";
@@ -501,8 +616,27 @@ function itemHeadLabel(it, kind) {
   return [it.kind || kind, toolType(it), it.status].filter(Boolean).join(" · ") + when;
 }
 
+// Optimistic echoes (itemId "local-*") are placeholders until the server's
+// real userMessage arrives with its own itemId. Drop the oldest echo with
+// matching text so one sent message renders exactly once.
+function reconcileLocalEcho(serverItem) {
+  if (!serverItem || itemKind(serverItem) !== "user") return;
+  const text = itemText(serverItem);
+  if (!text) return;
+  for (const [id, rec] of state.items) {
+    if (id.startsWith("local-") && itemText(rec.item) === text) {
+      rec.line.remove();
+      state.items.delete(id);
+      return;
+    }
+  }
+}
+
 function renderItem(it, streaming) {
   if (!it || !it.itemId) return;
+  if (!it.itemId.startsWith("local-") && !state.items.has(it.itemId)) {
+    reconcileLocalEcho(it);
+  }
   let rec = state.items.get(it.itemId);
   const kind = itemKind(it);
   if (!rec) {
@@ -656,6 +790,7 @@ async function loadOlder() {
 
 function renderItemPrepend(it) {
   if (!it || !it.itemId || state.items.has(it.itemId)) return;
+  if (!it.itemId.startsWith("local-")) reconcileLocalEcho(it);
   const kind = itemKind(it);
   const line = document.createElement("div");
   line.className = `tline ${kind}`;
@@ -766,6 +901,12 @@ function onEvent(method, p) {
       // Same payload shape as usage/read's usage member; refresh the footer.
       refreshUsage().catch(() => {});
       break;
+    case "githubCloneProgress":
+      onGithubProgress(p);
+      break;
+    case "githubCloneResult":
+      onGithubResult(p);
+      break;
     case "session/listChanged":
     case "session/started":
     case "session/closed":
@@ -788,7 +929,7 @@ function onEvent(method, p) {
     case "session/nameChanged":
       if (state.session) {
         state.session.name = p.name || state.session.name;
-        el("session-title").textContent = state.session.name || shortId(state.sessionId);
+        el("session-title").textContent = sessionDisplayName(state.session);
       }
       refreshSessions().catch(() => {});
       break;
@@ -1248,12 +1389,14 @@ const SLASH = [
   { name: "rename", usage: "/rename <name>", desc: "Rename current session", run: (a) => renameSession(null, a.join(" ")) },
   { name: "fork", usage: "/fork", desc: "Fork current session", run: () => forkSession() },
   { name: "delete", usage: "/delete", desc: "Delete current session (confirm)", run: () => deleteSession() },
+  { name: "sync", usage: "/sync", desc: "Delete host sessions whose workspace dir is gone (preview + confirm)", run: () => cmdSync() },
   { name: "clear", usage: "/clear", desc: "Clear local transcript view", run: () => { clearTranscriptKeepSession(); } },
   { name: "models", usage: "/models", desc: "List models in transcript", run: () => cmdModels() },
   { name: "model", usage: "/model <id>", desc: "Set model for current session", run: (a) => cmdSetModel(a) },
   { name: "effort", usage: "/effort <tier>", desc: "Set reasoning effort (none…ultra)", run: (a) => cmdSetEffort(a) },
   { name: "skills", usage: "/skills", desc: "List session skills", run: () => cmdSkills() },
   { name: "mcp", usage: "/mcp", desc: "Show configured MCP servers", run: () => cmdMcp() },
+  { name: "github", usage: "/github list|clone|open|clean|cancel …", desc: "GitHub repos via gh", run: (a) => cmdGithub(a) },
   { name: "output", usage: "/output <itemId>", desc: "Fetch full truncated output", run: (a) => cmdOutput(a) },
   { name: "compact", usage: "/compact", desc: "Compact current session", run: () => cmdCompact() },
   { name: "usage", usage: "/usage", desc: "Show subscription usage", run: () => cmdUsage() },
@@ -1438,6 +1581,211 @@ async function cmdSkills() {
   } catch (e) { sysLine("skills failed: " + e.message, true); }
 }
 
+/* ---------- github repos (gh-only v1) ---------- */
+// Clone-then-open records the dest in the first-use allow list without a
+// prompt: picking the repo (button or explicit /github open) is the
+// consent, equivalent to the manual-root confirm.
+function markRootAllowed(path) {
+  const norm = normalizeRoot(path);
+  if (!norm) return;
+  const known = confirmedRoots();
+  if (!known.includes(norm)) {
+    known.push(norm);
+    try { localStorage.setItem(ALLOWED_ROOTS_KEY, JSON.stringify(known)); } catch (_) {}
+  }
+}
+
+function ghStatus(text, isErr) {
+  const d = el("github-status");
+  if (!d) return;
+  d.textContent = text || "";
+  d.classList.toggle("err", !!isErr);
+}
+
+function fmtRepoRow(r) {
+  const bits = [(r.defaultBranch || ""), ((r.updatedAt || "").slice(0, 10))].filter(Boolean).join(" · ");
+  return `  ${r.fullName}${r.private ? " [private]" : ""}${bits ? "  (" + bits + ")" : ""}`;
+}
+
+function newCloneOpId() {
+  return "gh-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e6).toString(36);
+}
+
+async function cmdGithub(args) {
+  const sub = (args[0] || "list").toLowerCase();
+  if (sub === "list") return cmdGithubList(args.slice(1).join(" "));
+  if (sub === "clone") return githubCloneRepo(args[1]);
+  if (sub === "open") return githubOpenRepo(args[1], args.slice(2).join(" ") || undefined);
+  if (sub === "clean") return cmdGithubClean(args.slice(1));
+  if (sub === "cancel") return cmdGithubCancel();
+  return sysLine("Usage: /github list [search] | clone <owner/repo> | open <owner/repo> [name] | clean [id-prefix] | cancel", true);
+}
+
+async function cmdGithubList(search) {
+  try {
+    const r = await send({ type: "githubRepos", search: search || undefined });
+    state.githubCache = r.repos || [];
+    sysLine(state.githubCache.length
+      ? `GitHub repos:\n${state.githubCache.map(fmtRepoRow).join("\n")}\nClone: /github clone <owner/repo> · Open: /github open <owner/repo>`
+      : "(no repos returned)");
+    if (!el("github-panel").hidden) renderGithubList(state.githubCache);
+  } catch (e) { sysLine("github list failed: " + e.message, true); }
+}
+
+async function githubCloneRepo(fullName) {
+  if (!fullName) return sysLine("Usage: /github clone <owner/repo>", true);
+  const opId = newCloneOpId();
+  state.githubOp = opId;
+  state.githubPending.set(opId, { kind: "clone", fullName });
+  ghStatus(`cloning ${fullName}…`);
+  try {
+    // Admitted instantly; the outcome arrives as a githubCloneResult
+    // event, so the connection stays responsive (and cancellable).
+    await send({ type: "githubClone", fullName, opId });
+  } catch (e) {
+    state.githubPending.delete(opId);
+    state.githubOp = null;
+    ghStatus("clone failed: " + e.message, true);
+    sysLine("github clone failed: " + e.message, true);
+  }
+}
+
+async function githubOpenRepo(fullName, name) {
+  if (!fullName) return sysLine("Usage: /github open <owner/repo> [name]", true);
+  const opId = newCloneOpId();
+  state.githubOp = opId;
+  state.githubPending.set(opId, { kind: "open", fullName, name });
+  ghStatus(`cloning ${fullName}…`);
+  try {
+    // Admitted instantly; the outcome arrives as a githubCloneResult event.
+    await send({ type: "githubOpen", fullName, name, opId });
+  } catch (e) {
+    state.githubPending.delete(opId);
+    state.githubOp = null;
+    ghStatus("open failed: " + e.message, true);
+    sysLine("github open failed: " + e.message, true);
+  }
+}
+
+async function onGithubResult(p) {
+  // Terminal event for an admitted clone/open (global, matched by opId).
+  const pend = state.githubPending.get(p.opId);
+  state.githubPending.delete(p.opId);
+  if (state.githubOp === p.opId) state.githubOp = null;
+  if (!p.ok) {
+    const err = p.error || {};
+    ghStatus("failed: " + (err.message || err.code || "unknown"), true);
+    sysLine(`github ${pend ? pend.kind : "clone"} failed` +
+      (err.code ? ` [${err.code}]` : "") + ": " + (err.message || "unknown"), true);
+    return;
+  }
+  const r = p.result || {};
+  ghStatus("");
+  if (pend && pend.kind === "open") {
+    const sid = r.session && r.session.sessionId;
+    markRootAllowed(r.workspaceRoot || "");
+    sysLine(`Opened ${r.fullName} → session ${shortId(sid)} (${r.workspaceRoot || "?"})`);
+    if (sid) await openSession(sid);
+    refreshSessions().catch(() => {});
+  } else {
+    sysLine(`Cloned ${r.fullName} → ${r.dest}\nRoot a session there: /new --path ${r.dest}`);
+  }
+}
+
+async function cmdGithubClean(args) {
+  const prefix = (args[0] || "").toLowerCase();
+  let sid = state.sessionId;
+  if (prefix) {
+    const hit = state.sessionsCache.find((s) => s.sessionId.toLowerCase().startsWith(prefix));
+    // A clone-only sid has no MSP session yet: accept a full id verbatim.
+    sid = hit ? hit.sessionId : (prefix.length >= 8 ? args[0] : null);
+  }
+  if (!sid) return sysLine("Usage: /github clean <id-prefix> (or open a session)", true);
+  if (!confirm(`Delete the GitHub clone for session ${shortId(sid)}? (session kept, files removed)`)) return;
+  try {
+    const r = await send({ type: "githubClean", sessionId: sid });
+    sysLine(r.removed ? `Clone removed (${r.dest}).` : `Nothing to remove (${r.dest}).`);
+  } catch (e) { sysLine("github clean failed: " + e.message, true); }
+}
+
+async function cmdGithubCancel() {
+  if (!state.githubOp) return sysLine("No clone running.", true);
+  try {
+    await send({ type: "githubCancel", opId: state.githubOp });
+    sysLine("Clone cancel requested.");
+  } catch (e) { sysLine("github cancel failed: " + e.message, true); }
+}
+
+function onGithubProgress(p) {
+  // Progress events carry no sessionId (global) so they always render.
+  const line = (p.line || "").slice(0, 160);
+  if (p.phase === "progress") { ghStatus(`${p.fullName || ""}: ${line}`); return; }
+  const done = p.phase === "completed";
+  ghStatus(done ? `${p.fullName || ""}: cloned` : `${p.fullName || ""}: ${p.phase}`,
+    !(done || p.phase === "started"));
+}
+
+function toggleGithubPanel() {
+  const p = el("github-panel");
+  p.hidden = !p.hidden;
+  if (!p.hidden) {
+    if (!state.githubCache.length) loadGithubRepos(el("github-search").value || "");
+    el("github-search").focus();
+  }
+}
+
+async function loadGithubRepos(search) {
+  ghStatus("loading…");
+  try {
+    const r = await send({ type: "githubRepos", search: search || undefined });
+    state.githubCache = r.repos || [];
+    ghStatus(state.githubCache.length ? "" : "(no repos)");
+    renderGithubList(state.githubCache);
+  } catch (e) { ghStatus("list failed: " + e.message, true); }
+}
+
+function renderGithubList(repos) {
+  const box = el("github-list");
+  box.innerHTML = "";
+  if (!repos.length) {
+    const d = document.createElement("div");
+    d.className = "session-row"; d.textContent = "No repos — is `gh auth login` done?";
+    box.append(d);
+    return;
+  }
+  for (const r of repos) {
+    const row = document.createElement("div");
+    row.className = "session-row"; row.setAttribute("role", "option");
+    const top = document.createElement("div");
+    top.className = "top";
+    const nm = document.createElement("span");
+    nm.className = "name"; nm.textContent = r.fullName;
+    top.append(nm);
+    if (r.private) {
+      const b = document.createElement("span");
+      b.className = "badge"; b.textContent = "private";
+      top.append(b);
+    }
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [(r.defaultBranch || ""), ((r.updatedAt || "").slice(0, 10))].filter(Boolean).join(" · ") || "—";
+    const acts = document.createElement("div");
+    acts.className = "acts";
+    const mk = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.title = title;
+      b.onclick = (e) => { e.stopPropagation(); fn(); };
+      return b;
+    };
+    acts.append(
+      mk("clone", "Shallow-clone (no session yet)", () => githubCloneRepo(r.fullName)),
+      mk("open", "Clone + open session", () => githubOpenRepo(r.fullName)),
+    );
+    row.append(top, meta, acts);
+    box.append(row);
+  }
+}
+
 const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
 async function cmdSetEffort(args) {
@@ -1569,13 +1917,13 @@ async function submitComposer() {
   }
   box.value = ""; autosize();
   state.history.unshift(text); state.hidx = -1;
-  // Optimistic user echo (reconciled by server item/completed).
+  // Optimistic user echo (reconciled when the server item arrives).
   renderItem({ itemId: "local-" + Date.now(), kind: "userMessage", text }, false);
   try {
     const r = await send({ type: "prompt", sessionId: state.sessionId || undefined, text });
     if (r.sessionId && !state.sessionId) {
       state.sessionId = r.sessionId;
-      el("session-title").textContent = shortId(r.sessionId);
+      el("session-title").textContent = titleForSession(r.sessionId);
       await send({ type: "subscribe", sessionId: r.sessionId }).catch(() => {});
       refreshSessions().catch(() => {});
       refreshModels().catch(() => {});
@@ -1670,15 +2018,108 @@ document.addEventListener("keydown", (ev) => {
 });
 el("btn-close-sessions").onclick = closeDrawer;
 el("scrim").onclick = () => { closeDrawer(); closeInspector(); };
-el("btn-new").onclick = () => {
-  const p = prompt("Session directory (blank for the default workspace):");
-  if (p == null) return; // cancelled
-  if (p.trim()) newSession(undefined, { workspaceRoot: p });
-  else newSession();
+/* ---------- new-session directory explorer ---------- */
+// Filesystem explorer for the + button: lists server-side directories via
+// the bridge `browse` method. Current directory is the selection; files
+// are shown greyed-out and unselectable. Pick-existing-only.
+const dirState = { path: "", parent: "/", home: "" };
+function dirError(msg) {
+  const e = el("dir-error");
+  if (!msg) { e.hidden = true; e.textContent = ""; return; }
+  e.hidden = false; e.textContent = msg;
+}
+function openDirDialog() {
+  el("dir-dialog").hidden = false;
+  dirError("");
+  el("dir-list").innerHTML = "";
+  el("dir-path").value = "";
+  loadDir("");
+  setTimeout(() => { try { el("dir-path").focus(); } catch (_) {} }, 0);
+}
+function closeDirDialog() { el("dir-dialog").hidden = true; }
+async function loadDir(path) {
+  dirError("");
+  try {
+    const r = await send(path ? { type: "browse", path } : { type: "browse" });
+    renderDir(r);
+  } catch (e) { dirError(e.message); }
+}
+function renderCrumbs(path) {
+  const box = el("dir-crumbs");
+  box.innerHTML = "";
+  const parts = String(path || "/").split("/").filter(Boolean);
+  const mk = (label, target, isCur) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (isCur) b.className = "cur";
+    else b.onclick = () => loadDir(target);
+    return b;
+  };
+  const sep = () => {
+    const s = document.createElement("span");
+    s.className = "sep"; s.textContent = "/";
+    return s;
+  };
+  box.append(mk("/", "/", parts.length === 0));
+  let acc = "";
+  parts.forEach((p, i) => {
+    acc += "/" + p;
+    box.append(sep());
+    box.append(mk(p, acc, i === parts.length - 1));
+  });
+}
+function renderDir(r) {
+  dirState.path = r.path; dirState.parent = r.parent; dirState.home = r.home || "";
+  el("dir-path").value = r.path;
+  renderCrumbs(r.path);
+  const box = el("dir-list");
+  box.innerHTML = "";
+  if (!r.entries.length) {
+    const d = document.createElement("div");
+    d.className = "dir-empty"; d.textContent = "Empty directory.";
+    box.append(d);
+    return;
+  }
+  for (const e of r.entries) {
+    const b = document.createElement("button");
+    b.className = "dir-row " + (e.isDir ? "isdir" : "isfile");
+    b.setAttribute("role", "option");
+    b.textContent = e.isDir ? e.name + "/" : e.name;
+    b.title = e.path;
+    if (e.isDir) b.onclick = () => loadDir(e.path);
+    else b.disabled = true;
+    box.append(b);
+  }
+}
+el("btn-new").onclick = () => { openDirDialog(); };
+el("dir-go").onclick = () => loadDir(el("dir-path").value.trim());
+el("dir-path").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); loadDir(el("dir-path").value.trim()); }
+  else if (ev.key === "Escape") closeDirDialog();
+});
+el("dir-up").onclick = () => { if (dirState.path && dirState.path !== dirState.parent) loadDir(dirState.parent); };
+el("dir-home").onclick = () => loadDir(dirState.home || "");
+el("dir-root").onclick = () => loadDir("/");
+el("dir-cancel").onclick = closeDirDialog;
+el("dir-cancel-x").onclick = closeDirDialog;
+el("dir-dialog").addEventListener("click", (ev) => {
+  if (ev.target === el("dir-dialog")) closeDirDialog();
+});
+el("dir-default").onclick = () => { closeDirDialog(); newSession(); closeDrawer(); };
+el("dir-use").onclick = () => {
+  const p = (dirState.path || el("dir-path").value || "").trim();
+  if (!p) { dirError("no directory selected"); return; }
+  closeDirDialog();
+  newSession(undefined, { workspaceRoot: p });
   closeDrawer();
 };
 el("btn-refresh-sessions").onclick = () => refreshSessions().catch((e) => toast(e.message, true));
 el("session-filter").oninput = () => renderSessionList(state.sessionsCache);
+el("btn-github").onclick = () => toggleGithubPanel();
+el("github-search").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); loadGithubRepos(el("github-search").value.trim()); }
+  else if (ev.key === "Escape") el("github-panel").hidden = true;
+});
 el("btn-older").onclick = loadOlder;
 el("jump-latest").onclick = () => { state.stick = true; scrollDown(true); };
 el("terminal").addEventListener("scroll", () => {

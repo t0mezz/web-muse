@@ -11,8 +11,10 @@ import json
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 
+from server.github import GithubError, run_gh_clone, run_gh_list, validate_fullname
 from server.msp import MspError, uuid7
 
 LOG = logging.getLogger("web_muse.sessions")
@@ -59,6 +61,25 @@ VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high",
 
 # MSP view/page directions (schema $defs/ViewPageDirection).
 VALID_PAGE_DIRECTIONS = {"forward", "backward"}
+
+# Default session-name length: the web panel names a session from the
+# first few characters of its initial prompt (same convention as the
+# muse TUI), as a fallback until an explicit rename takes precedence.
+DEFAULT_SESSION_NAME_LEN = 40
+
+
+def default_session_name(text, limit=DEFAULT_SESSION_NAME_LEN):
+    """Initial-prompt prefix used as a session's default (fallback) name.
+
+    Whitespace (including newlines) collapses to single spaces and the
+    result hard-slices to `limit` characters. Returns "" when there is
+    no usable text (blank prompt, images-only turn), so callers skip
+    the rename instead of setting an empty name.
+    """
+    if not isinstance(text, str):
+        return ""
+    collapsed = " ".join(text.split())
+    return collapsed[:limit]
 
 
 def build_turn_input(text, images=None):
@@ -262,14 +283,101 @@ def validate_manual_root(path):
     return str(Path(p).resolve())
 
 
+def browse_home():
+    """Default explorer root: the server's $HOME, falling back to /."""
+    home = os.path.expanduser("~")
+    if home and os.path.isdir(home):
+        return str(Path(home).resolve())
+    return "/"
+
+
+def browse_dir(path=None):
+    """List one directory for the new-session explorer.
+
+    Any on-device path may be listed (manual roots may point anywhere);
+    nothing is created. Returns a JSON-able dict:
+    {path, parent, home, entries:[{name, path, isDir, isHidden}]} sorted
+    dirs-first, alphabetical (case-insensitive). Raises ValueError on a
+    missing/non-directory path or an unreadable directory.
+    """
+    raw = path if isinstance(path, str) else ""
+    raw = raw.strip() or browse_home()
+    if raw.startswith("~"):
+        raw = os.path.expanduser(raw)
+    target = Path(raw)
+    if not target.is_absolute():
+        raise ValueError(f"browse path must be absolute: {raw!r}")
+    if not os.path.isdir(target):
+        raise ValueError(f"not an existing directory: {raw!r}")
+    resolved = str(target.resolve())
+    try:
+        with os.scandir(resolved) as it:
+            rows = [(e.name, e.path, e.is_dir(follow_symlinks=True))
+                    for e in it]
+    except OSError as e:
+        raise ValueError(f"directory unreadable: {resolved!r} ({e})")
+    entries = [{
+        "name": name,
+        "path": str(Path(resolved) / name),
+        "isDir": bool(is_dir),
+        "isHidden": name.startswith("."),
+    } for name, _, is_dir in rows]
+    entries.sort(key=lambda e: (not e["isDir"], e["name"].lower(), e["name"]))
+    parent = str(Path(resolved).parent)
+    return {"path": resolved, "parent": parent, "home": browse_home(),
+            "entries": entries}
+
+
+# Sync pacing: the host's deletion registry admits one deletion at a time
+# and stays busy while one settles, so back-to-back deletes are rejected
+# with Store(Busy). Retry those with backoff and pause between deletes.
+_PRUNE_RETRY_DELAYS_S = (2, 4, 6)
+_PRUNE_PAUSE_S = 0.5
+
+
+def _transient_delete_error(e):
+    return "busy" in str(e).lower()
+
+
+def flag_missing_workspaces(result):
+    """Flag `session/list` rows whose workspaceRoot is gone from disk.
+
+    Sessions are host-owned: a removed directory only hides the row (the
+    UI filters on `workspaceMissing`) — the session itself is never deleted
+    here, so a transiently missing mount reappears with history intact
+    instead of losing everything. Rows without a root are left alone.
+    """
+    sessions = result.get("sessions") if isinstance(result, dict) else None
+    if not isinstance(sessions, list):
+        return result
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        root = s.get("workspaceRoot")
+        if isinstance(root, str) and root and not os.path.isdir(root):
+            s["workspaceMissing"] = True
+    return result
+
+
 class SessionRouter:
     """Tracks WS<->sessionId subscriptions and last-seen view cursors."""
 
-    def __init__(self, msp, workspace_base=None):
+    def __init__(self, msp, workspace_base=None, gh_bin="gh"):
         self._msp = msp
         # Base dir for per-session workspaces (None = send no workspaceRoot).
         self._workspace_base = str(workspace_base) if workspace_base else None
+        self._gh_bin = gh_bin or "gh"
+        # Clone opId -> [task, conn, fullName]. Terminal-event ownership
+        # goes to whoever pops the record first (finishing task or
+        # canceller), so exactly one githubCloneResult fires even when a
+        # cancel lands before the task's first step (a coroutine cancelled
+        # that early never runs its body, not even `finally`).
+        self._github_ops = {}
         self._subs = {}   # sessionId -> set of ClientConnection
+        # Sessions this bridge created while still unnamed: the first
+        # prompt names them from its initial text (default fallback).
+        # An explicit rename drops the id, so user/host names always win.
+        self._auto_name_pending = set()
         self._cursors = {}  # sessionId -> last viewCursor seen
         self._turns = {}  # sessionId -> running turnId (from turn/started)
         self._conns = set()
@@ -377,7 +485,8 @@ class SessionRouter:
                         p[k] = msg[k]
                 if msg.get("filter") is not None:
                     p["filter"] = msg["filter"]
-                return reply(True, result=await self._msp.call("session/list", p))
+                result = await self._msp.call("session/list", p)
+                return reply(True, result=flag_missing_workspaces(result))
             if mtype == "resume":
                 try:
                     result = await self._msp.command(
@@ -407,8 +516,12 @@ class SessionRouter:
                     _pick(msg, ("sessionId", "cutPoint", "excludeItems")))
                 return reply(True, result=result)
             if mtype == "rename":
-                return reply(True, result=await self._msp.command(
-                    "session/rename", _pick(msg, ("sessionId", "name"))))
+                result = await self._msp.command(
+                    "session/rename", _pick(msg, ("sessionId", "name")))
+                # Explicit renames take precedence over the default: the
+                # session leaves the auto-name set, present or future.
+                self._auto_name_pending.discard(msg.get("sessionId"))
+                return reply(True, result=result)
             if mtype == "delete":
                 return reply(True, result=await self._msp.command(
                     "session/delete", _pick(msg, ("sessionId",))))
@@ -526,6 +639,10 @@ class SessionRouter:
                 # No mcp/* methods exist on MSP v1 (stable+experimental):
                 # serve the local settings.json inventory instead.
                 return reply(True, result=read_mcp_servers())
+            if mtype == "browse":
+                # Filesystem explorer for the + dialog: list one
+                # directory; empty/missing path opens the server's $HOME.
+                return reply(True, result=browse_dir(msg.get("path")))
             if mtype == "compact":
                 return reply(True, result=await self._msp.command(
                     "session/compact", _pick(msg, ("sessionId", "turnId"))))
@@ -534,6 +651,42 @@ class SessionRouter:
             if mtype == "pending":
                 return reply(True, result=await self._msp.call(
                     "approval/listPending", {"sessionId": msg["sessionId"]}))
+            if mtype == "githubRepos":
+                # Repo picker rows, served live from `gh` (never cached).
+                return reply(True, result={
+                    "repos": await run_gh_list(
+                        msg.get("search"), msg.get("limit"),
+                        gh_bin=self._gh_bin),
+                })
+            if mtype == "githubClone":
+                # Shallow-clone into workspaces/<sessionId>/repo/, admitted
+                # async: the reply is instant ({accepted, opId, ...}) and
+                # the outcome streams back as a githubCloneResult event, so
+                # the connection stays responsive and githubCancel can
+                # preempt a hanging clone. Progress streams as
+                # githubCloneProgress events (no sessionId: global).
+                return reply(True, result=self._do_github_clone(
+                    conn, msg))
+            if mtype == "githubCancel":
+                return reply(True, result=self._cancel_github_op(
+                    conn, msg.get("opId")))
+            if mtype == "githubClean":
+                # Delete one session's clone leaf after confirm (the UI
+                # confirms; the bridge only enforces the leaf shape).
+                return reply(True, result=self._clean_github_clone(
+                    msg.get("sessionId")))
+            if mtype == "pruneMissing":
+                # Delete host sessions whose workspace dir is gone (the UI
+                # previews with dryRun, then confirms before executing).
+                return reply(True, result=await self._prune_missing(msg))
+            if mtype == "githubOpen":
+                # Clone + session/start rooted at the clone, admitted async
+                # like githubClone (same events; the result carries the
+                # started session). The browser records the dest in its
+                # first-use allow list; picking the repo in the UI is the
+                # consent, equivalent to the manual-root confirm.
+                return reply(True, result=self._do_github_open(
+                    conn, msg))
             if mtype == "ping":
                 return reply(True, result={"pong": True})
             return reply(False, error={"message": f"unknown type {mtype!r}"})
@@ -566,7 +719,33 @@ class SessionRouter:
             p["reasoningEffort"] = msg["reasoningEffort"]
         result = await self._msp.command("turn/start", p)
         result["sessionId"] = session_id
+        # First prompt in a bridge-created (still unnamed) session names
+        # it from the initial text; best effort, never fails the turn.
+        await self._auto_name_from_prompt(session_id, msg.get("text"))
         return result
+
+    async def _auto_name_from_prompt(self, session_id, text):
+        """Rename one pending session to its initial-prompt prefix.
+
+        No-op unless the session is still in the auto-name set (created
+        unnamed via this bridge, never explicitly renamed). The rename
+        itself is best effort: failures log and leave the turn result
+        untouched.
+        """
+        if session_id not in self._auto_name_pending:
+            return None
+        self._auto_name_pending.discard(session_id)
+        name = default_session_name(text)
+        if not name:
+            return None
+        try:
+            await self._msp.command(
+                "session/rename",
+                {"sessionId": session_id, "name": name})
+        except Exception as e:
+            LOG.warning("auto-name failed for %s: %s", session_id, e)
+            return None
+        return name
 
     async def _do_new(self, conn, msg):
         p = {}
@@ -614,11 +793,315 @@ class SessionRouter:
                 attached = sorted(merged)
         result = await self._msp.command("session/start", p)
         self._attach(conn, result["session"]["sessionId"])
+        # Hosts that leave the name empty mark the session for default
+        # naming on its first prompt; already-named sessions never enter.
+        sid = result["session"]["sessionId"]
+        if result["session"].get("name"):
+            self._auto_name_pending.discard(sid)
+        else:
+            self._auto_name_pending.add(sid)
         if attached:
             result["mcpAttached"] = attached
         if p.get("workspaceRoot"):
             result["workspaceRoot"] = p["workspaceRoot"]
         return result
+
+    # -- GitHub clones (gh-only v1) -----------------------------------------
+    def _clone_leaf(self, session_id):
+        """`workspaces/<sid>/repo` leaf for a clone: contained and reusable.
+
+        The leaf is created only by cloning, so a non-git residue is always
+        a previous attempt's leftover: remove it so retries start clean.
+        Raises ValueError (bad id / no workspace base) or GithubError
+        (dest_exists when this session already holds a clone).
+        """
+        if not self._workspace_base:
+            raise ValueError("github clone needs a workspace base "
+                             "(bridge started with --workspace-base \"\")")
+        wsdir = session_workspace_dir(self._workspace_base, session_id or "")
+        leaf = Path(wsdir) / "repo"
+        if leaf.is_dir() and (leaf / ".git").is_dir():
+            raise GithubError(
+                "dest_exists",
+                f"session {session_id} already holds a clone at {leaf}")
+        if leaf.exists() or leaf.is_symlink():
+            shutil.rmtree(leaf, ignore_errors=True)
+        return str(leaf)
+
+    def _emit_clone_progress(self, conn, op_id, full_name, phase, line=None):
+        """Push one githubCloneProgress event (global: no sessionId)."""
+        try:
+            params = {"opId": op_id, "fullName": full_name, "phase": phase}
+            if line is not None:
+                params["line"] = line
+            conn.queue_frame({"type": "event",
+                              "method": "githubCloneProgress",
+                              "params": params})
+        except Exception:
+            LOG.warning("clone progress frame dropped for %s", full_name,
+                        exc_info=True)
+
+    def _check_op_id(self, op_id):
+        if not isinstance(op_id, str) or not op_id.strip() \
+                or len(op_id) > 128:
+            raise ValueError("opId must be a 1..128 char string")
+        return op_id.strip()
+
+    def _launch_clone(self, conn, full_name, dest, op_id, session_id,
+                      open_opts=None):
+        """Start the clone as a background task; reply accepted at once.
+
+        The WS read loop awaits each handler serially, so awaiting a
+        minutes-long clone inline would wedge the connection and make
+        githubCancel unprocessable. Instead the outcome streams back as a
+        global githubCloneResult event (ok + result, or ok False + error).
+        Returns the accepted receipt; raises ValueError/GithubError on bad
+        input before anything is launched.
+        """
+        self._emit_clone_progress(conn, op_id, full_name, "started")
+        task = asyncio.create_task(
+            self._clone_task(conn, full_name, dest, op_id, session_id,
+                             open_opts),
+            name=f"github-clone-{op_id}")
+        self._github_ops[op_id] = [task, conn, full_name]
+        return {"accepted": True, "opId": op_id, "fullName": full_name,
+                "dest": dest, "sessionId": session_id}
+
+    def _finish_op(self, op_id, task):
+        """Take terminal-event ownership iff this task still owns the op."""
+        rec = self._github_ops.get(op_id)
+        if rec is not None and rec[0] is task:
+            self._github_ops.pop(op_id, None)
+            return rec
+        return None
+
+    async def _clone_task(self, conn, full_name, dest, op_id, session_id,
+                          open_opts):
+        """Background clone body: progress, result event, cleanup."""
+        me = asyncio.current_task()
+        try:
+            await run_gh_clone(
+                full_name, dest, gh_bin=self._gh_bin,
+                on_line=lambda line: self._emit_clone_progress(
+                    conn, op_id, full_name, "progress", line))
+            self._emit_clone_progress(conn, op_id, full_name, "completed")
+            if open_opts is None:
+                result = {"fullName": full_name, "dest": dest,
+                          "sessionId": session_id, "opId": op_id}
+            else:
+                result = await self._open_cloned(
+                    conn, full_name, dest, session_id, op_id, open_opts)
+        except asyncio.CancelledError:
+            # Whoever cancelled already owns the terminal event (see
+            # _cancel_github_op); only emit when this task still owns it.
+            if self._finish_op(op_id, me) is None:
+                raise
+            self._emit_clone_progress(conn, op_id, full_name, "cancelled")
+            self._emit_clone_result(
+                conn, op_id, False,
+                error={"code": "clone_cancelled",
+                       "message": f"clone of {full_name} cancelled"})
+            return
+        except GithubError as e:
+            if self._finish_op(op_id, me) is None:
+                return
+            self._emit_clone_result(
+                conn, op_id, False,
+                error={"code": e.code, "message": str(e)})
+            return
+        except Exception as e:  # MspError from session/start and friends
+            if self._finish_op(op_id, me) is None:
+                return
+            err = {"message": str(e)}
+            if getattr(e, "code", None) is not None:
+                err["code"] = e.code
+            self._emit_clone_result(conn, op_id, False, error=err)
+            return
+        if self._finish_op(op_id, me) is None:
+            return  # a canceller already emitted the terminal event
+        self._emit_clone_result(conn, op_id, True, result=result)
+
+    def _emit_clone_result(self, conn, op_id, ok, result=None, error=None):
+        """Push the terminal githubCloneResult event (global)."""
+        try:
+            params = {"opId": op_id, "ok": ok}
+            if result is not None:
+                params["result"] = result
+            if error is not None:
+                params["error"] = error
+            conn.queue_frame({"type": "event",
+                              "method": "githubCloneResult",
+                              "params": params})
+        except Exception:
+            LOG.warning("clone result frame dropped for op %s", op_id,
+                        exc_info=True)
+
+    async def _open_cloned(self, conn, full_name, dest, session_id, op_id,
+                           open_opts):
+        """session/start rooted at a fresh clone (open half of githubOpen)."""
+        new_msg = {"workspaceRoot": dest, "sessionId": session_id}
+        if open_opts.get("mcpAttach") is not None:
+            new_msg["mcpAttach"] = open_opts.get("mcpAttach")
+        result = await self._do_new(conn, new_msg)
+        name = open_opts.get("name")
+        if isinstance(name, str) and name.strip():
+            await self._msp.command(
+                "session/rename", {"sessionId": session_id,
+                                   "name": name.strip()})
+            if isinstance(result.get("session"), dict):
+                result["session"]["name"] = name.strip()
+            # Explicit name: the default fallback no longer applies.
+            self._auto_name_pending.discard(session_id)
+        result["fullName"] = full_name
+        result["opId"] = op_id
+        return result
+
+    def _cancel_github_op(self, conn, op_id):
+        """Cancel a running clone by opId (raises on unknown/finished op).
+
+        The canceller takes terminal-event ownership and emits
+        cancelled + clone_cancelled itself: a task cancelled before its
+        first step never runs its body, so waiting on the task to report
+        would leak the op with no terminal event.
+        """
+        op_id = self._check_op_id(op_id or "")
+        rec = self._github_ops.get(op_id)
+        task = rec[0] if rec else None
+        if rec is None or task.done():
+            if rec is not None and rec[0] is task:
+                self._github_ops.pop(op_id, None)
+            raise GithubError(
+                "unknown_op",
+                f"clone op {op_id!r} already finished"
+                if task is not None and task.done() else
+                f"no running clone op {op_id!r}")
+        self._github_ops.pop(op_id, None)
+        task.cancel()
+        # Terminal events go to the originating conn (it holds the pending
+        # UI state); the canceller gets the {cancelled} reply. Usually both
+        # are the same client.
+        origin = rec[1]
+        self._emit_clone_progress(origin, op_id, rec[2], "cancelled")
+        self._emit_clone_result(
+            origin, op_id, False,
+            error={"code": "clone_cancelled",
+                   "message": f"clone of {rec[2]} cancelled"})
+        return {"cancelled": True, "opId": op_id}
+
+    def _do_github_clone(self, conn, msg):
+        """Admit a clone into `workspaces/<sid>/repo/` (no MSP session).
+
+        The caller then roots a session at `dest` via `new` (which runs the
+        usual first-use confirm) or uses `githubOpen` for the combined step.
+        """
+        full_name = validate_fullname(msg.get("fullName"))
+        sid = msg.get("sessionId") or uuid7()
+        op_id = self._check_op_id(msg.get("opId") or uuid7())
+        dest = self._clone_leaf(sid)
+        return self._launch_clone(conn, full_name, dest, op_id, sid)
+
+    def _do_github_open(self, conn, msg):
+        """Admit a clone + `session/start` rooted at the clone."""
+        full_name = validate_fullname(msg.get("fullName"))
+        sid = uuid7()
+        op_id = self._check_op_id(msg.get("opId") or uuid7())
+        dest = self._clone_leaf(sid)
+        return self._launch_clone(conn, full_name, dest, op_id, sid,
+                                  {"mcpAttach": msg.get("mcpAttach"),
+                                   "name": msg.get("name")})
+
+    async def _prune_missing(self, msg):
+        """Delete host sessions whose workspace dir is gone (scoped, safe).
+
+        Only sessions rooted under this bridge's workspace base are
+        candidates: external manual roots may be transiently missing (an
+        unmounted drive is not a deletion), and removing those sessions
+        would destroy their transcripts. dryRun previews without deleting.
+        """
+        dry = bool(msg.get("dryRun"))
+        try:
+            limit = max(1, min(1000, int(msg.get("limit", 100))))
+        except (TypeError, ValueError):
+            limit = 100
+        listed = await self._msp.call("session/list", {"limit": limit})
+        sessions = listed.get("sessions") if isinstance(listed, dict) else None
+        if not isinstance(sessions, list):
+            sessions = []
+        flag_missing_workspaces({"sessions": sessions})
+        base = Path(self._workspace_base).resolve() \
+            if self._workspace_base else None
+        candidates, outside = [], 0
+        for s in sessions:
+            if not isinstance(s, dict) or not s.get("workspaceMissing"):
+                continue
+            try:
+                contained = base is not None and \
+                    base in Path(s.get("workspaceRoot") or "").resolve().parents
+            except (OSError, ValueError):
+                contained = False
+            if contained:
+                candidates.append(s)
+            else:
+                outside += 1
+        brief = lambda s: {"sessionId": s.get("sessionId"),
+                           "name": s.get("name"),
+                           "workspaceRoot": s.get("workspaceRoot")}
+        if dry:
+            return {"dryRun": True,
+                    "candidates": [brief(s) for s in candidates],
+                    "outsideBase": outside}
+        deleted, failed = [], []
+        for s in candidates:
+            sid = s.get("sessionId")
+            error = None
+            for attempt in range(1 + len(_PRUNE_RETRY_DELAYS_S)):
+                try:
+                    await self._msp.command("session/delete",
+                                            {"sessionId": sid})
+                    error = None
+                    break
+                except Exception as e:
+                    error = e
+                    if _transient_delete_error(e) \
+                            and attempt < len(_PRUNE_RETRY_DELAYS_S):
+                        LOG.info("prune %s busy, retrying in %ss "
+                                 "(attempt %d)", sid,
+                                 _PRUNE_RETRY_DELAYS_S[attempt], attempt + 1)
+                        await asyncio.sleep(_PRUNE_RETRY_DELAYS_S[attempt])
+                    else:
+                        break
+            if error is None:
+                deleted.append(brief(s))
+            else:
+                err = {"sessionId": sid, "message": str(error)}
+                if getattr(error, "code", None) is not None:
+                    err["code"] = error.code
+                failed.append(err)
+            await asyncio.sleep(_PRUNE_PAUSE_S)
+        return {"dryRun": False, "deleted": deleted, "failed": failed,
+                "outsideBase": outside}
+
+    def _clean_github_clone(self, session_id):
+        """Delete one session's `repo/` leaf (raises outside the leaf)."""
+        sid = session_id or ""
+        if not SAFE_SESSION_ID.fullmatch(sid) or sid.startswith(".") \
+                or sid in (".", ".."):
+            raise ValueError(f"unsafe sessionId for github clean: {sid!r}")
+        if not self._workspace_base:
+            raise ValueError("github clean needs a workspace base")
+        root = Path(self._workspace_base).resolve()
+        leaf = (root / sid / "repo").resolve()
+        if leaf.name != "repo" or leaf.parent.name != sid \
+                or root not in leaf.parents:
+            raise ValueError(f"refusing to clean outside clone leaf: {sid!r}")
+        if not leaf.is_dir():
+            return {"removed": False, "dest": str(leaf)}
+        shutil.rmtree(leaf)
+        try:  # drop the session dir too when the clone was all it held
+            leaf.parent.rmdir()
+        except OSError:
+            pass
+        return {"removed": True, "dest": str(leaf)}
 
     def _attach(self, conn, session_id):
         if session_id:
