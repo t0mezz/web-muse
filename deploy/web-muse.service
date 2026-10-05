@@ -1,0 +1,47 @@
+# web-muse bridge as a per-user systemd service.
+#
+# User service (not system): the bridge spawns `muse serve` inheriting this
+# process's environment, so it must run as YOU for your `muse login`
+# subscription to pass through. Install with:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/web-muse.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now web-muse
+#   loginctl enable-linger   # keep it running after logout (needs sudo/sysadmin once)
+#
+# Logs: journalctl --user -u web-muse -f
+# Override flags (port, provider, model, extra hosts):
+#   systemctl --user edit web-muse
+# and add e.g.:
+#   [Service]
+#   ExecStart=
+#   ExecStart=/usr/bin/python3 -m server.main --port 8000 --provider meta
+#
+# %h expands to the user's home directory, so this file works unmodified
+# for any user with a checkout at ~/web-muse and muse on ~/.local/bin.
+
+[Unit]
+Description=web-muse localhost bridge (browser UI for Muse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/web-muse
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Sandbox network is host-lifetime (all sessions, not per-session):
+# "enabled" lets in-session gh/git reach github.com so agents can push
+# and open PRs themselves. Narrower modes ("proxy-only", "restricted")
+# keep network off but stall those flows on sandbox denials instead of
+# approval prompts.
+ExecStart=/usr/bin/python3 -m server.main --port 8000 --muse-bin %h/.local/bin/muse --sandbox-network enabled
+Restart=on-failure
+RestartSec=2
+# Light hardening only: the `muse serve` child needs normal $HOME
+# access (login, settings, session log), so no ProtectHome/ProtectSystem.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

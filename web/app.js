@@ -9,11 +9,20 @@ const state = {
   cursor: "", pageCursor: null, hasOlder: false,
   items: new Map(), // itemId -> {line, body, item}
   tools: new Map(), // itemId -> tool summary row
-  running: false, turnId: null,
+  running: false, turnId: null, queuedTurnId: null,
   stick: true, history: [], hidx: -1,
   models: [], modelsMeta: null, slashSel: 0, slashList: [],
+  // Last explicitly chosen model (picker or /model): applied to the
+  // current session AND remembered as the default for created sessions.
+  pickedModel: null,
   reconnectDelay: 1000, everConnected: false,
   lastCumulative: null, lastContext: null, ctxLine: "", sessionMcp: [],
+  githubCache: [], githubOp: null, githubPending: new Map(),
+  sessionsHidden: 0,
+  // Renames the host has admitted but not yet applied (list still shows
+  // the old name): sessionId -> {name, at}. Re-applied over every
+  // refresh until the host catches up or 30s pass.
+  pendingNames: new Map(),
 };
 
 /* ---------- tiny helpers ---------- */
@@ -32,6 +41,17 @@ function notice(msg) {
 }
 function setStatus(t) { el("status").textContent = t; }
 function shortId(id) { return (id || "").slice(0, 8); }
+// Default fallback first: an explicit host name wins; otherwise show the
+// initial-prompt prefix the bridge auto-names (short id until it lands).
+// A later user rename just sets s.name and takes precedence.
+function sessionDisplayName(s) {
+  const n = (s && s.name || "").trim();
+  return n || shortId(s && s.sessionId);
+}
+function titleForSession(sessionId) {
+  const hit = state.sessionsCache.find((s) => s.sessionId === sessionId);
+  return sessionDisplayName(hit || { sessionId });
+}
 function esc(s) { return String(s == null ? "" : s); }
 
 /* ---------- websocket ---------- */
@@ -111,11 +131,44 @@ function onHello(f) {
 }
 
 /* ---------- sessions ---------- */
+// Session-bar directory: tail-ellipsis for readability; the full path
+// stays on the title attribute.
+function shortenDir(p) {
+  const s = String(p == null ? "" : p);
+  if (s.length <= 48) return s;
+  return "…" + s.slice(s.length - 47);
+}
+
 async function refreshSessions() {
   const r = await send({ type: "list", limit: 100 });
-  state.sessionsCache = r.sessions || [];
+  // Rows whose workspace directory was removed from disk stay out of the
+  // bar (the bridge flags them); the count keeps the hiding visible.
+  const rows = r.sessions || [];
+  state.sessionsHidden = rows.filter((s) => s.workspaceMissing).length;
+  state.sessionsCache = rows.filter((s) => !s.workspaceMissing);
+  // Bridge-created sessions first; host order kept within each group
+  // (stable sort), so TUI sessions stay exactly as the host listed them.
+  state.sessionsCache.sort((a, b) => ((b.bridgeCreated ? 1 : 0) - (a.bridgeCreated ? 1 : 0)));
+  applyPendingNames();
   renderSessionList(state.sessionsCache);
   return r;
+}
+
+// Re-apply admitted-but-unapplied renames over fresh list rows. Drops
+// an entry once the host row carries the new name (caught up) or after
+// 30s (host never applied it — fall back to host truth).
+function applyPendingNames() {
+  if (!state.pendingNames.size) return;
+  const now = Date.now();
+  for (const [sid, p] of state.pendingNames) {
+    if (now - p.at > 30000) state.pendingNames.delete(sid);
+  }
+  for (const s of state.sessionsCache) {
+    const p = state.pendingNames.get(s.sessionId);
+    if (!p) continue;
+    if ((s.name || "") === p.name) state.pendingNames.delete(s.sessionId);
+    else s.name = p.name;
+  }
 }
 
 function renderSessionList(sessions) {
@@ -123,57 +176,85 @@ function renderSessionList(sessions) {
   const box = el("session-list");
   box.innerHTML = "";
   const rows = sessions.filter((s) =>
-    !q || (s.name || "").toLowerCase().includes(q) || (s.sessionId || "").includes(q));
+    !q || sessionDisplayName(s).toLowerCase().includes(q) || (s.sessionId || "").toLowerCase().includes(q));
   if (!rows.length) {
     const d = document.createElement("div");
     d.className = "session-row"; d.textContent = "No sessions yet — press ＋ or /new.";
     box.append(d);
-    return;
+  } else {
+    for (const s of rows) {
+      appendSessionRow(box, s);
+    }
   }
-  for (const s of rows) {
-    const row = document.createElement("div");
-    row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "");
-    row.setAttribute("role", "option");
-    const top = document.createElement("div");
-    top.className = "top";
-    const dot = document.createElement("span");
-    dot.className = "status-dot" + (s.status === "running" ? " running" : "");
-    const nm = document.createElement("span");
-    nm.className = "name";
-    nm.textContent = s.name || shortId(s.sessionId);
-    top.append(dot, nm);
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = `${s.status || "—"} · ${s.turnCount || 0} turns · ${esc((s.updatedAt || "").slice(0, 16).replace("T", " "))}`;
-    const acts = document.createElement("div");
-    acts.className = "acts";
-    const mk = (label, title, fn) => {
-      const b = document.createElement("button");
-      b.textContent = label; b.title = title;
-      b.onclick = (e) => { e.stopPropagation(); fn(); };
-      return b;
-    };
-    acts.append(
-      mk("open", "Open session", () => openSession(s.sessionId)),
-      mk("rename", "Rename session", () => renameSession(s.sessionId)),
-      mk("fork", "Fork session", () => forkSession(s.sessionId)),
-      mk("delete", "Delete session", () => deleteSession(s.sessionId)),
-    );
-    row.append(top, meta, acts);
-    row.onclick = () => openSession(s.sessionId);
-    box.append(row);
+  if (state.sessionsHidden > 0) {
+    const n = document.createElement("div");
+    n.className = "meta";
+    n.textContent = `${state.sessionsHidden} session(s) hidden — workspace directory removed.`;
+    const b = document.createElement("button");
+    b.className = "sync-btn"; b.textContent = "Sync now";
+    b.title = "Preview and delete session files whose workspace directory is gone (/sync)";
+    b.onclick = (e) => { e.stopPropagation(); cmdSync(); };
+    n.append(b);
+    box.append(n);
   }
+  if (!rows.length) return;
+}
+
+function appendSessionRow(box, s) {
+  const row = document.createElement("div");
+  row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "");
+  row.setAttribute("role", "option");
+  const top = document.createElement("div");
+  top.className = "top";
+  const dot = document.createElement("span");
+  dot.className = "status-dot" + (s.status === "running" ? " running" : "");
+  const nm = document.createElement("span");
+  nm.className = "name";
+  nm.textContent = sessionDisplayName(s);
+  nm.title = (s.name || "").trim() ? s.name : s.sessionId;
+  top.append(dot, nm);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `${s.status || "—"} · ${s.turnCount || 0} turns · ${esc((s.updatedAt || "").slice(0, 16).replace("T", " "))}`;
+  // Session directory: Session.workspaceRoot from session/list is
+  // additive-optional, so rows without one show no dir line.
+  let dir = null;
+  if (s.workspaceRoot) {
+    dir = document.createElement("div");
+    dir.className = "meta";
+    dir.textContent = shortenDir(s.workspaceRoot);
+    dir.title = s.workspaceRoot;
+  }
+  const acts = document.createElement("div");
+  acts.className = "acts";
+  const mk = (label, title, fn) => {
+    const b = document.createElement("button");
+    b.textContent = label; b.title = title;
+    b.onclick = (e) => { e.stopPropagation(); fn(); };
+    return b;
+  };
+  acts.append(
+    mk("open", "Open session", () => openSession(s.sessionId)),
+    mk("rename", "Rename session", () => renameSession(s.sessionId)),
+    mk("fork", "Fork session", () => forkSession(s.sessionId)),
+    mk("delete", "Delete session", () => deleteSession(s.sessionId)),
+  );
+  row.append(top, meta);
+  if (dir) row.append(dir);
+  row.append(acts);
+  row.onclick = () => openSession(s.sessionId);
+  box.append(row);
 }
 
 async function openSession(sessionId) {
   clearTranscript();
   state.sessionId = sessionId;
   closeDrawer();
-  el("session-title").textContent = shortId(sessionId);
+  el("session-title").textContent = titleForSession(sessionId);
   try {
     const r = await send({ type: "resume", sessionId });
     state.session = r.session || null;
-    el("session-title").textContent = (state.session && (state.session.name || shortId(sessionId))) || shortId(sessionId);
+    el("session-title").textContent = sessionDisplayName(state.session || { sessionId });
     state.cursor = r.viewCursor || "";
     updateCursorChip();
     // History envelope: {mode, items|null, snapshot|null, noneReason?}.
@@ -189,7 +270,12 @@ async function openSession(sessionId) {
       if (!hist.length) sysLine("Compacted session: snapshot state has no inline items — /older pages the full view.");
       else sysLine(`Compacted session (${mode}): showing ${hist.length} snapshot items — /older pages more.`);
     } else if (mode === "none") {
-      if (histEnv.noneReason === "resume_unserved_by_host" || r.fallback === "resume_unserved_by_host") {
+      if (histEnv.noneReason === "resume_refused_by_host" || r.fallback === "resume_refused_by_host") {
+        sysLine("Session opened (metadata only): the bridge host cannot load this session's " +
+          "permission profile (e.g. a TUI session needing the automated reviewer) — " +
+          "past transcript and new turns are unavailable here. Continue it in the terminal with /resume, " +
+          "or start a new web session.");
+      } else if (histEnv.noneReason === "resume_unserved_by_host" || r.fallback === "resume_unserved_by_host") {
         sysLine("Session opened (metadata only): this host serves no session/resume, " +
           "so past transcript is unavailable — new turns stream live below.");
       } else {
@@ -207,7 +293,20 @@ async function openSession(sessionId) {
     fetchPending();
     renderSessionList(state.sessionsCache);
     scrollDown(true);
-  } catch (e) { sysLine("resume failed: " + e.message, true); toast("resume failed: " + e.message, true); }
+  } catch (e) {
+    // A session deleted outside the app (host TUI, another client, host
+    // restart) is treated like an in-app delete instead of erroring on
+    // every open. Refresh first — a failed refresh means offline, not
+    // deleted, so fall through to the plain error then.
+    let fresh = false;
+    await refreshSessions().then(() => { fresh = true; }).catch(() => {});
+    const still = state.sessionsCache.some((s) => s.sessionId === sessionId);
+    if (fresh && !still) {
+      await dropExternallyDeleted(sessionId, e.message);
+    } else {
+      sysLine("resume failed: " + e.message, true); toast("resume failed: " + e.message, true);
+    }
+  }
 }
 
 function handleSubscribeResult(r) {
@@ -222,19 +321,56 @@ function handleSubscribeResult(r) {
 }
 
 function parseNewArgs(args) {
-  // /new [name] [--mcp a,b] — --mcp may repeat; names are comma/space split.
+  // /new [name] [--mcp a,b] [--path <dir>] — --mcp may repeat; names are
+  // comma/space split. First --path wins (whitespace-split args, so no
+  // spaces in paths here — the + button has no such limit).
   const names = [];
   const rest = [];
+  let workspaceRoot;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--mcp" && i + 1 < args.length) {
       names.push(...args[++i].split(",").map((s) => s.trim()).filter(Boolean));
     } else if (args[i].startsWith("--mcp=")) {
       names.push(...args[i].slice(6).split(",").map((s) => s.trim()).filter(Boolean));
+    } else if (args[i] === "--path" && i + 1 < args.length) {
+      if (workspaceRoot === undefined) workspaceRoot = args[++i];
+      else i++;
+    } else if (args[i].startsWith("--path=")) {
+      if (workspaceRoot === undefined) workspaceRoot = args[i].slice(7);
     } else {
       rest.push(args[i]);
     }
   }
-  return { name: rest.join(" ") || undefined, mcpAttach: [...new Set(names)] };
+  const out = { name: rest.join(" ") || undefined,
+    mcpAttach: [...new Set(names)] };
+  if (workspaceRoot !== undefined) out.workspaceRoot = workspaceRoot;
+  return out;
+}
+
+// Manual session directories: any on-device path is allowed, but the
+// first session touching one needs an explicit allow. Allowed roots
+// persist per browser.
+const ALLOWED_ROOTS_KEY = "webmuse.allowedRoots";
+function confirmedRoots() {
+  try {
+    const v = JSON.parse(localStorage.getItem(ALLOWED_ROOTS_KEY) || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+function normalizeRoot(p) {
+  p = (p || "").trim();
+  if (p.length > 1) p = p.replace(/\/+$/, "");
+  return p;
+}
+function ensureRootConfirmed(path) {
+  const norm = normalizeRoot(path);
+  if (!norm) return false;
+  const known = confirmedRoots();
+  if (known.includes(norm)) return true;
+  if (!window.confirm(`Allow this session to access ${norm}?\n\nThe agent will read and write files there.`)) return false;
+  known.push(norm);
+  try { localStorage.setItem(ALLOWED_ROOTS_KEY, JSON.stringify(known)); } catch (_) {}
+  return true;
 }
 
 async function newSession(name, opts) {
@@ -243,13 +379,23 @@ async function newSession(name, opts) {
   el("session-title").textContent = "new session";
   updateSessionDetail();
   const mcpAttach = (opts && opts.mcpAttach) || [];
-  if (name || mcpAttach.length) {
+  const root = normalizeRoot(opts && opts.workspaceRoot);
+  if (root && !ensureRootConfirmed(root)) {
+    toast("session not created: directory not confirmed", true);
+    return;
+  }
+  if (name || mcpAttach.length || root) {
     // Create eagerly so the name sticks and MCP attaches at construction
     // (session/start is the only wire touchpoint for per-session MCP);
     // otherwise creation is lazy on first prompt.
     try {
       const req = { type: "new" };
       if (mcpAttach.length) req.mcpAttach = mcpAttach;
+      if (root) req.workspaceRoot = root;
+      if (state.pickedModel) {
+        req.modelId = state.pickedModel.modelId;
+        if (state.pickedModel.providerId) req.providerId = state.pickedModel.providerId;
+      }
       const r = await send(req);
       const sid = r.session && r.session.sessionId;
       if (sid) {
@@ -272,6 +418,14 @@ async function renameSession(sessionId, name, quiet) {
   try {
     await send({ type: "rename", sessionId: sid, name: nm.trim() });
     toast("renamed to " + nm.trim());
+    // Optimistic update on both surfaces: the host applies the rename
+    // asynchronously, so the refresh below still lists the old name and
+    // the bar lagged one rename behind. The pending entry survives stale
+    // refreshes until the host settles (session/nameChanged + fresh list).
+    state.pendingNames.set(sid, { name: nm.trim(), at: Date.now() });
+    applyPendingNames();
+    renderSessionList(state.sessionsCache);
+    if (state.session && state.session.sessionId === sid) state.session.name = nm.trim();
     if (sid === state.sessionId) el("session-title").textContent = nm.trim();
     refreshSessions().catch(() => {});
   } catch (e) { if (!quiet) toast("rename failed: " + e.message, true); }
@@ -287,6 +441,56 @@ async function forkSession(sessionId) {
     refreshSessions().catch(() => {});
     if (nid) openSession(nid);
   } catch (e) { toast("fork failed: " + e.message, true); }
+}
+
+// A session already deleted outside the app goes through the same
+// aftermath as the in-app delete below: best-effort host delete (ignored
+// when the host no longer knows it), drop from the bar, fresh session.
+// No confirm — there is nothing left to protect.
+async function dropExternallyDeleted(sessionId, reason) {
+  try { await send({ type: "delete", sessionId }); } catch (_) {}
+  state.sessionsCache = state.sessionsCache.filter((s) => s.sessionId !== sessionId);
+  renderSessionList(state.sessionsCache);
+  toast("deleted " + shortId(sessionId));
+  if (sessionId === state.sessionId) newSession();
+  sysLine(`Session ${shortId(sessionId)} was already deleted outside the app — cleaned up (${reason}).`);
+  refreshSessions().catch(() => {});
+}
+
+// Sync the session store with the workspace dir: remove session files
+// whose workspace directory is gone. Always previews first (dry run),
+// then confirms — and only sessions rooted under the bridge's workspace
+// base are candidates; external manual roots are left alone (a missing
+// mount is not a deletion).
+async function cmdSync() {
+  let prev;
+  try {
+    prev = await send({ type: "pruneMissing", dryRun: true });
+  } catch (e) { sysLine("sync failed: " + e.message, true); return; }
+  const cands = prev.candidates || [];
+  const outside = prev.outsideBase || 0;
+  if (!cands.length) {
+    sysLine("Nothing to sync." + (outside
+      ? ` (${outside} missing-dir session(s) outside the workspace base — left alone)` : ""));
+    return;
+  }
+  sysLine("Sessions with removed workspace directories (workspace base only):\n" +
+    cands.map((c) => `  ${shortId(c.sessionId)}  ${c.name || "(unnamed)"}\n    ${c.workspaceRoot}`).join("\n") +
+    (outside ? `\n(${outside} more outside the workspace base — left alone)` : ""));
+  if (!confirm(`Delete these ${cands.length} session(s) from disk? Their transcripts will be lost.`)) return;
+  try {
+    const r = await send({ type: "pruneMissing", dryRun: false });
+    const done = (r.deleted || []).length, bad = (r.failed || []).length;
+    const pend = (r.pending || []).length;
+    sysLine(`Sync done: ${done} deleted` +
+      (pend ? `, ${pend} admitted but still listed — re-run /sync to confirm` : "") +
+      (bad ? `, ${bad} failed` : "") + "." +
+      (r.confirmed === false ? " (confirmation listing failed)" : "") +
+      (r.failed || []).map((f) => `\n  ${shortId(f.sessionId)}: ${f.message}`).join("") +
+      (r.outsideBase ? `\n(${r.outsideBase} outside the workspace base — left alone)` : ""));
+    toast(`sync: ${done} deleted`);
+    refreshSessions().catch(() => {});
+  } catch (e) { sysLine("sync failed: " + e.message, true); }
 }
 
 async function deleteSession(sessionId) {
@@ -423,6 +627,9 @@ function itemText(it) {
 function itemKind(it) {
   const k = String(it.kind || it.type || "");
   if (k === "userMessage" || k.includes("user")) return "user";
+  // Reminder child sessions are host-side reminder activity, not agent
+  // output: demote to faint system lines instead of agent rows.
+  if (k.toLowerCase().includes("reminder")) return "system";
   if (k.includes("tool") || k.includes("Tool") || k.includes("command") || k.includes("Command")) return "tool";
   if (k.includes("system") || k.includes("System")) return "system";
   if (k.includes("error") || k.includes("Error") || it.isError) return "error";
@@ -458,8 +665,186 @@ function itemHeadLabel(it, kind) {
   return [it.kind || kind, toolType(it), it.status].filter(Boolean).join(" · ") + when;
 }
 
+/* ---------- markdown (transcript bodies) ---------- */
+// Dependency-free, XSS-safe markdown for agent/user transcript bodies.
+// Raw text is HTML-escaped first, then a small block/inline subset is
+// shaped; URLs are scheme-checked so `javascript:` links stay inert.
+// Streaming frames stay plain text (deltas append cheaply without
+// re-parsing); the completed item re-renders as markdown.
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+function sanitizeUrl(u) {
+  const t = String(u || "").trim();
+  if (!t) return null;
+  const m = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.exec(t);
+  if (!m) return t; // relative URL, anchor, or bare path: no scheme to abuse.
+  const scheme = m[0].toLowerCase();
+  if (scheme === "http:" || scheme === "https:" || scheme === "mailto:") return t;
+  return null;
+}
+function renderInline(src) {
+  const codeBits = [], linkBits = [];
+  const inlineWith = (s, allowCode, allowLinks) => {
+    if (allowCode) {
+      s = s.replace(/`([^`\n]+?)`/g, (m, t) => {
+        codeBits.push(`<code>${t}</code>`);
+        return `\x00IC${codeBits.length - 1}\x00`;
+      });
+    }
+    if (allowLinks) {
+      s = s.replace(/\[([^\]]+?)\]\(((?:[^()\s]|\([^()]*\))+)(?:\s+"[^"]*")?\)/g, (m, text, url) => {
+        const safe = sanitizeUrl(url);
+        if (!safe) return text;
+        linkBits.push(`<a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer">${inlineWith(text, false, false)}</a>`);
+        return `\x00LK${linkBits.length - 1}\x00`;
+      });
+      s = s.replace(/(https?:\/\/[^\s<]+)/g, (m, url) => {
+        const trail = /[.,;:!?)\]]+$/.exec(url);
+        let clean = url, suffix = "";
+        if (trail) { clean = url.slice(0, -trail[0].length); suffix = trail[0]; }
+        if (!sanitizeUrl(clean)) return m;
+        linkBits.push(`<a href="${escapeHtml(clean)}" target="_blank" rel="noopener noreferrer">${clean}</a>`);
+        return `\x00LK${linkBits.length - 1}\x00${suffix}`;
+      });
+    }
+    return s
+      .replace(/~~([^~]+?)~~/g, "<del>$1</del>")
+      .replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/__([^_]+?)__/g, "<strong>$1</strong>")
+      .replace(/\*([^*]+?)\*/g, "<em>$1</em>")
+      .replace(/(^|\W)_([^_]+?)_(\W|$)/g, "$1<em>$2</em>$3");
+  };
+  const out = inlineWith(String(src == null ? "" : src), true, true);
+  return out
+    .replace(/\x00IC(\d+)\x00/g, (m, i) => codeBits[+i] || "")
+    .replace(/\x00LK(\d+)\x00/g, (m, i) => linkBits[+i] || "");
+}
+function renderMarkdown(src) {
+  const raw = String(src == null ? "" : src).replace(/\r\n?/g, "\n");
+  if (!raw.trim()) return "";
+  // Fenced code blocks come out first (on the raw text) so no inline or
+  // block rule can rewrite their contents.
+  const fences = [];
+  const deFenced = raw.replace(/```(\w*)\n?([\s\S]*?)(?:```|$)/g, (m, lang, code) => {
+    fences.push({ lang: (lang || "").slice(0, 20), code: code.replace(/\n$/, "") });
+    return `\n\x00FENCE${fences.length - 1}\x00\n`;
+  });
+  const lines = escapeHtml(deFenced).split("\n");
+  const out = [];
+  let para = [], list = null, quote = [];
+  const flushPara = () => {
+    if (!para.length) return;
+    out.push(`<p>${para.map((l) => renderInline(l)).join("<br>")}</p>`);
+    para = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    const tag = list.ordered ? "ol" : "ul";
+    out.push(`<${tag}>${list.items.map((l) => `<li>${renderInline(l)}</li>`).join("")}</${tag}>`);
+    list = null;
+  };
+  const flushQuote = () => {
+    if (!quote.length) return;
+    out.push(`<blockquote>${quote.map((l) => renderInline(l)).join("<br>")}</blockquote>`);
+    quote = [];
+  };
+  const cells = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i], t = line.trim();
+    let m;
+    const fm = /^\x00FENCE(\d+)\x00$/.exec(t);
+    if (fm) {
+      flushPara(); flushList(); flushQuote();
+      const f = fences[+fm[1]] || { lang: "", code: "" };
+      const cls = f.lang ? ` class="lang-${escapeHtml(f.lang)}"` : "";
+      out.push(`<pre><code${cls}>${escapeHtml(f.code)}</code></pre>`);
+      continue;
+    }
+    if (!t) { flushPara(); flushList(); flushQuote(); continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) {
+      flushPara(); flushList(); flushQuote();
+      out.push("<hr>");
+      continue;
+    }
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(t))) {
+      flushPara(); flushList(); flushQuote();
+      out.push(`<h${m[1].length}>${renderInline(m[2])}</h${m[1].length}>`);
+      continue;
+    }
+    // GFM table: a pipe row followed by a delimiter row.
+    if (t.includes("|") && i + 1 < lines.length &&
+        /^\s*\|?[\s:|\-]+\|?[\s:|\-]*$/.test(lines[i + 1]) && /-/.test(lines[i + 1])) {
+      flushPara(); flushList(); flushQuote();
+      const head = cells(line), delim = cells(lines[i + 1]);
+      const aligns = head.map((_, k) => {
+        const d = (delim[k] || "").trim();
+        if (/^:-+:$/.test(d)) return "center";
+        if (/^-+:$/.test(d)) return "right";
+        return "left";
+      });
+      i += 1;
+      const rows = [];
+      while (i + 1 < lines.length && lines[i + 1].includes("|") && lines[i + 1].trim()) {
+        rows.push(cells(lines[++i]));
+      }
+      const th = head.map((c, k) =>
+        `<th style="text-align:${aligns[k]}">${renderInline(c)}</th>`).join("");
+      const tb = rows.map((r) =>
+        `<tr>${head.map((_, k) =>
+          `<td style="text-align:${aligns[k]}">${renderInline(r[k] || "")}</td>`).join("")}</tr>`).join("");
+      out.push(`<table><thead><tr>${th}</tr></thead>${tb ? `<tbody>${tb}</tbody>` : ""}</table>`);
+      continue;
+    }
+    if (/^&gt;/.test(t)) { flushPara(); flushList(); quote.push(t.replace(/^&gt;\s?/, "")); continue; }
+    if ((m = /^(?:([-*+])|(\d+)[.)])\s+(.*)$/.exec(t))) {
+      flushPara(); flushQuote();
+      const ordered = !!m[2];
+      if (!list || list.ordered !== ordered) { flushList(); list = { ordered, items: [] }; }
+      list.items.push(m[3]);
+      continue;
+    }
+    flushQuote();
+    if (list && /^\s/.test(line)) { list.items.push(t); continue; }
+    flushList();
+    para.push(t);
+  }
+  flushPara(); flushList(); flushQuote();
+  return out.join("");
+}
+// Chat-authored bodies (agent + user) render as markdown once complete.
+// Tool, system, and error rows stay plain text, as do streaming frames.
+function setBodyContent(rec, txt, kind, streaming) {
+  const s = String(txt == null ? "" : txt);
+  const useMd = !streaming && (kind === "agent" || kind === "user") && !!s.trim();
+  rec.body.classList.toggle("md", useMd);
+  if (useMd) rec.body.innerHTML = renderMarkdown(s);
+  else rec.body.textContent = s;
+}
+
+// Optimistic echoes (itemId "local-*") are placeholders until the server's
+// real userMessage arrives with its own itemId. Drop the oldest echo with
+// matching text so one sent message renders exactly once.
+function reconcileLocalEcho(serverItem) {
+  if (!serverItem || itemKind(serverItem) !== "user") return;
+  const text = itemText(serverItem);
+  if (!text) return;
+  for (const [id, rec] of state.items) {
+    if (id.startsWith("local-") && itemText(rec.item) === text) {
+      rec.line.remove();
+      state.items.delete(id);
+      return;
+    }
+  }
+}
+
 function renderItem(it, streaming) {
   if (!it || !it.itemId) return;
+  if (!it.itemId.startsWith("local-") && !state.items.has(it.itemId)) {
+    reconcileLocalEcho(it);
+  }
   let rec = state.items.get(it.itemId);
   const kind = itemKind(it);
   if (!rec) {
@@ -488,7 +873,7 @@ function renderItem(it, streaming) {
   }
   let txt = itemText(rec.item);
   if (!txt && kind === "tool" && !streaming) txt = toolSummary(rec.item);
-  rec.body.textContent = txt;
+  setBodyContent(rec, txt, kind, streaming);
   // Tool detail disclosure (raw JSON) — rebuilt only on completion to avoid churn.
   rec.line.querySelectorAll("details").forEach((d) => d.remove());
   if (kind === "tool" && !streaming) {
@@ -519,13 +904,16 @@ function appendDelta(itemId, delta) {
   const rec = state.items.get(itemId);
   if (!rec) return;
   rec.body.querySelectorAll(".caret").forEach((c) => c.remove());
-  rec.body.textContent += delta;
+  // Streaming frames stay plain text even when the completed item will
+  // render as markdown; item/completed re-renders via setBodyContent.
+  const cur = itemText(rec.item) + delta;
+  rec.item = Object.assign({}, rec.item, { text: cur });
+  rec.body.classList.remove("md");
+  rec.body.textContent = cur;
   const c = document.createElement("span");
   c.className = "caret";
   rec.body.append(c);
   rec.line.classList.add("streaming");
-  const cur = itemText(rec.item) + delta;
-  rec.item = Object.assign({}, rec.item, { text: cur });
   scrollDown();
 }
 
@@ -613,6 +1001,7 @@ async function loadOlder() {
 
 function renderItemPrepend(it) {
   if (!it || !it.itemId || state.items.has(it.itemId)) return;
+  if (!it.itemId.startsWith("local-")) reconcileLocalEcho(it);
   const kind = itemKind(it);
   const line = document.createElement("div");
   line.className = `tline ${kind}`;
@@ -623,11 +1012,14 @@ function renderItemPrepend(it) {
   const head = document.createElement("div");
   head.className = "head"; head.textContent = itemHeadLabel(it, kind);
   const body = document.createElement("span");
-  body.textContent = itemText(it) || (kind === "tool" ? toolSummary(it) : "");
+  body.className = "txt";
+  const txt = itemText(it) || (kind === "tool" ? toolSummary(it) : "");
   wrap.append(head, body);
   line.append(gut, wrap);
   el("terminal").prepend(line);
-  state.items.set(it.itemId, { line, body, head, item: it });
+  const rec = { line, body, head, item: it };
+  state.items.set(it.itemId, rec);
+  setBodyContent(rec, txt, kind, false);
 }
 
 /* ---------- MSP event fan-in ---------- */
@@ -658,6 +1050,10 @@ function onEvent(method, p) {
       break;
     case "turn/started":
       state.running = true; state.turnId = p.turnId || null; updateRunChip();
+      if (state.queuedTurnId && p.turnId === state.queuedTurnId) {
+        state.queuedTurnId = null;
+        sysLine("queued turn started.");
+      }
       break;
     case "turn/completed": {
       // Single terminal event: p.terminal is completed|failed|cancelled.
@@ -685,6 +1081,7 @@ function onEvent(method, p) {
       if (p.promptText) { el("input").value = p.promptText; autosize(); }
       break;
     case "turn/unqueued":
+      state.queuedTurnId = null;
       sysLine("queued turn reclaimed.");
       break;
     case "turn/retryScheduled":
@@ -723,6 +1120,15 @@ function onEvent(method, p) {
       // Same payload shape as usage/read's usage member; refresh the footer.
       refreshUsage().catch(() => {});
       break;
+    case "githubCloneProgress":
+      onGithubProgress(p);
+      break;
+    case "githubCloneResult":
+      onGithubResult(p);
+      break;
+    case "githubAutoApproved":
+      sysLine(`auto-approved (github policy): ${esc(p.command || "gh command")}`);
+      break;
     case "session/listChanged":
     case "session/started":
     case "session/closed":
@@ -745,7 +1151,7 @@ function onEvent(method, p) {
     case "session/nameChanged":
       if (state.session) {
         state.session.name = p.name || state.session.name;
-        el("session-title").textContent = state.session.name || shortId(state.sessionId);
+        el("session-title").textContent = sessionDisplayName(state.session);
       }
       refreshSessions().catch(() => {});
       break;
@@ -811,11 +1217,17 @@ function onApproval(a) {
   div.append(h);
   if (escNote) div.append(escNote);
   div.append(pre, fb, row);
-  el("cards").append(div);
-  el("tab-approvals").append(div.cloneNode(true));
-  // Rebind cloned buttons (cloneNode drops listeners).
-  bindClonedApproval(div.dataset.aid, a, req, choices);
-  sysLine(`approval requested: ${a.toolName || "tool"} — decide in the card above the composer.`);
+  // Approvals live ONLY in the right-hand inspector (Approvals tab) —
+  // never in the transcript. The sysLine below is the transcript's only
+  // trace, so a parked agent is still noticeable there.
+  el("tab-approvals").append(div);
+  sysLine(`approval requested: ${a.toolName || "tool"} — decide in the inspector (Approvals tab).`);
+  // A parked agent is worse than a moved panel: on desktop make sure the
+  // card is actually seen (mobile keeps its flash-open behavior below).
+  if (window.innerWidth >= 900 && !el("inspector").classList.contains("open")) {
+    el("inspector").classList.add("open");
+    syncScrim();
+  }
   openInspectorOnMobile("approvals");
 }
 
@@ -829,18 +1241,6 @@ function decideApproval(a, req, choiceId, choice, feedback) {
   send(msg)
     .then(() => { removeCard(a.approvalId); toast("decision sent: " + choiceId); })
     .catch((e) => toast("decide failed: " + e.message, true));
-}
-
-function bindClonedApproval(aid, a, req, choices) {
-  const clone = el("tab-approvals").querySelector(`[data-aid="${CSS.escape(aid)}"]`);
-  if (!clone) return;
-  const btns = clone.querySelectorAll(".choices button");
-  const fb = clone.querySelector("input");
-  btns.forEach((b, i) => {
-    const c = (choices || [])[i] || {};
-    b.onclick = () => decideApproval(a, req, c.choiceId || c.id, c,
-      fb ? fb.value : "");
-  });
 }
 
 function onUserInput(p) {
@@ -1197,7 +1597,7 @@ async function refreshUsage() {
 /* ---------- slash commands (TUI parity) ---------- */
 const SLASH = [
   { name: "help", usage: "/help", desc: "List slash commands", run: () => cmdHelp() },
-  { name: "new", usage: "/new [name] [--mcp a,b]", desc: "Start a new session", run: (a) => { const p = parseNewArgs(a); return newSession(p.name, p); } },
+  { name: "new", usage: "/new [name] [--mcp a,b] [--path <dir>]", desc: "Start a new session", run: (a) => { const p = parseNewArgs(a); return newSession(p.name, p); } },
   { name: "list", usage: "/list", desc: "Refresh session list", run: () => refreshSessions().then(() => toast("sessions refreshed")) },
   { name: "sessions", usage: "/sessions", desc: "Alias for /list", run: () => refreshSessions().then(() => toast("sessions refreshed")) },
   { name: "resume", usage: "/resume <id-prefix>", desc: "Open a session by id prefix", run: (a) => cmdResume(a) },
@@ -1205,12 +1605,14 @@ const SLASH = [
   { name: "rename", usage: "/rename <name>", desc: "Rename current session", run: (a) => renameSession(null, a.join(" ")) },
   { name: "fork", usage: "/fork", desc: "Fork current session", run: () => forkSession() },
   { name: "delete", usage: "/delete", desc: "Delete current session (confirm)", run: () => deleteSession() },
+  { name: "sync", usage: "/sync", desc: "Delete session files whose workspace dir is gone (preview + confirm)", run: () => cmdSync() },
   { name: "clear", usage: "/clear", desc: "Clear local transcript view", run: () => { clearTranscriptKeepSession(); } },
   { name: "models", usage: "/models", desc: "List models in transcript", run: () => cmdModels() },
   { name: "model", usage: "/model <id>", desc: "Set model for current session", run: (a) => cmdSetModel(a) },
   { name: "effort", usage: "/effort <tier>", desc: "Set reasoning effort (none…ultra)", run: (a) => cmdSetEffort(a) },
   { name: "skills", usage: "/skills", desc: "List session skills", run: () => cmdSkills() },
   { name: "mcp", usage: "/mcp", desc: "Show configured MCP servers", run: () => cmdMcp() },
+  { name: "github", usage: "/github list|clone|open|clean|cancel …", desc: "GitHub repos via gh", run: (a) => cmdGithub(a) },
   { name: "output", usage: "/output <itemId>", desc: "Fetch full truncated output", run: (a) => cmdOutput(a) },
   { name: "compact", usage: "/compact", desc: "Compact current session", run: () => cmdCompact() },
   { name: "usage", usage: "/usage", desc: "Show subscription usage", run: () => cmdUsage() },
@@ -1219,6 +1621,7 @@ const SLASH = [
   { name: "stop", usage: "/stop", desc: "Alias for /interrupt", run: () => cmdInterrupt() },
   { name: "cancel", usage: "/cancel", desc: "Cancel running turn", run: () => cmdCancel() },
   { name: "steer", usage: "/steer <text>", desc: "Steer running turn", run: (a, raw) => cmdSteer(raw) },
+  { name: "unqueue", usage: "/unqueue", desc: "Reclaim queued follow-up turn", run: () => cmdUnqueue() },
   { name: "older", usage: "/older", desc: "Load older history", run: () => loadOlder() },
 ];
 
@@ -1310,8 +1713,11 @@ async function cmdSetModel(args) {
   try {
     const r = await send({ type: "setModel", sessionId: state.sessionId,
       model: { modelId: hit.modelId, providerId: hit.providerId || undefined } });
+    state.pickedModel = { modelId: hit.modelId,
+      providerId: hit.providerId || undefined };
     sysLine("Model → " + hit.modelId + ` (${r.status || "accepted"})` +
-      (state.running ? " — applies at the next model-call boundary." : ""));
+      (state.running ? " — applies at the next model-call boundary." : "") +
+      " — remembered for new chats.");
     refreshModels().catch(() => {});
   } catch (e) { sysLine("setModel failed: " + e.message, true); }
 }
@@ -1395,6 +1801,202 @@ async function cmdSkills() {
   } catch (e) { sysLine("skills failed: " + e.message, true); }
 }
 
+/* ---------- github repos (gh-only v1) ---------- */
+// Clone-then-open records the dest in the first-use allow list without a
+// prompt: picking the repo (button or explicit /github open) is the
+// consent, equivalent to the manual-root confirm.
+function markRootAllowed(path) {
+  const norm = normalizeRoot(path);
+  if (!norm) return;
+  const known = confirmedRoots();
+  if (!known.includes(norm)) {
+    known.push(norm);
+    try { localStorage.setItem(ALLOWED_ROOTS_KEY, JSON.stringify(known)); } catch (_) {}
+  }
+}
+
+function ghStatus(text, isErr) {
+  const d = el("github-status");
+  if (!d) return;
+  d.textContent = text || "";
+  d.classList.toggle("err", !!isErr);
+}
+
+function fmtRepoRow(r) {
+  const bits = [(r.defaultBranch || ""), ((r.updatedAt || "").slice(0, 10))].filter(Boolean).join(" · ");
+  return `  ${r.fullName}${r.private ? " [private]" : ""}${bits ? "  (" + bits + ")" : ""}`;
+}
+
+function newCloneOpId() {
+  return "gh-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e6).toString(36);
+}
+
+async function cmdGithub(args) {
+  const sub = (args[0] || "list").toLowerCase();
+  if (sub === "list") return cmdGithubList(args.slice(1).join(" "));
+  if (sub === "clone") return githubCloneRepo(args[1]);
+  if (sub === "open") return githubOpenRepo(args[1], args.slice(2).join(" ") || undefined);
+  if (sub === "clean") return cmdGithubClean(args.slice(1));
+  if (sub === "cancel") return cmdGithubCancel();
+  return sysLine("Usage: /github list [search] | clone <owner/repo> | open <owner/repo> [name] | clean [id-prefix] | cancel", true);
+}
+
+async function cmdGithubList(search) {
+  try {
+    const r = await send({ type: "githubRepos", search: search || undefined });
+    state.githubCache = r.repos || [];
+    sysLine(state.githubCache.length
+      ? `GitHub repos:\n${state.githubCache.map(fmtRepoRow).join("\n")}\nClone: /github clone <owner/repo> · Open: /github open <owner/repo>`
+      : "(no repos returned)");
+    if (!el("github-panel").hidden) renderGithubList(state.githubCache);
+  } catch (e) { sysLine("github list failed: " + e.message, true); }
+}
+
+async function githubCloneRepo(fullName) {
+  if (!fullName) return sysLine("Usage: /github clone <owner/repo>", true);
+  const opId = newCloneOpId();
+  state.githubOp = opId;
+  state.githubPending.set(opId, { kind: "clone", fullName });
+  ghStatus(`cloning ${fullName}…`);
+  try {
+    // Admitted instantly; the outcome arrives as a githubCloneResult
+    // event, so the connection stays responsive (and cancellable).
+    await send({ type: "githubClone", fullName, opId });
+  } catch (e) {
+    state.githubPending.delete(opId);
+    state.githubOp = null;
+    ghStatus("clone failed: " + e.message, true);
+    sysLine("github clone failed: " + e.message, true);
+  }
+}
+
+async function githubOpenRepo(fullName, name) {
+  if (!fullName) return sysLine("Usage: /github open <owner/repo> [name]", true);
+  const opId = newCloneOpId();
+  state.githubOp = opId;
+  state.githubPending.set(opId, { kind: "open", fullName, name });
+  ghStatus(`cloning ${fullName}…`);
+  try {
+    // Admitted instantly; the outcome arrives as a githubCloneResult event.
+    const req = { type: "githubOpen", fullName, name, opId };
+    if (state.pickedModel) req.model = state.pickedModel;
+    await send(req);
+  } catch (e) {
+    state.githubPending.delete(opId);
+    state.githubOp = null;
+    ghStatus("open failed: " + e.message, true);
+    sysLine("github open failed: " + e.message, true);
+  }
+}
+
+async function onGithubResult(p) {
+  // Terminal event for an admitted clone/open (global, matched by opId).
+  const pend = state.githubPending.get(p.opId);
+  state.githubPending.delete(p.opId);
+  if (state.githubOp === p.opId) state.githubOp = null;
+  if (!p.ok) {
+    const err = p.error || {};
+    ghStatus("failed: " + (err.message || err.code || "unknown"), true);
+    sysLine(`github ${pend ? pend.kind : "clone"} failed` +
+      (err.code ? ` [${err.code}]` : "") + ": " + (err.message || "unknown"), true);
+    return;
+  }
+  const r = p.result || {};
+  ghStatus("");
+  if (pend && pend.kind === "open") {
+    const sid = r.session && r.session.sessionId;
+    markRootAllowed(r.workspaceRoot || "");
+    sysLine(`Opened ${r.fullName} → session ${shortId(sid)} (${r.workspaceRoot || "?"})`);
+    if (sid) await openSession(sid);
+    refreshSessions().catch(() => {});
+  } else {
+    sysLine(`Cloned ${r.fullName} → ${r.dest}\nRoot a session there: /new --path ${r.dest}`);
+  }
+}
+
+async function cmdGithubClean(args) {
+  const prefix = (args[0] || "").toLowerCase();
+  let sid = state.sessionId;
+  if (prefix) {
+    const hit = state.sessionsCache.find((s) => s.sessionId.toLowerCase().startsWith(prefix));
+    // A clone-only sid has no MSP session yet: accept a full id verbatim.
+    sid = hit ? hit.sessionId : (prefix.length >= 8 ? args[0] : null);
+  }
+  if (!sid) return sysLine("Usage: /github clean <id-prefix> (or open a session)", true);
+  if (!confirm(`Delete the GitHub clone for session ${shortId(sid)}? (session kept, files removed)`)) return;
+  try {
+    const r = await send({ type: "githubClean", sessionId: sid });
+    sysLine(r.removed ? `Clone removed (${r.dest}).` : `Nothing to remove (${r.dest}).`);
+  } catch (e) { sysLine("github clean failed: " + e.message, true); }
+}
+
+async function cmdGithubCancel() {
+  if (!state.githubOp) return sysLine("No clone running.", true);
+  try {
+    await send({ type: "githubCancel", opId: state.githubOp });
+    sysLine("Clone cancel requested.");
+  } catch (e) { sysLine("github cancel failed: " + e.message, true); }
+}
+
+function onGithubProgress(p) {
+  // Progress events carry no sessionId (global) so they always render.
+  const line = (p.line || "").slice(0, 160);
+  if (p.phase === "progress") { ghStatus(`${p.fullName || ""}: ${line}`); return; }
+  const done = p.phase === "completed";
+  ghStatus(done ? `${p.fullName || ""}: cloned` : `${p.fullName || ""}: ${p.phase}`,
+    !(done || p.phase === "started"));
+}
+
+function toggleGithubPanel() {
+  const p = el("github-panel");
+  p.hidden = !p.hidden;
+  if (!p.hidden && !state.githubCache.length) loadGithubRepos("");
+}
+
+async function loadGithubRepos(search) {
+  ghStatus("loading…");
+  try {
+    const r = await send({ type: "githubRepos", search: search || undefined });
+    state.githubCache = r.repos || [];
+    ghStatus(state.githubCache.length ? "" : "(no repos)");
+    renderGithubList(state.githubCache);
+  } catch (e) { ghStatus("list failed: " + e.message, true); }
+}
+
+function renderGithubList(repos) {
+  const box = el("github-list");
+  box.innerHTML = "";
+  if (!repos.length) {
+    const d = document.createElement("div");
+    d.className = "session-row"; d.textContent = "No repos — is `gh auth login` done?";
+    box.append(d);
+    return;
+  }
+  for (const r of repos) {
+    const row = document.createElement("div");
+    row.className = "session-row"; row.setAttribute("role", "option");
+    const top = document.createElement("div");
+    top.className = "top";
+    const nm = document.createElement("span");
+    nm.className = "name"; nm.textContent = r.fullName;
+    top.append(nm);
+    if (r.private) {
+      const b = document.createElement("span");
+      b.className = "badge"; b.textContent = "private";
+      top.append(b);
+    }
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [(r.defaultBranch || ""), ((r.updatedAt || "").slice(0, 10))].filter(Boolean).join(" · ") || "—";
+    // No buttons: pressing the row clones + opens. Clone-without-open
+    // stays available as `/github clone <owner/repo>`.
+    row.title = "Clone + open session";
+    row.onclick = () => githubOpenRepo(r.fullName);
+    row.append(top, meta);
+    box.append(row);
+  }
+}
+
 const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
 async function cmdSetEffort(args) {
@@ -1440,6 +2042,16 @@ async function cmdCancel() {
     await send({ type: "cancel", sessionId: state.sessionId,
       turnId: state.turnId || undefined });
   } catch (e) { toast("cancel failed: " + e.message, true); }
+}
+
+async function cmdUnqueue() {
+  if (!state.sessionId) return sysLine("No session.", true);
+  try {
+    await send({ type: "unqueue", sessionId: state.sessionId,
+      turnId: state.queuedTurnId || undefined });
+    state.queuedTurnId = null;
+    sysLine("Unqueued.");
+  } catch (e) { sysLine("unqueue failed: " + e.message, true); }
 }
 
 async function cmdSteer(raw) {
@@ -1526,16 +2138,31 @@ async function submitComposer() {
   }
   box.value = ""; autosize();
   state.history.unshift(text); state.hidx = -1;
-  // Optimistic user echo (reconciled by server item/completed).
+  // Optimistic user echo (reconciled when the server item arrives).
   renderItem({ itemId: "local-" + Date.now(), kind: "userMessage", text }, false);
   try {
-    const r = await send({ type: "prompt", sessionId: state.sessionId || undefined, text });
+    const req = { type: "prompt", sessionId: state.sessionId || undefined, text };
+    // Lazily created session: carry the remembered default model.
+    if (!state.sessionId && state.pickedModel) {
+      req.modelId = state.pickedModel.modelId;
+      if (state.pickedModel.providerId) req.providerId = state.pickedModel.providerId;
+    }
+    const r = await send(req);
     if (r.sessionId && !state.sessionId) {
       state.sessionId = r.sessionId;
-      el("session-title").textContent = shortId(r.sessionId);
+      el("session-title").textContent = titleForSession(r.sessionId);
       await send({ type: "subscribe", sessionId: r.sessionId }).catch(() => {});
       refreshSessions().catch(() => {});
       refreshModels().catch(() => {});
+    }
+    // The host queues follow-ups behind a running turn by default
+    // (ifBusy omitted): say so, or the message looks lost until it
+    // fires later — which reads as "sent spontaneously".
+    if (r.disposition === "queued") {
+      state.queuedTurnId = r.turnId || null;
+      sysLine("queued behind the running turn — runs when it finishes (/unqueue reclaims it).");
+    } else {
+      state.queuedTurnId = null;
     }
     state.running = true; updateRunChip();
   } catch (e) {
@@ -1627,9 +2254,104 @@ document.addEventListener("keydown", (ev) => {
 });
 el("btn-close-sessions").onclick = closeDrawer;
 el("scrim").onclick = () => { closeDrawer(); closeInspector(); };
-el("btn-new").onclick = () => { newSession(); closeDrawer(); };
+/* ---------- new-session directory explorer ---------- */
+// Filesystem explorer for the + button: lists server-side directories via
+// the bridge `browse` method. Current directory is the selection; files
+// are shown greyed-out and unselectable. Pick-existing-only.
+const dirState = { path: "", parent: "/", home: "" };
+function dirError(msg) {
+  const e = el("dir-error");
+  if (!msg) { e.hidden = true; e.textContent = ""; return; }
+  e.hidden = false; e.textContent = msg;
+}
+function openDirDialog() {
+  el("dir-dialog").hidden = false;
+  dirError("");
+  el("dir-list").innerHTML = "";
+  el("dir-path").value = "";
+  loadDir("");
+  setTimeout(() => { try { el("dir-path").focus(); } catch (_) {} }, 0);
+}
+function closeDirDialog() { el("dir-dialog").hidden = true; }
+async function loadDir(path) {
+  dirError("");
+  try {
+    const r = await send(path ? { type: "browse", path } : { type: "browse" });
+    renderDir(r);
+  } catch (e) { dirError(e.message); }
+}
+function renderCrumbs(path) {
+  const box = el("dir-crumbs");
+  box.innerHTML = "";
+  const parts = String(path || "/").split("/").filter(Boolean);
+  const mk = (label, target, isCur) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (isCur) b.className = "cur";
+    else b.onclick = () => loadDir(target);
+    return b;
+  };
+  const sep = () => {
+    const s = document.createElement("span");
+    s.className = "sep"; s.textContent = "/";
+    return s;
+  };
+  box.append(mk("/", "/", parts.length === 0));
+  let acc = "";
+  parts.forEach((p, i) => {
+    acc += "/" + p;
+    box.append(sep());
+    box.append(mk(p, acc, i === parts.length - 1));
+  });
+}
+function renderDir(r) {
+  dirState.path = r.path; dirState.parent = r.parent; dirState.home = r.home || "";
+  el("dir-path").value = r.path;
+  renderCrumbs(r.path);
+  const box = el("dir-list");
+  box.innerHTML = "";
+  if (!r.entries.length) {
+    const d = document.createElement("div");
+    d.className = "dir-empty"; d.textContent = "Empty directory.";
+    box.append(d);
+    return;
+  }
+  for (const e of r.entries) {
+    const b = document.createElement("button");
+    b.className = "dir-row " + (e.isDir ? "isdir" : "isfile");
+    b.setAttribute("role", "option");
+    b.textContent = e.isDir ? e.name + "/" : e.name;
+    b.title = e.path;
+    if (e.isDir) b.onclick = () => loadDir(e.path);
+    else b.disabled = true;
+    box.append(b);
+  }
+}
+el("btn-new").onclick = () => { openDirDialog(); };
+el("dir-go").onclick = () => loadDir(el("dir-path").value.trim());
+el("dir-path").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); loadDir(el("dir-path").value.trim()); }
+  else if (ev.key === "Escape") closeDirDialog();
+});
+el("dir-up").onclick = () => { if (dirState.path && dirState.path !== dirState.parent) loadDir(dirState.parent); };
+el("dir-home").onclick = () => loadDir(dirState.home || "");
+el("dir-root").onclick = () => loadDir("/");
+el("dir-cancel").onclick = closeDirDialog;
+el("dir-cancel-x").onclick = closeDirDialog;
+el("dir-dialog").addEventListener("click", (ev) => {
+  if (ev.target === el("dir-dialog")) closeDirDialog();
+});
+el("dir-default").onclick = () => { closeDirDialog(); newSession(); closeDrawer(); };
+el("dir-use").onclick = () => {
+  const p = (dirState.path || el("dir-path").value || "").trim();
+  if (!p) { dirError("no directory selected"); return; }
+  closeDirDialog();
+  newSession(undefined, { workspaceRoot: p });
+  closeDrawer();
+};
 el("btn-refresh-sessions").onclick = () => refreshSessions().catch((e) => toast(e.message, true));
 el("session-filter").oninput = () => renderSessionList(state.sessionsCache);
+el("btn-github").onclick = () => toggleGithubPanel();
 el("btn-older").onclick = loadOlder;
 el("jump-latest").onclick = () => { state.stick = true; scrollDown(true); };
 el("terminal").addEventListener("scroll", () => {
@@ -1639,7 +2361,14 @@ el("terminal").addEventListener("scroll", () => {
 });
 el("model-picker").onchange = (ev) => {
   const o = ev.target.selectedOptions[0];
-  if (!o || !o.value || !state.sessionId) return;
+  if (!o || !o.value) return;
+  // Remembered as the default for created chats, not just this one.
+  state.pickedModel = { modelId: o.value,
+    providerId: o.dataset.provider || undefined };
+  if (!state.sessionId) {
+    toast("default model → " + o.value + " (applies to new chats)");
+    return;
+  }
   send({ type: "setModel", sessionId: state.sessionId,
     model: { modelId: o.value, providerId: o.dataset.provider || undefined } })
     .then(() => toast("model → " + o.value))

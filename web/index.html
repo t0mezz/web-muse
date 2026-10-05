@@ -28,6 +28,13 @@
         <button id="btn-close-sessions" title="Close">✕</button>
       </div>
       <div id="session-list" role="listbox" aria-label="Session list"></div>
+      <div class="side-sep">
+        <button id="btn-github" title="GitHub repos (/github)">GitHub repos</button>
+      </div>
+      <div id="github-panel" hidden>
+        <div id="github-status" aria-live="polite"></div>
+        <div id="github-list" role="listbox" aria-label="GitHub repo list"></div>
+      </div>
       <div class="side-foot">
         <button id="btn-refresh-sessions" title="Refresh list (/list)">↻ Refresh</button>
         <a id="btn-status-drawer" href="/progress.html" title="Live bridge status page">⏱ Bridge status</a>
@@ -93,6 +100,33 @@
         <pre id="session-detail" class="detail"></pre>
       </div>
     </aside>
+  </div>
+</div>
+<div id="dir-dialog" hidden role="dialog" aria-modal="true" aria-label="Choose session directory">
+  <div class="dir-box">
+    <div class="dir-head">
+      <strong>New session directory</strong>
+      <button id="dir-cancel-x" title="Close" aria-label="Close">✕</button>
+    </div>
+    <div class="dir-pathrow">
+      <input id="dir-path" type="text" spellcheck="false" autocomplete="off"
+        placeholder="/absolute/path — paste to jump" aria-label="Directory path">
+      <button id="dir-go" title="Go to typed path">Go</button>
+    </div>
+    <div id="dir-error" class="dir-error" hidden></div>
+    <div class="dir-navrow">
+      <button id="dir-up" title="Parent directory">↑ Up</button>
+      <button id="dir-home" title="Server home directory">Home</button>
+      <button id="dir-root" title="Filesystem root">/</button>
+    </div>
+    <div id="dir-crumbs" class="dir-crumbs" aria-label="Breadcrumb"></div>
+    <div id="dir-list" class="dir-list" role="listbox" aria-label="Directory entries"></div>
+    <div class="dir-foot">
+      <button id="dir-default" title="Use the default per-session workspace">Use default workspace</button>
+      <span class="spacer"></span>
+      <button id="dir-cancel">Cancel</button>
+      <button id="dir-use" class="primary" title="Start session in this folder">Use this folder</button>
+    </div>
   </div>
 </div>
 <div id="toast" hidden role="status"></div>
