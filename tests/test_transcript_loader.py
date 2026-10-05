@@ -1,8 +1,9 @@
-"""Generating indicator: flip-loader row while a turn runs.
+"""Generating indicator: flip-loader beside live output until turn end.
 
-The loader shows on turn/started, swaps out for real content on the
-first content item/started, and clears when the turn settles
-(completed/retracted). Animation freezes under prefers-reduced-motion.
+The loader shows on turn/started, docks at the left of the streaming
+answer or tool line (keeps spinning through tool calls), and clears
+only when the turn settles (completed/retracted). Animation freezes
+under prefers-reduced-motion.
 
 No JS harness in this repo, so the contract is guarded at the source
 level, following tests/test_session_toggle.py.
@@ -59,11 +60,16 @@ class TestLoaderWiring(unittest.TestCase):
     def test_loader_is_text_sized(self):
         self.assertIn(".tline.generating .loader", STYLE_CSS)
 
-    def test_first_content_item_hides_loader(self):
-        body = case_body("item/started")
-        self.assertIn("hideLoader();", body)
-        # System chatter must not dismiss it: only content rows swap it.
-        self.assertIn('!== "system"', body)
+    def test_docked_loader_sits_left_of_output(self):
+        self.assertIn(".tline > .loader", STYLE_CSS)
+
+    def test_streaming_content_docks_loader_beside_output(self):
+        self.assertIn("function dockLoader(", APP_JS)
+        self.assertIn("dockLoader(rec.line)", APP_JS)
+
+    def test_loader_survives_until_turn_end(self):
+        # Content arriving must dock the spinner, never dismiss it.
+        self.assertNotIn("hideLoader();", case_body("item/started"))
 
     def test_settled_turns_hide_loader(self):
         for marker in ("turn/completed", "turn/retracted"):

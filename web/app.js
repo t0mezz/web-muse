@@ -611,6 +611,7 @@ function showLoader() {
   text.className = "txt";
   const loader = document.createElement("div");
   loader.className = "loader";
+  loader.id = "loader";
   loader.setAttribute("role", "status");
   loader.setAttribute("aria-label", "Generating");
   text.append(loader);
@@ -619,9 +620,19 @@ function showLoader() {
   el("terminal").append(line);
   scrollDown();
 }
+/* Dock the spinner at the left of the live output line: it keeps
+   spinning beside streaming answers and tool calls until the turn ends. */
+function dockLoader(line) {
+  const loader = document.getElementById("loader");
+  const row = document.getElementById("loader-row");
+  if (row) row.remove();
+  if (loader && line && !line.contains(loader)) line.prepend(loader);
+}
 function hideLoader() {
-  const line = document.getElementById("loader-row");
-  if (line) line.remove();
+  const loader = document.getElementById("loader");
+  if (loader) loader.remove();
+  const row = document.getElementById("loader-row");
+  if (row) row.remove();
 }
 
 function scrollDown(force) {
@@ -942,6 +953,7 @@ function renderItem(it, streaming) {
     rec.body.append(c);
   }
   rec.line.classList.toggle("streaming", !!streaming);
+  if (streaming && (kind === "agent" || kind === "tool")) dockLoader(rec.line);
   updateWelcome();
   scrollDown();
 }
@@ -1082,7 +1094,6 @@ function onEvent(method, p) {
   }
   switch (method) {
     case "item/started":
-      if (p.item && itemKind(p.item) !== "system") hideLoader();
       renderItem(p.item, true);
       break;
     case "item/delta": {
