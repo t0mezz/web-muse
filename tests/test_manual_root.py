@@ -8,7 +8,6 @@ prompt, and the first-use confirm gate before session/start.
 Run: python3 -m unittest tests.test_manual_root -v   (from repo root)
 """
 
-import re
 import sys
 import tempfile
 import unittest
@@ -16,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server.sessions import validate_manual_root  # noqa: E402
+from server.sessions import browse_dir, browse_home, validate_manual_root  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_JS = (ROOT / "web" / "app.js").read_text()
@@ -73,13 +72,62 @@ class TestManualRootUI(unittest.TestCase):
         # Unconfirmed roots never reach the wire.
         self.assertIn("session not created: directory not confirmed", APP_JS)
 
-    def test_plus_button_asks_for_directory(self):
-        m = re.search(r'el\("btn-new"\)\.onclick = \(\) => \{(.*?)\n\};',
-                      APP_JS, re.S)
-        self.assertIsNotNone(m, "btn-new handler missing")
-        body = m.group(1)
-        self.assertIn('prompt("Session directory', body)
-        self.assertIn("workspaceRoot: p", body)
+    def test_plus_button_opens_explorer(self):
+        for marker in ("openDirDialog()", 'el("btn-new").onclick',
+                       "dir-use", "dir-default", "dir-path",
+                       "newSession(undefined, { workspaceRoot: p })"):
+            self.assertIn(marker, APP_JS)
+        # The old blocking prompt is gone; picking flows through the
+        # explorer's "Use this folder" into the same confirm gate.
+        self.assertNotIn('prompt("Session directory', APP_JS)
+
+    def test_explorer_lists_via_browse(self):
+        for marker in ("type: \"browse\"", "function loadDir",
+                       "function renderDir", "function renderCrumbs",
+                       "dir-crumbs", "dir-list"):
+            self.assertIn(marker, APP_JS)
+        self.assertIn('"browse"', SESSIONS_PY)
+
+
+class TestBrowseDir(unittest.TestCase):
+    def test_empty_path_opens_home(self):
+        home = browse_home()
+        self.assertTrue(home.startswith("/"))
+        r = browse_dir("")
+        self.assertEqual(r["path"], home)
+        self.assertIn("entries", r)
+
+    def test_dirs_first_files_shown_hidden_shown(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            (base / "zebra").mkdir()
+            (base / "apple").mkdir()
+            (base / "mfile.txt").write_text("x")
+            (base / ".hidden").mkdir()
+            (base / ".hfile").write_text("y")
+            r = browse_dir(d)
+            names = [e["name"] for e in r["entries"]]
+            self.assertIn(".hidden", names)
+            self.assertIn(".hfile", names)
+            self.assertIn("mfile.txt", names)
+            kinds = {e["name"]: e["isDir"] for e in r["entries"]}
+            self.assertTrue(kinds["apple"])
+            self.assertFalse(kinds["mfile.txt"])
+            # Dirs-first, case-insensitive alphabetical within each group.
+            self.assertEqual(names, [".hidden", "apple", "zebra",
+                                     ".hfile", "mfile.txt"])
+            for e in r["entries"]:
+                self.assertEqual(e["isHidden"], e["name"].startswith("."))
+            self.assertEqual(r["parent"], str(base.parent))
+
+    def test_missing_file_and_relative_rejected(self):
+        with self.assertRaises(ValueError):
+            browse_dir("/no/such/dir-xyz-123")
+        with tempfile.NamedTemporaryFile() as f:
+            with self.assertRaises(ValueError):
+                browse_dir(f.name)
+        with self.assertRaises(ValueError):
+            browse_dir("relative/path")
 
 
 if __name__ == "__main__":

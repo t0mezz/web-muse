@@ -25,6 +25,27 @@ LOG = logging.getLogger("web_muse.sessions")
 # them. The bridge falls back below instead of failing the UI.
 METHOD_NOT_FOUND = -32601
 
+# A serve host cannot load sessions whose retained permission profile it
+# cannot compose (verified live: TUI-created `:auto-review` sessions are
+# refused with -32603 "retained session refused", while serve-created
+# sessions resume fine; the TUI resumes in-process where the reviewer
+# exists). This is a host capability gap, not a missing method, so the
+# bridge degrades honestly (metadata + live attach) instead of failing
+# the switch — same philosophy as the --no-session-log fallback below.
+RETAINED_REFUSED_CODE = -32603
+RETAINED_REFUSED_MARKER = "retained session refused"
+
+
+def _retained_refused(e):
+    """True when the host refuses to load a stored session (-32603).
+
+    Matched on code plus the host's marker text so unrelated internal
+    errors still surface instead of degrading silently.
+    """
+    return (getattr(e, "code", None) == RETAINED_REFUSED_CODE
+            and RETAINED_REFUSED_MARKER in str(e).lower())
+
+
 # MSP methods that are commands: the bridge must NOT accept a client commandId,
 # it always mints a fresh UUIDv7 (see MspClient.command).
 COMMAND_METHODS = {
@@ -54,6 +75,116 @@ FORBIDDEN_APPROVAL_MODES = {"allowAll"}
 # rejected above, the other three are selectable.
 VALID_APPROVAL_MODES = {"allowAll", "promptUnmatched", "onRequest",
                         "denyUnmatched"}
+
+# Shell allowlist auto-decided for GitHub-opened sessions.
+#
+# MSP v1 has no per-session command policy on the wire (SessionConfig admits
+# only mcpServers; ApprovalMode is select-never-create), so "gh may run"
+# cannot be sent to the host. Instead the bridge answers the host's
+# approval/request itself via approval/decide before any card reaches the
+# UI, so the agent never parks on an unanswered prompt. Anything outside
+# this list falls through to the normal UI approval card.
+#
+# NOTE: `gh` is covered in full, including destructive subcommands
+# (`gh repo delete`, `gh release delete`, `gh secret set`, `gh pr merge`,
+# raw `gh api` writes, ...). That breadth is explicit user policy for
+# GitHub-opened sessions. `git` is covered except the destructive forms
+# carved back out in GH_GIT_DENY_RE below.
+GH_AUTO_ALLOW_RE = (
+    re.compile(r"^gh(\s|$)"),
+    re.compile(r"^git(\s|$)"),
+)
+
+# Read-only inspection + common build/test toolchains, also pre-approved
+# in GitHub-opened sessions so agents can explore repos and run checks
+# without stalling. Shell file mutation outside git (rm/mv/cp, shell
+# redirection) is deliberately NOT here — the agent's file tools own
+# that job — and `find`'s write modes are carved back out below.
+# Network fetchers (curl/wget/ssh) are excluded on purpose: anything
+# that leaves the machine still asks a human.
+#
+# The word lists are the single source of truth: the matchers below are
+# compiled from them, and the seeded instruction file renders them
+# verbatim (see github_preapproved_section), so the doc can never drift
+# from what the bridge actually auto-decides.
+AUTO_ALLOW_INSPECT = (
+    "ls", "cat", "head", "tail", "less", "find", "grep", "rg", "tree",
+    "wc", "file", "stat", "diff", "jq", "pwd", "echo", "printf",
+)
+AUTO_ALLOW_TOOLCHAINS = (
+    "node", "npm", "npx", "python3", "pip", "pip3", "pytest", "uv",
+    "uvx", "cargo", "rustc", "go", "make", "tsc",
+)
+GH_AUTO_ALLOW_TOOLS_RE = (
+    re.compile(r"^(?:%s)(\s|$)" % "|".join(AUTO_ALLOW_INSPECT)),
+    re.compile(r"^(?:%s)(\s|$)" % "|".join(AUTO_ALLOW_TOOLCHAINS)),
+)
+
+# Everyday-git carve-outs, mirrored in the instruction text below.
+GIT_DENY_SUMMARY = (
+    "`reset --hard`, `clean -f`/`--force`, `push --force`/`-f`/`--delete`, "
+    "`branch -D`, `stash drop`/`clear`"
+)
+
+# `find` stays inspection-only: -delete/-exec* would smuggle writes and
+# process execution past the allowlist above.
+GH_TOOL_DENY_RE = (
+    re.compile(r"\bfind\b.*\s(-delete|-exec|-execdir)(\s|$)"),
+)
+
+# Destructive git forms: discarded work is unrecoverable, so these keep
+# prompting a human even in GitHub-opened sessions. Matched with search
+# (flags can sit anywhere in the argv).
+GH_GIT_DENY_RE = (
+    re.compile(r"(^|\s)--force(\s|$)"),    # push --force, clean --force
+    re.compile(r"(^|\s)--hard(\s|$)"),     # reset --hard
+    re.compile(r"(^|\s)-f(\s|$)"),         # push -f
+    re.compile(r"\bclean\s+-[a-zA-Z]*f"),  # clean -fd / -fx / ...
+    re.compile(r"\bpush\b.*\s--delete(\s|$)"),  # push --delete
+    re.compile(r"\bbranch\s+-[a-zA-Z]*D\b"),   # branch -D
+    re.compile(r"\bstash\s+(drop|clear)\b"),   # stash drop / clear
+)
+
+
+def shell_auto_allowed(subject):
+    """True when a shell approval subject is auto-decided bridge-side."""
+    if not isinstance(subject, dict) or subject.get("kind") != "shell":
+        return False
+    cmd = subject.get("command")
+    if not isinstance(cmd, str):
+        return False
+    cmd = cmd.strip()
+    if not (any(pat.match(cmd) for pat in GH_AUTO_ALLOW_RE)
+            or any(pat.match(cmd) for pat in GH_AUTO_ALLOW_TOOLS_RE)):
+        return False
+    if (cmd == "git" or cmd.startswith("git ")) and \
+            any(pat.search(cmd) for pat in GH_GIT_DENY_RE):
+        return False
+    if (cmd == "find" or cmd.startswith("find ")) and \
+            any(pat.search(cmd) for pat in GH_TOOL_DENY_RE):
+        return False
+    return True
+
+
+def pick_approve_once_choice(choices):
+    """ChoiceId of the narrowest approve choice, or None.
+
+    Prefers a one-shot `approved` choice; falls back to any non-amendment
+    approve decision (`approvedForSession`). Amendment decisions (which
+    would persist a policy rule) and denials are never picked, and None
+    means "leave it to the UI card".
+    """
+    if not isinstance(choices, list):
+        return None
+    cands = [c for c in choices
+             if isinstance(c, dict) and c.get("choiceId")
+             and c.get("decision") in ("approved", "approvedForSession")]
+    if not cands:
+        return None
+    for c in cands:
+        if c.get("decision") == "approved" and c.get("scope") == "once":
+            return c["choiceId"]
+    return cands[0]["choiceId"]
 
 # MSP ReasoningEffort closed tier vocabulary (schema $defs/ReasoningEffort).
 VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high",
@@ -328,15 +459,56 @@ def browse_dir(path=None):
             "entries": entries}
 
 
-# Sync pacing: the host's deletion registry admits one deletion at a time
-# and stays busy while one settles, so back-to-back deletes are rejected
-# with Store(Busy). Retry those with backoff and pause between deletes.
-_PRUNE_RETRY_DELAYS_S = (2, 4, 6)
-_PRUNE_PAUSE_S = 0.5
+def muse_sessions_base():
+    """On-disk MSP session store root (~/.local/share/muse/sessions)."""
+    return Path(os.path.expanduser("~")) / ".local" / "share" / "muse" \
+        / "sessions"
 
 
-def _transient_delete_error(e):
-    return "busy" in str(e).lower()
+def delete_session_files(session_id, base=None):
+    """Remove one session's on-disk store dirs (rm -rf semantics).
+
+    Deletes the dated main dir (sessions/YYYY/MM/DD/<sessionId>/) and the
+    view-store dir (sessions/.msp-view-v1/<sessionId>/), and nothing else.
+    The host is never called: its deletion registry admits one deletion
+    at a time and rejects back-to-back deletes with Store(Busy), so file
+    removal is the reliable path (verified live: with both dirs gone the
+    host answers resume with -32020 "was not found", and a restarted host
+    no longer lists the session).
+
+    Raises ValueError on unsafe ids or containment failure. Missing dirs
+    are success (already gone — rm -f semantics). Returns the removed
+    path strings.
+    """
+    sid = session_id or ""
+    if not SAFE_SESSION_ID.fullmatch(sid) or sid.startswith(".") \
+            or sid in (".", ".."):
+        raise ValueError(f"unsafe sessionId for session delete: {sid!r}")
+    root = Path(base).resolve() if base else muse_sessions_base().resolve()
+    targets = [root / ".msp-view-v1" / sid]
+    # Dated layout is YYYY/MM/DD/<sid>; glob only (the safe charset holds
+    # no glob metacharacters) instead of a full-tree walk.
+    targets += [p for p in root.glob(f"????/??/??/{sid}")]
+    removed = []
+    for target in targets:
+        if target.is_symlink():
+            # Lexical location is inside the store by construction; drop
+            # the link itself, never its target.
+            target.unlink()
+            removed.append(str(target))
+            continue
+        resolved = target.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(
+                f"refusing to delete outside session store: {sid!r}")
+        if resolved.is_dir():
+            shutil.rmtree(resolved)
+            removed.append(str(resolved))
+        elif resolved.exists():
+            raise ValueError(
+                f"refusing to delete non-directory session path: {resolved}")
+        # else: already gone — still success.
+    return sorted(removed)
 
 
 def flag_missing_workspaces(result):
@@ -359,13 +531,102 @@ def flag_missing_workspaces(result):
     return result
 
 
+# -- Seeded instructions for GitHub clones (Track 1) ------------------------
+GITHUB_INSTRUCTIONS_FILENAME = "AGENTS.md"
+GITHUB_INSTRUCTIONS_MARKER = (
+    "# web-muse: instructions for GitHub-cloned sessions "
+    "(do not commit this file)")
+GITHUB_INSTRUCTIONS_TEMPLATE = (
+    Path(__file__).resolve().parent / "github_instructions.md")
+
+
+def github_preapproved_section():
+    """Explicit pre-approved command list, generated from the matchers.
+
+    Appended to every seeded instruction file so agents see exactly what
+    runs without prompting. Built from AUTO_ALLOW_* (never hand-copied),
+    so the doc tracks the bridge's real policy.
+    """
+    inspect = ", ".join(f"`{c}`" for c in AUTO_ALLOW_INSPECT)
+    chains = ", ".join(f"`{c}`" for c in AUTO_ALLOW_TOOLCHAINS)
+    return (
+        "## Pre-approved commands (exact list — no prompt in this session)\n"
+        "\n"
+        "These run WITHOUT prompting. Anything else raises an approval card\n"
+        "a human must click, and while it waits you are BLOCKED — stay\n"
+        "inside this list whenever you can.\n"
+        "\n"
+        "- `gh` — every subcommand.\n"
+        "- `git` — every subcommand EXCEPT: " + GIT_DENY_SUMMARY + ".\n"
+        "- Shell inspection: " + inspect + ".\n"
+        "- Build/test runners: " + chains + ".\n"
+        "- Still asks a human: shell file writes (`rm`, `mv`, `cp`,\n"
+        "  `find -delete`), network fetchers (`curl`, `wget`, `ssh`), and\n"
+        "  `sudo` / interactive / installer commands.\n"
+    )
+
+
+def render_github_instructions(full_name, template=None):
+    """Render the instruction template for one repo (pure)."""
+    text = template
+    if text is None:
+        text = GITHUB_INSTRUCTIONS_TEMPLATE.read_text()
+    text = text.replace("__FULL_NAME__", full_name)
+    return text.rstrip() + "\n\n" + github_preapproved_section()
+
+
+def seed_github_instructions(dest, full_name):
+    """Write AGENTS.md into a fresh clone unless one already exists.
+
+    Never overwrites a repo's own file. Returns (seeded, path).
+    Raises OSError on write failure (the caller logs and continues —
+    seeding must never fail the open).
+    """
+    target = Path(dest) / GITHUB_INSTRUCTIONS_FILENAME
+    if target.exists():
+        return False, str(target)
+    target.write_text(render_github_instructions(full_name))
+    return True, str(target)
+
+
+def has_seeded_instructions(root):
+    """True when root/AGENTS.md is bridge-seeded (marker first line)."""
+    try:
+        if not root:
+            return False
+        text = (Path(root) / GITHUB_INSTRUCTIONS_FILENAME).read_text()
+    except (OSError, ValueError):
+        return False
+    return text.startswith(GITHUB_INSTRUCTIONS_MARKER)
+
+
 class SessionRouter:
     """Tracks WS<->sessionId subscriptions and last-seen view cursors."""
 
-    def __init__(self, msp, workspace_base=None, gh_bin="gh"):
+    def __init__(self, msp, workspace_base=None, gh_bin="gh",
+                 sessions_base=None):
         self._msp = msp
         # Base dir for per-session workspaces (None = send no workspaceRoot).
         self._workspace_base = str(workspace_base) if workspace_base else None
+        # On-disk session store root for file-based deletes (None = the
+        # default ~/.local/share/muse/sessions).
+        self._sessions_base = str(sessions_base) if sessions_base else None
+        # Sessions this bridge removed from disk: hidden from list/resume
+        # until the serve host reindexes (it keeps listing them from
+        # memory while running).
+        self._deleted_sids = set()
+        # Sessions started through this bridge (any path: new, prompt,
+        # githubOpen): the UI lists them before TUI-created ones.
+        # Persisted as one root-level file in the session store (beside,
+        # never inside, session dirs) so a bridge restart keeps the
+        # grouping. sessions_base=None keeps it memory-only — which is
+        # also what makes the test suite hermetic (no home-dir writes).
+        # Production passes an explicit store dir (see deploy notes).
+        self._bridge_sids = set()
+        self._bridge_sids_file = (
+            str(Path(self._sessions_base) / ".web-muse-bridge-sids.json")
+            if self._sessions_base else None)
+        self._load_bridge_sids()
         self._gh_bin = gh_bin or "gh"
         # Clone opId -> [task, conn, fullName]. Terminal-event ownership
         # goes to whoever pops the record first (finishing task or
@@ -373,6 +634,11 @@ class SessionRouter:
         # cancel lands before the task's first step (a coroutine cancelled
         # that early never runs its body, not even `finally`).
         self._github_ops = {}
+        # Sessions opened via githubOpen: shell approvals matching
+        # GH_AUTO_ALLOW_RE are decided bridge-side (gh PR flow never
+        # parks on an unanswered prompt). Scoped here — not global — so
+        # other sessions keep prompting as before.
+        self._gh_auto_sids = set()
         self._subs = {}   # sessionId -> set of ClientConnection
         # Sessions this bridge created while still unnamed: the first
         # prompt names them from its initial text (default fallback).
@@ -382,6 +648,34 @@ class SessionRouter:
         self._turns = {}  # sessionId -> running turnId (from turn/started)
         self._conns = set()
         self._lock = asyncio.Lock()
+
+    def _load_bridge_sids(self):
+        """Restore the bridge-created set (never raises)."""
+        if not self._bridge_sids_file:
+            return
+        try:
+            raw = json.loads(Path(self._bridge_sids_file).read_text())
+        except (OSError, ValueError):
+            return
+        if isinstance(raw, list):
+            self._bridge_sids = {s for s in raw
+                                 if isinstance(s, str) and s}
+
+    def _save_bridge_sids(self):
+        """Persist the bridge-created set (never raises)."""
+        if not self._bridge_sids_file:
+            return
+        try:
+            p = Path(self._bridge_sids_file)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(sorted(self._bridge_sids)))
+        except OSError:
+            LOG.warning("bridge sid store unwritable", exc_info=True)
+
+    def _remember_bridge_sid(self, session_id):
+        if session_id and session_id not in self._bridge_sids:
+            self._bridge_sids.add(session_id)
+            self._save_bridge_sids()
 
     # -- connection registry ------------------------------------------------
     def add_conn(self, conn):
@@ -436,6 +730,8 @@ class SessionRouter:
             conn.queue_frame(frame)
 
     def on_server_request(self, method, params):
+        if method == "approval/request" and self._auto_approve_gh_pr(params):
+            return
         frame = map_server_request_to_ws(method, params)
         sid = notification_session_id(method, params)
         targets = self._targets_for(sid)
@@ -445,6 +741,60 @@ class SessionRouter:
             targets = list(self._conns)
         for conn in targets:
             conn.queue_frame(frame)
+
+    def _auto_approve_gh_pr(self, params):
+        """Decide a gh-PR approval for a GitHub-opened session (no UI card).
+
+        Returns True when the approval was consumed: it matched the
+        allowlist and an approve choice existed, so the decide was queued
+        and a notice event fanned out instead of the approval card.
+        Anything else returns False and the caller forwards the card
+        unchanged (the agent parks until a human decides, as before).
+        """
+        if not isinstance(params, dict):
+            return False
+        sid = params.get("sessionId")
+        if not sid or sid not in self._gh_auto_sids:
+            return False
+        subject = params.get("subject")
+        if not shell_auto_allowed(subject):
+            return False
+        choice_id = pick_approve_once_choice(params.get("availableChoices"))
+        if choice_id is None:
+            LOG.warning("gh auto-approve: no approve choice for %s",
+                        params.get("approvalId"))
+            return False
+        command = subject.get("command", "").strip()
+        decide = {"sessionId": sid,
+                  "approvalId": params.get("approvalId"),
+                  "choiceId": choice_id,
+                  # Race guard: must equal the request's current stage.
+                  "requirementId": params.get("currentRequirementId")}
+        try:
+            asyncio.create_task(self._gh_auto_decide(decide, command))
+        except RuntimeError:
+            return False  # no running loop: fall through to the UI card
+        notice = {"type": "event", "method": "githubAutoApproved",
+                  "params": {"sessionId": sid,
+                             "approvalId": params.get("approvalId"),
+                             "command": command}}
+        targets = self._targets_for(sid)
+        if not targets:
+            targets = list(self._conns)
+        for conn in targets:
+            conn.queue_frame(notice)
+        return True
+
+    async def _gh_auto_decide(self, decide, command):
+        """Send the queued approval/decide (all failures are logged)."""
+        try:
+            await self._msp.command("approval/decide", decide)
+        except Exception:
+            LOG.warning("gh auto-approve decide failed for %s (%s)",
+                        decide.get("approvalId"), command, exc_info=True)
+        else:
+            LOG.info("gh auto-approved in session %s: %s",
+                     decide.get("sessionId"), command)
 
     def _targets_for(self, session_id):
         if session_id:
@@ -486,30 +836,66 @@ class SessionRouter:
                 if msg.get("filter") is not None:
                     p["filter"] = msg["filter"]
                 result = await self._msp.call("session/list", p)
-                return reply(True, result=flag_missing_workspaces(result))
+                result = flag_missing_workspaces(result)
+                # Mark bridge-started rows for first-group sorting in the
+                # UI. Presence-only (no False key) so untouched rows stay
+                # byte-identical to the host's.
+                if isinstance(result, dict):
+                    for s in result.get("sessions") or []:
+                        if isinstance(s, dict) \
+                                and s.get("sessionId") in self._bridge_sids:
+                            s["bridgeCreated"] = True
+                # Sessions removed from disk read as gone even though the
+                # running host still lists them from memory.
+                rows = result.get("sessions") \
+                    if isinstance(result, dict) else None
+                if isinstance(rows, list) and self._deleted_sids:
+                    result["sessions"] = [
+                        s for s in rows
+                        if not (isinstance(s, dict) and s.get("sessionId")
+                                in self._deleted_sids)]
+                return reply(True, result=result)
             if mtype == "resume":
+                if msg.get("sessionId") in self._deleted_sids:
+                    raise MspError(-32000,
+                                   f"unknown session {msg.get('sessionId')}")
                 try:
                     result = await self._msp.command(
                         "session/resume",
                         _pick(msg, ("sessionId", "cursor", "excludeItems",
                                     "history")))
                 except MspError as e:
-                    if e.code != METHOD_NOT_FOUND:
+                    if e.code == METHOD_NOT_FOUND:
+                        result = await self._resume_fallback(
+                            msg.get("sessionId"))
+                    elif _retained_refused(e):
+                        result = await self._resume_fallback(
+                            msg.get("sessionId"),
+                            none_reason="resume_refused_by_host",
+                            fallback="resume_refused_by_host")
+                    else:
                         raise
-                    result = await self._resume_fallback(msg.get("sessionId"))
                 self._attach(conn, msg.get("sessionId"))
                 return reply(True, result=result)
             if mtype == "read":
+                if msg.get("sessionId") in self._deleted_sids:
+                    raise MspError(-32000,
+                                   f"unknown session {msg.get('sessionId')}")
                 try:
                     return reply(True, result=await self._msp.call(
                         "session/read",
                         _pick(msg, ("sessionId", "excludeItems"))))
                 except MspError as e:
-                    if e.code != METHOD_NOT_FOUND:
-                        raise
-                    # Read-only fallback: same metadata, no attach.
-                    return reply(True, result=await self._resume_fallback(
-                        msg.get("sessionId")))
+                    if e.code == METHOD_NOT_FOUND:
+                        # Read-only fallback: same metadata, no attach.
+                        return reply(True, result=await self._resume_fallback(
+                            msg.get("sessionId")))
+                    if _retained_refused(e):
+                        return reply(True, result=await self._resume_fallback(
+                            msg.get("sessionId"),
+                            none_reason="resume_refused_by_host",
+                            fallback="resume_refused_by_host"))
+                    raise
             if mtype == "fork":
                 result = await self._msp.command(
                     "session/fork",
@@ -523,8 +909,17 @@ class SessionRouter:
                 self._auto_name_pending.discard(msg.get("sessionId"))
                 return reply(True, result=result)
             if mtype == "delete":
-                return reply(True, result=await self._msp.command(
-                    "session/delete", _pick(msg, ("sessionId",))))
+                # File-based delete: rm -rf the session's store dirs, never
+                # the host's deletion registry (Store(Busy) on back-to-back
+                # deletes). Missing dirs are success (already gone).
+                sid = msg.get("sessionId")
+                removed = delete_session_files(
+                    sid, base=self._sessions_base)
+                self._drop_routing(sid)
+                self._deleted_sids.add(sid)
+                return reply(True, result={"deleted": True,
+                                           "sessionId": sid,
+                                           "removed": removed})
             if mtype == "interrupt":
                 return reply(True, result=await self._msp.command(
                     "turn/interrupt",
@@ -793,6 +1188,10 @@ class SessionRouter:
                 attached = sorted(merged)
         result = await self._msp.command("session/start", p)
         self._attach(conn, result["session"]["sessionId"])
+        # A fresh session under a previously deleted id exists again.
+        self._deleted_sids.discard(result["session"]["sessionId"])
+        # Started through this bridge (whatever the path): sort first.
+        self._remember_bridge_sid(result["session"]["sessionId"])
         # Hosts that leave the name empty mark the session for default
         # naming on its first prompt; already-named sessions never enter.
         sid = result["session"]["sessionId"]
@@ -804,6 +1203,12 @@ class SessionRouter:
             result["mcpAttached"] = attached
         if p.get("workspaceRoot"):
             result["workspaceRoot"] = p["workspaceRoot"]
+        if p.get("workspaceRoot") and has_seeded_instructions(
+                p.get("workspaceRoot")):
+            # Rooted at a seeded clone (githubOpen now, or a later
+            # `new --path` at the same leaf): gh/git approvals
+            # auto-decide and the instruction file is already on disk.
+            self._gh_auto_sids.add(sid)
         return result
 
     # -- GitHub clones (gh-only v1) -----------------------------------------
@@ -885,12 +1290,24 @@ class SessionRouter:
                 on_line=lambda line: self._emit_clone_progress(
                     conn, op_id, full_name, "progress", line))
             self._emit_clone_progress(conn, op_id, full_name, "completed")
+            # Track 1: seed the instruction file into the fresh clone
+            # (both paths — opened now or rooted later via `new --path`).
+            # Seeding never fails the clone: on error we log and report
+            # seededInstructions False.
+            try:
+                seeded, _ = seed_github_instructions(dest, full_name)
+            except OSError:
+                LOG.warning("instruction seeding failed for %s", dest,
+                            exc_info=True)
+                seeded = False
             if open_opts is None:
                 result = {"fullName": full_name, "dest": dest,
-                          "sessionId": session_id, "opId": op_id}
+                          "sessionId": session_id, "opId": op_id,
+                          "seededInstructions": seeded}
             else:
                 result = await self._open_cloned(
                     conn, full_name, dest, session_id, op_id, open_opts)
+                result["seededInstructions"] = seeded
         except asyncio.CancelledError:
             # Whoever cancelled already owns the terminal event (see
             # _cancel_github_op); only emit when this task still owns it.
@@ -942,7 +1359,15 @@ class SessionRouter:
         new_msg = {"workspaceRoot": dest, "sessionId": session_id}
         if open_opts.get("mcpAttach") is not None:
             new_msg["mcpAttach"] = open_opts.get("mcpAttach")
+        model = open_opts.get("model")
+        if isinstance(model, dict) and isinstance(model.get("modelId"), str) \
+                and model["modelId"].strip():
+            new_msg["modelId"] = model["modelId"].strip()
+            if isinstance(model.get("providerId"), str) \
+                    and model["providerId"].strip():
+                new_msg["providerId"] = model["providerId"].strip()
         result = await self._do_new(conn, new_msg)
+        self._gh_auto_sids.add(session_id)
         name = open_opts.get("name")
         if isinstance(name, str) and name.strip():
             await self._msp.command(
@@ -1008,15 +1433,20 @@ class SessionRouter:
         dest = self._clone_leaf(sid)
         return self._launch_clone(conn, full_name, dest, op_id, sid,
                                   {"mcpAttach": msg.get("mcpAttach"),
-                                   "name": msg.get("name")})
+                                   "name": msg.get("name"),
+                                   "model": msg.get("model")})
 
     async def _prune_missing(self, msg):
-        """Delete host sessions whose workspace dir is gone (scoped, safe).
+        """Remove session files whose workspace dir is gone (scoped, safe).
 
         Only sessions rooted under this bridge's workspace base are
         candidates: external manual roots may be transiently missing (an
         unmounted drive is not a deletion), and removing those sessions
         would destroy their transcripts. dryRun previews without deleting.
+        Removal is file-based (see delete_session_files), never the host's
+        deletion registry, so there is nothing to retry or confirm by
+        re-listing: gone from disk means deleted. "pending" stays empty
+        for reply-shape compatibility.
         """
         dry = bool(msg.get("dryRun"))
         try:
@@ -1053,33 +1483,23 @@ class SessionRouter:
         deleted, failed = [], []
         for s in candidates:
             sid = s.get("sessionId")
-            error = None
-            for attempt in range(1 + len(_PRUNE_RETRY_DELAYS_S)):
-                try:
-                    await self._msp.command("session/delete",
-                                            {"sessionId": sid})
-                    error = None
-                    break
-                except Exception as e:
-                    error = e
-                    if _transient_delete_error(e) \
-                            and attempt < len(_PRUNE_RETRY_DELAYS_S):
-                        LOG.info("prune %s busy, retrying in %ss "
-                                 "(attempt %d)", sid,
-                                 _PRUNE_RETRY_DELAYS_S[attempt], attempt + 1)
-                        await asyncio.sleep(_PRUNE_RETRY_DELAYS_S[attempt])
-                    else:
-                        break
-            if error is None:
-                deleted.append(brief(s))
-            else:
-                err = {"sessionId": sid, "message": str(error)}
-                if getattr(error, "code", None) is not None:
-                    err["code"] = error.code
+            try:
+                removed = delete_session_files(
+                    sid, base=self._sessions_base)
+            except Exception as e:
+                err = {"sessionId": sid, "message": str(e)}
+                if getattr(e, "code", None) is not None:
+                    err["code"] = e.code
                 failed.append(err)
-            await asyncio.sleep(_PRUNE_PAUSE_S)
-        return {"dryRun": False, "deleted": deleted, "failed": failed,
-                "outsideBase": outside}
+                continue
+            self._drop_routing(sid)
+            self._deleted_sids.add(sid)
+            entry = brief(s)
+            entry["removed"] = removed
+            deleted.append(entry)
+        return {"dryRun": False, "deleted": deleted, "pending": [],
+                "failed": failed, "outsideBase": outside,
+                "confirmed": True}
 
     def _clean_github_clone(self, session_id):
         """Delete one session's `repo/` leaf (raises outside the leaf)."""
@@ -1108,9 +1528,24 @@ class SessionRouter:
             self._subs.setdefault(session_id, set()).add(conn)
             conn.sessions.add(session_id)
 
-    async def _resume_fallback(self, session_id):
+    def _drop_routing(self, session_id):
+        """Forget router state for a deleted session (subs, cursors...)."""
+        members = self._subs.pop(session_id, set())
+        for conn in members:
+            conn.sessions.discard(session_id)
+        self._cursors.pop(session_id, None)
+        self._turns.pop(session_id, None)
+        self._auto_name_pending.discard(session_id)
+        self._gh_auto_sids.discard(session_id)
+        if session_id in self._bridge_sids:
+            self._bridge_sids.discard(session_id)
+            self._save_bridge_sids()
+
+    async def _resume_fallback(self, session_id, none_reason=None,
+                               fallback=None):
         """Open a session when the host serves no session/resume
-        (--no-session-log hosts; durable hosts serve it).
+        (--no-session-log hosts; durable hosts serve it), or refuses to
+        load it (retained permission profile the host cannot compose).
 
         Metadata comes from session/list (whose sessionId filter the host
         honors); history is honestly `none` — the host offers no transcript
@@ -1136,7 +1571,7 @@ class SessionRouter:
         return {
             "session": sess,
             "history": {"items": None, "mode": "none",
-                        "noneReason": "resume_unserved_by_host",
+                        "noneReason": none_reason or "resume_unserved_by_host",
                         "snapshot": None},
             "pendingRequests": [
                 {"kind": "approval", "approvalId": a.get("approvalId")}
@@ -1148,7 +1583,7 @@ class SessionRouter:
                 if u.get("userInputId")
             ],
             "viewCursor": self.cursor(session_id),
-            "fallback": "resume_unserved_by_host",
+            "fallback": fallback or "resume_unserved_by_host",
         }
 
 

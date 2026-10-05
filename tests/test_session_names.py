@@ -200,6 +200,16 @@ class TestSessionNameUI(unittest.TestCase):
                        "_auto_name_pending"):
             self.assertIn(marker, SESSIONS_PY)
 
+    def test_rename_reconciles_bar(self):
+        # The host applies renames asynchronously: renameSession records
+        # the admitted name and re-applies it over every refresh until the
+        # host list catches up — otherwise the bar lagged one rename
+        # behind the title.
+        for marker in ("pendingNames", "applyPendingNames",
+                       "state.pendingNames.set(sid",
+                       "session/nameChanged"):
+            self.assertIn(marker, APP_JS)
+
 
 if __name__ == "__main__":
     unittest.main()

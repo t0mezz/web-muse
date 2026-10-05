@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from server.msp import MspClient  # noqa: E402
-from server.sessions import SessionRouter  # noqa: E402
+from server.sessions import SessionRouter, muse_sessions_base  # noqa: E402
 from server.ws import HttpWsServer  # noqa: E402
 
 LOG = logging.getLogger("web_muse")
@@ -45,8 +45,19 @@ def parse_args(argv=None):
     ap.add_argument("--model", default=None, help="model id override")
     ap.add_argument("--no-session-log", action="store_true",
                     help="memory-only sessions in the serve host")
-    ap.add_argument("--trust-workspace", action="store_true",
-                    help="load each session workspace's skills and rules")
+    ap.add_argument("--trust-workspace",
+                    action=argparse.BooleanOptionalAction, default=True,
+                    help="load each session workspace's skills and rules "
+                         "(this is what lets GitHub-cloned sessions pick up "
+                         "their seeded AGENTS.md; disable with "
+                         "--no-trust-workspace)")
+    ap.add_argument("--sandbox-network",
+                    choices=("restricted", "enabled", "proxy-only"),
+                    default=None,
+                    help="serve sandbox network mode (host-lifetime, all "
+                         "sessions; unset leaves the host default). "
+                         "'enabled' lets in-session gh/git reach the "
+                         "network, e.g. to push and open PRs.")
     ap.add_argument("--muse-bin", default="muse", help="muse binary path")
     ap.add_argument("--web-dir", default=str(ROOT / "web"))
     ap.add_argument("--allow-host", action="append", default=[],
@@ -133,6 +144,8 @@ def build_serve_argv(args):
         argv.append("--no-session-log")
     if args.trust_workspace:
         argv.append("--trust-workspace")
+    if args.sandbox_network:
+        argv += ["--sandbox-network", args.sandbox_network]
     return argv
 
 
@@ -167,7 +180,8 @@ async def amain(args):
     ws_base = args.workspace_base or None
     if ws_base:
         LOG.info("session workspaces under %s", ws_base)
-    router = SessionRouter(msp, workspace_base=ws_base)
+    router = SessionRouter(msp, workspace_base=ws_base,
+                           sessions_base=str(muse_sessions_base()))
     router_holder["router"] = router
 
     def hello():

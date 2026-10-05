@@ -10,8 +10,43 @@ python3 -m server.main --port 8000
 # open http://127.0.0.1:8000/
 ```
 
+## Run as a systemd service
+
+The bridge ships as a per-user service (it must run as you so your
+`muse login` passes through to the `muse serve` child — do not run it
+as root):
+
+```sh
+./deploy/install.sh
+# open http://127.0.0.1:8000/
+```
+
+This installs [`deploy/web-muse.service`](deploy/web-muse.service) to
+`~/.config/systemd/user/`, then enables and starts it
+(`Restart=on-failure`). Useful commands:
+
+```sh
+systemctl --user status web-muse
+journalctl --user -u web-muse -f
+systemctl --user restart web-muse
+systemctl --user disable --now web-muse   # stop + don't start at login
+```
+
+Notes:
+
+- The unit assumes a checkout at `~/web-muse`, Python at
+  `/usr/bin/python3`, and `muse` at `~/.local/bin/muse`. If any path
+  differs, override with `systemctl --user edit web-muse` (see the
+  commented example at the top of the unit).
+- Extra flags (`--provider`, `--model`, `--allow-host`, …) go in the
+  same override as a replacement `ExecStart=` (clear it first, then
+  set the new line — see the unit header).
+- `loginctl enable-linger` (needs admin once) keeps the service
+  running after you log out; without it, user services stop at logout.
+
 Useful flags: `--provider echo` (offline smoke test), `--provider meta`,
-`--model <id>`, `--trust-workspace`, `--no-session-log`, `-v`.
+`--model <id>`, `--trust-workspace` (default on; `--no-trust-workspace`
+opts out), `--no-session-log`, `-v`.
 
 The bridge binds **loopback only** and spawns `muse serve` inheriting this
 process's environment, so your existing subscription login (`muse login`)
@@ -36,7 +71,8 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 | `new {…, mcpAttach?}` | `session/start` (+ bridge-side `config.mcpServers`) |
 | `list {cursor?, limit?}` | `session/list` |
 | `resume {sessionId}` | `session/resume` (+attach) |
-| `read`, `fork`, `rename`, `delete` | `session/*` |
+| `read`, `fork`, `rename` | `session/*` |
+| `delete` | removes session files from disk (no host call) |
 | `interrupt`, `cancel`, `steer`, `unqueue` | `turn/*` |
 | `approve {approvalId, choiceId, requirementId, feedback?}` | `approval/decide` |
 | `answer {userInputId, answers}` | `userInput/answer` |
@@ -49,9 +85,22 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 | `skills` | `skill/list` |
 | `readOutput {itemId, outputRef, ...}` | `item/readOutput` |
 | `mcp` | local `settings.json` inventory (MSP v1 has no mcp/* methods) |
+| `browse {path?}` | list one server-side directory for the `+` explorer (empty → `$HOME`) |
+| `githubRepos {search?, limit?}` | `gh repo list` rows `{name, fullName, private, defaultBranch, updatedAt}` (live, never cached) |
+| `githubClone {fullName, sessionId?, opId?}` | admit a shallow `gh repo clone` into `workspaces/<sessionId>/repo/` (cancellable) |
+| `githubOpen {fullName, name?, mcpAttach?, opId?}` | admit a clone + `session/start` rooted at the clone |
+| `githubCancel {opId}` | cancel a running clone |
+| `githubClean {sessionId}` | delete one session's `repo/` leaf (session kept) |
 
 Server→client: `{type:"hello"}`, `{type:"event", method, params}` (MSP
 notifications routed by sessionId), `{type:"approval"}`, `{type:"userInput"}`.
+Clone progress streams as global `{type:"event", method:"githubCloneProgress",
+params:{opId, fullName, phase, line?}}` (`started|progress|completed|
+cancelled`; no sessionId, so every client renders it). The outcome follows
+as global `{type:"event", method:"githubCloneResult",
+params:{opId, ok, result|error}}` — clones are admitted instantly (like
+`compact`) so the connection stays responsive and `githubCancel` can
+preempt a hanging clone.
 
 Every MSP command gets a fresh UUIDv7 `commandId` minted by the bridge;
 client-supplied ids are never forwarded.
@@ -80,12 +129,22 @@ nextCursor}`, live `item/delta` + `turn/completed` streaming. Two caveats:
 
 `/help /new /list /sessions /resume /open /rename /fork /delete /clear`
 `/models /model /effort /skills /mcp /output /compact /usage /pending`
-`/interrupt /stop /cancel /steer /older`
+`/interrupt /stop /cancel /steer /unqueue /older`
+`/github list|clone|open|clean|cancel`
 
 `/model <id>` refreshes the catalog first, then matches exact → prefix →
 substring; ambiguous prefixes list the candidates instead of guessing.
 `/models` prints the full catalog rows (limits, cost, effort variants,
-default marker, catalog source).
+default marker, catalog source). The top-right picker and `/model` both
+remember the choice as the default for created chats (`/new`, first
+prompt, `/github open` carry it as the starting model); opening an
+existing session never re-models it.
+
+Approval cards render only in the right-hand inspector (Approvals tab —
+it opens itself on desktop when one arrives); the transcript keeps just
+a pointer line. A follow-up sent while a turn runs queues host-side by
+default and now says so (`queued behind the running turn …`);
+`/unqueue` reclaims it.
 
 `/usage` prints the subscription block plus the session cumulative tokens /
 cost and the context-window line. The footer keeps two separate lines:
@@ -106,15 +165,65 @@ the project (created before `session/start`, sent as `workspaceRoot`) —
 this is what gives the agent shell and file tools. Override per session
 by sending `workspaceRoot`, change the base with `--workspace-base DIR`,
 or pass `--workspace-base ""` to restore the old workspaceless behavior.
-Deleting a session does not delete its workspace directory.
+Deleting a session (`/delete`) removes its files from disk — the dated
+session dir (`~/.local/share/muse/sessions/YYYY/MM/DD/<sessionId>/`)
+and its view-store dir (`.msp-view-v1/<sessionId>/`) — directly, without
+calling the host (whose deletion registry rejects back-to-back deletes
+with `Store(Busy)`). The workspace directory is kept.
 
 To work on an existing on-device directory instead, root the session
 there at creation: `/new --path /dir` in the composer, or press `+`
-and type the directory (blank keeps the default workspace). Any path
+for the filesystem explorer (opens at the server's `$HOME`; the path
+field at the top accepts a pasted absolute path to jump there, and
+`Use default workspace` keeps the default workspace). Any path
 is allowed, but the first session touching one asks for an explicit
 allow in the browser (remembered per browser); the bridge also
 rejects roots that are not existing directories and creates nothing
 outside its workspace base.
+
+## GitHub sessions (gh-only v1)
+
+`GitHub repos` in the sessions drawer (or `/github list [search]`) lists
+your repos via the `gh` CLI — install it and run `gh auth login` in a
+terminal first; the bridge never holds a token. `Open` (or
+`/github open <owner/repo> [name]`) shallow-clones (`--depth 1`, default
+branch only) into `workspaces/<sessionId>/repo/` and roots a session
+there in one step; `Clone` (or `/github clone`) clones without opening.
+Picking a repo to open is the consent, recorded in the browser's
+directory allow-list like a manual-root confirm. One session per clone:
+reopening a session reattaches to its dir, opening the same repo again
+reclones fresh. `/github clean` removes one session's clone (session
+kept); `/github cancel` stops a running clone. Deleting a session does
+not delete its clone. Failures carry a machine-readable `code`
+(`gh_missing`, `gh_unauth`, `invalid_repo`, …) and the UI prints the
+`gh:` stderr tail verbatim.
+
+Every fresh clone also gets the bridge's instruction file
+(`server/github_instructions.md` rendered with the repo name) as
+`AGENTS.md` — unless the repo ships its own, which is never overwritten
+— covering branch/PR conventions with `gh` and how to avoid approval
+prompts. The host loads it via `--trust-workspace` (default on; opt out
+with `--no-trust-workspace`). Sessions rooted at a seeded clone
+(`githubOpen` now, or a later `/new --path` at the same leaf) also get a
+narrow auto-approve policy: all `gh`, everyday `git`, read-only shell
+inspection (`ls`, `cat`, `grep`, `find`, …) and common build/test
+runners (`npm`, `pytest`, `cargo`, `go`, `make`, …) run without
+prompting, while destructive git (`reset --hard`, `clean -f`,
+`push --force`, `branch -D`, …), shell mutation (`rm`, `mv`, `find
+-delete`) and network fetchers (`curl`, `ssh`, …) still ask a human.
+Auto-decisions are announced in the transcript (`auto-approved (github
+policy): …`). In-session network itself is host sandbox policy: the
+deployed unit runs `--sandbox-network enabled` so `gh`/`git` can reach
+github.com (push, PR create); narrower modes stall those flows on
+sandbox denials, and `gh` auth stays yours (`gh auth login`).
+
+Sessions whose workspace directory was removed from disk are hidden
+from the session bar (with a count note). `/sync` (or `Sync now` in the
+bar) previews and, after confirm, removes those sessions' files from
+disk — workspace-base roots only; external manual roots are always left
+alone. The bar lists bridge-created sessions first (tracked in
+`.web-muse-bridge-sids.json` at the session-store root, so the grouping
+survives restarts), then TUI-created ones in host order.
 
 ## HTTP notes
 

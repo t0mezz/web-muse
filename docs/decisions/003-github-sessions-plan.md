@@ -1,8 +1,9 @@
-# 003: GitHub sessions — stage-2 plan (proposal, NOT accepted)
+# 003: GitHub sessions — stage-2 plan (ACCEPTED as gh-only v1)
 
-**Status:** Plan proposal. Nothing below is decided; each open question
-needs its own interview before any stage-2 code. Stage 1 (manual
-paths, record 002) is the prerequisite.
+**Status:** Accepted 2026-10-05 after the stage-2 interview; implemented
+as gh-only v1 (`server/github.py`, WS `github*` types, drawer picker +
+`/github` family, `tests/test_github.py`). PAT fallback, OAuth device
+flow, scheduled clone GC, and full-history/branch picker remain deferred.
 
 ## Goal
 
