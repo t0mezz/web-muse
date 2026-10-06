@@ -23,6 +23,8 @@ const state = {
   // sent message clones it (branch) and roots the new session there.
   pendingRepo: null, stagedPrompt: null, stagedRepo: null, repoBusy: null,
   sessionsHidden: 0,
+  // "Other sessions" group collapsed (persisted across reloads).
+  otherCollapsed: false,
   // Renames the host has admitted but not yet applied (list still shows
   // the old name): sessionId -> {name, at}. Re-applied over every
   // refresh until the host catches up or 30s pass.
@@ -32,6 +34,8 @@ const state = {
 /* ---------- tiny helpers ---------- */
 function toast(msg, isErr) {
   const t = el("toast");
+  t.textContent = "";
+  void t.offsetWidth;
   t.textContent = msg;
   t.classList.toggle("err", !!isErr);
   t.hidden = false;
@@ -50,13 +54,12 @@ function shortId(id) { return (id || "").slice(0, 8); }
 // A later user rename just sets s.name and takes precedence.
 function sessionDisplayName(s) {
   const n = (s && s.name || "").trim();
-  return n || shortId(s && s.sessionId);
+  return n || `Untitled ${shortId(s && s.sessionId)}`;
 }
 function titleForSession(sessionId) {
   const hit = state.sessionsCache.find((s) => s.sessionId === sessionId);
   return sessionDisplayName(hit || { sessionId });
 }
-function esc(s) { return String(s == null ? "" : s); }
 
 /* ---------- websocket ---------- */
 function connect() {
@@ -136,7 +139,9 @@ function onHello(f) {
 
 /* ---------- sessions ---------- */
 async function refreshSessions() {
-  const r = await send({ type: "list", limit: 100 });
+  if (state.listPromise) return state.listPromise;
+  state.listPromise = (async () => {
+    const r = await send({ type: "list", limit: 100 });
   // Rows whose workspace directory was removed from disk stay out of the
   // bar (the bridge flags them); the count keeps the hiding visible.
   const rows = r.sessions || [];
@@ -145,9 +150,11 @@ async function refreshSessions() {
   // Bridge-created sessions first; host order kept within each group
   // (stable sort), so TUI sessions stay exactly as the host listed them.
   state.sessionsCache.sort((a, b) => ((b.bridgeCreated ? 1 : 0) - (a.bridgeCreated ? 1 : 0)));
-  applyPendingNames();
-  renderSessionList(state.sessionsCache);
-  return r;
+    applyPendingNames();
+    renderSessionList(state.sessionsCache);
+    return r;
+  })().finally(() => { state.listPromise = null; });
+  return state.listPromise;
 }
 
 // Re-apply admitted-but-unapplied renames over fresh list rows. Drops
@@ -167,95 +174,321 @@ function applyPendingNames() {
   }
 }
 
+/* Cursor-style terse relative time: "now", "5m", "3h", "2d", "Oct 5". */
+function sessRelTime(iso) {
+  const t = Date.parse(iso || "");
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)}d`;
+  const d = new Date(t);
+  return d.getFullYear() === new Date().getFullYear()
+    ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    : d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+/* Human status label: allowlisted tokens only, never raw host text. */
+function sessStatusLabel(s) {
+  const st = String((s && s.status) || "").toLowerCase().replace(/[_-]+/g, " ").trim();
+  if (!st || st === "idle") return "Idle";
+  if (st === "running") return "Working";
+  if (st === "notloaded" || st === "not loaded" || st === "saved") return "Saved";
+  if (st.includes("fail") || st.includes("error")) return "Failed";
+  if (st === "starting") return "Starting";
+  if (st === "paused") return "Paused";
+  return "Unknown";
+}
+
+/* Second-line preview: turn count (correct singular) + status. */
+function sessPreview(s) {
+  const n = Number((s && s.turnCount) || 0);
+  return (n > 0 ? `${n} turn${n === 1 ? "" : "s"}` : "Empty") + ` · ${sessStatusLabel(s)}`;
+}
+
+/* Unnamed sessions show a raw id prefix: render it mono + dimmed. */
+function sessIsUnnamed(s) { return !(s && (s.name || "").trim()); }
+
+/* Correct singular/plural without "(s)" litter. */
+function sessN(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
+
+
+
 function renderSessionList(sessions) {
-  const q = (el("session-filter").value || "").toLowerCase();
+  const rawFilter = el("session-filter").value || "";
+  const q = rawFilter.trim().toLowerCase();
   const box = el("session-list");
+  const ae = document.activeElement;
+  const aeRow = ae && ae.closest ? ae.closest(".session-row") : null;
+  const focusKey = aeRow && box.contains(aeRow) && aeRow.dataset.sid
+    ? { sid: aeRow.dataset.sid, sel: ae.classList.contains("config-btn") ? ".config-btn" : ".sess-open" }
+    : null;
+  if (document.querySelector(".row-menu:not([hidden])")) {
+    state.listDirty = true;
+    return;
+  }
+  const qChanged = q !== renderSessionList._q;
+  renderSessionList._q = q;
+  const prevScroll = box.scrollTop;
   box.innerHTML = "";
   const rows = sessions.filter((s) =>
-    !q || sessionDisplayName(s).toLowerCase().includes(q) || (s.sessionId || "").toLowerCase().includes(q));
+    !q || sessionDisplayName(s).toLowerCase().includes(q)
+    || (s.sessionId || "").toLowerCase().includes(q)
+    || sessPreview(s).toLowerCase().includes(q));
+  // Recency within each bridge group (bridge-first order applied above).
+  // Missing/unparseable dates sink (NaN would scatter under the comparator).
+  const byTime = (a, b) => (Date.parse(b.updatedAt || "") || 0) - (Date.parse(a.updatedAt || "") || 0);
+  const web = rows.filter((s) => s.bridgeCreated).sort(byTime);
+  const other = rows.filter((s) => !s.bridgeCreated).sort(byTime);
+  const groups = [];
+  if (web.length) groups.push(["web", sessN(web.length, "Web session"), web]);
+  if (other.length) groups.push(["other", web.length
+    ? sessN(other.length, "Other session")
+    : sessN(other.length, "Session"), other]);
   if (!rows.length) {
     const d = document.createElement("div");
-    d.className = "session-row"; d.textContent = "No sessions yet — press ＋ or /new.";
+    d.className = "session-empty";
+    d.textContent = sessions.length
+      ? "No sessions match — clear the filter or start a new session."
+      : "No sessions yet — press ＋ or /new.";
     box.append(d);
   } else {
-    for (const s of rows) {
-      appendSessionRow(box, s);
+    for (const [kind, label, list] of groups) {
+      const h = document.createElement("h2");
+      h.className = "sess-group";
+      h.id = `sess-group-${kind}`;
+      box.append(h);
+      const sec = document.createElement("div");
+      sec.className = "sess-sec";
+      sec.setAttribute("role", "list");
+      sec.setAttribute("aria-labelledby", h.id);
+      if (kind === "other") {
+        const t = document.createElement("button");
+        t.type = "button";
+        t.className = "sess-toggle";
+        t.id = `${h.id}-btn`;
+        t.textContent = label;
+        sec.id = `sess-sec-${kind}`;
+        t.setAttribute("aria-controls", sec.id);
+        const collapsed = !!state.otherCollapsed;
+        sec.hidden = collapsed;
+        t.setAttribute("aria-expanded", String(!collapsed));
+        t.onclick = () => {
+          const hide = !sec.hidden;
+          sec.hidden = hide;
+          state.otherCollapsed = hide;
+          saveOtherCollapsed();
+          t.setAttribute("aria-expanded", String(!hide));
+        };
+        h.append(t);
+        sec.setAttribute("aria-labelledby", t.id);
+      } else {
+        h.textContent = label;
+      }
+      for (const s of list) appendSessionRow(sec, s);
+      box.append(sec);
+    }
+  }
+  let focusScrolled = false;
+  if (focusKey) {
+    const ctl = box.querySelector(`.session-row[data-sid="${CSS.escape(focusKey.sid)}"] ${focusKey.sel}`);
+    if (ctl && ctl.offsetParent !== null) {
+      const row = ctl.closest(".session-row");
+      const lr = box.getBoundingClientRect(), rr = row.getBoundingClientRect();
+      if (rr.top < lr.top || rr.bottom > lr.bottom) {
+        row.scrollIntoView({ block: "nearest" });
+        focusScrolled = true;
+      }
+      ctl.focus({ preventScroll: true });
+    } else {
+      const fallback = box.querySelector(".sess-open") || el("session-filter");
+      if (fallback) fallback.focus({ preventScroll: true });
+    }
+  }
+  const counter = el("sess-count");
+  if (counter) {
+    clearTimeout(counter._t);
+    if (q) {
+      const text = !rows.length
+        ? `No sessions match "${rawFilter.trim()}"`
+        : rows.length < sessions.length
+          ? `Showing ${sessN(rows.length, "session")} of ${sessions.length}`
+          : `${sessN(sessions.length, "session")}`;
+      counter._t = setTimeout(() => { counter.textContent = text; counter.hidden = false; }, 400);
+    } else {
+      counter.hidden = true;
+      counter.textContent = "";
     }
   }
   if (state.sessionsHidden > 0) {
     const n = document.createElement("div");
     n.className = "meta";
-    n.textContent = `${state.sessionsHidden} session(s) hidden — workspace directory removed.`;
+    n.textContent = `${sessN(state.sessionsHidden, "session")} hidden — workspace directory removed.`;
     const b = document.createElement("button");
+    b.type = "button";
     b.className = "sync-btn"; b.textContent = "Sync now";
     b.title = "Preview and delete session files whose workspace directory is gone (/sync)";
     b.onclick = (e) => { e.stopPropagation(); cmdSync(); };
     n.append(b);
     box.append(n);
   }
-  if (!rows.length) return;
+  if (!focusScrolled) box.scrollTop = qChanged ? 0 : Math.min(prevScroll, box.scrollHeight);
 }
 
 function appendSessionRow(box, s) {
   const row = document.createElement("div");
   row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "");
-  row.setAttribute("role", "option");
-  const top = document.createElement("div");
-  top.className = "top";
-  const dot = document.createElement("span");
-  dot.className = "status-dot" + (s.status === "running" ? " running" : "");
+  row.setAttribute("role", "listitem");
+  row.dataset.sid = s.sessionId;
+  const icon = document.createElement("span");
+  const running = sessStatusLabel(s) === "Working";
+  icon.className = "sess-icon" + (running ? " running" : "");
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.4 8.2l1.8 1.8 3.4-3.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "sess-open";
+  const openSpoken = sessRelTime(s.updatedAt) && !Number.isNaN(Date.parse(s.updatedAt || ""))
+    ? `${sessionDisplayName(s)} — ${sessPreview(s)} — ${new Date(s.updatedAt).toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}`
+    : `${sessionDisplayName(s)} — ${sessPreview(s)}`;
+  open.setAttribute("aria-label", openSpoken);
+  if (s.sessionId === state.sessionId) open.setAttribute("aria-current", "true");
+  open.onclick = (e) => { e.stopPropagation(); openSession(s.sessionId); };
+  const top = document.createElement("span");
+  top.className = "top sess-line";
   const nm = document.createElement("span");
-  nm.className = "name";
+  nm.className = "name" + (sessIsUnnamed(s) ? " unnamed" : "");
   nm.textContent = sessionDisplayName(s);
-  nm.title = (s.name || "").trim() ? s.name : s.sessionId;
+  const nmId = (s.name || "").trim() ? `${s.name.trim()} · ${s.sessionId}` : s.sessionId;
+  nm.title = nmId;
+  const tm = document.createElement("time");
+  tm.className = "sess-time";
+  tm.textContent = sessRelTime(s.updatedAt);
+  const tt = Date.parse(s.updatedAt || "");
+  if (Number.isNaN(tt)) {
+    tm.title = s.updatedAt || "";
+  } else {
+    tm.dateTime = new Date(tt).toISOString();
+    tm.title = new Date(tt).toLocaleString();
+  }
+  if (!tm.textContent) tm.hidden = true;
   const cfg = document.createElement("button");
+  cfg.type = "button";
   cfg.className = "config-btn";
   cfg.title = "Session actions";
   cfg.setAttribute("aria-label", `Actions for ${sessionDisplayName(s)}`);
   cfg.setAttribute("aria-haspopup", "menu");
-  cfg.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="8" cy="3.6" r="1.7"/><circle cx="4.4" cy="11.4" r="1.7"/><circle cx="11.6" cy="11.4" r="1.7"/></svg>';
-  top.append(dot, nm, cfg);
-  const meta = document.createElement("div");
-  meta.className = "meta";
-  meta.textContent = `${s.status || "—"} · ${s.turnCount || 0} turns · ${esc((s.updatedAt || "").slice(0, 16).replace("T", " "))}`;
+  cfg.setAttribute("aria-expanded", "false");
+  cfg.innerHTML = '<svg viewBox="0 0 32 32" width="16" height="16" aria-hidden="true"><path class="line line-top-bottom" d="M27 10 13 10C10.8 10 9 8.2 9 6 9 3.5 10.8 2 13 2 15.2 2 17 3.8 17 6L17 26C17 28.2 18.8 30 21 30 23.2 30 25 28.2 25 26 25 23.8 23.2 22 21 22L7 22"/><path class="line" d="M7 16 27 16"/></svg>';
+  top.append(nm, tm);
+  const meta = document.createElement("span");
+  meta.className = "meta sess-preview";
+  meta.textContent = sessPreview(s);
+  const body = document.createElement("span");
+  body.className = "sess-body";
+  body.append(top, meta);
+  open.append(icon, body);
   // Path hidden by design; identity stays on the name hover. Row actions
   // live behind the config button.
   const menu = document.createElement("div");
   menu.className = "row-menu"; menu.hidden = true;
   menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", `Actions for ${sessionDisplayName(s)}`);
+  menu.id = `rowmenu-${s.sessionId}`;
+  cfg.setAttribute("aria-controls", menu.id);
   const mkItem = (label, danger, fn) => {
     const b = document.createElement("button");
+    b.type = "button";
     b.className = "row-opt" + (danger ? " danger" : "");
     b.setAttribute("role", "menuitem");
+    b.setAttribute("aria-label", `${label} ${sessionDisplayName(s)}`);
     b.textContent = label;
     b.onclick = (e) => {
       e.stopPropagation();
-      menu.hidden = true; fn();
+      const op = menu._opener;
+      closeRowMenus();
+      if (op && op.isConnected) op.focus({ preventScroll: true });
+      fn();
     };
     return b;
   };
   menu.append(
-    mkItem("open", false, () => openSession(s.sessionId)),
     mkItem("rename", false, () => renameSession(s.sessionId)),
     mkItem("fork", false, () => forkSession(s.sessionId)),
     mkItem("delete", true, () => deleteSession(s.sessionId)),
   );
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  menu.addEventListener("focusout", (e) => {
+    if (!menu.contains(e.relatedTarget)) closeRowMenus();
+  });
+  menu.addEventListener("keydown", (e) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const items = [...menu.querySelectorAll(".row-opt")];
+    if (!items.length) return;
+    let i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") i = (i + 1) % items.length;
+    else if (e.key === "ArrowUp") i = (i - 1 + items.length) % items.length;
+    else if (e.key === "Home") i = 0;
+    else i = items.length - 1;
+    items[i].focus();
+  });
+  // Clicking the opener while its menu is open must close, not reopen:
+  // without this, mousedown steals focus first, the menu focusout closes
+  // it, and the click then sees a hidden menu and reopens it.
+  cfg.addEventListener("mousedown", (e) => { if (!menu.hidden) e.preventDefault(); });
   cfg.onclick = (e) => {
     e.stopPropagation();
-    const was = menu.hidden;
+    const willOpen = menu.hidden;
     closeRowMenus();
-    menu.hidden = !was;
+    if (!cfg.isConnected) return;
+    menu.hidden = !willOpen;
+    cfg.setAttribute("aria-expanded", String(willOpen));
+    if (!willOpen) cfg.focus({ preventScroll: true });
+    if (willOpen) {
+      menu._opener = cfg;
+      menu.classList.remove("flip");
+      const first = menu.querySelector(".row-opt");
+      if (first) first.focus({ preventScroll: true });
+      const lb = el("session-list").getBoundingClientRect();
+      const mb = menu.getBoundingClientRect();
+      if (mb.bottom > lb.bottom) {
+        menu.classList.add("flip");
+        if (menu.getBoundingClientRect().top < lb.top) menu.classList.remove("flip");
+      }
+    }
   };
-  row.append(top, meta, menu);
-  row.onclick = () => openSession(s.sessionId);
+  row.append(open, cfg, menu);
   box.append(row);
 }
 
 function closeRowMenus() {
   document.querySelectorAll(".row-menu").forEach((m) => { m.hidden = true; });
+  document.querySelectorAll(".config-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+  if (state.listDirty) {
+    state.listDirty = false;
+    renderSessionList(state.sessionsCache);
+    return true;
+  }
+  return false;
 }
 
+function syncClearBtn() { el("btn-clear-filter").hidden = !el("session-filter").value.trim(); }
+
+// Relative times go stale: refresh the visible list once a minute while
+// the drawer is open (skipped with a menu open so popups aren't yanked).
+setInterval(() => {
+  if (document.hidden || !navigator.onLine) return;
+  if (!el("sessions").classList.contains("open")) return;
+  if (document.querySelector(".row-menu:not([hidden])")) { state.listDirty = true; return; }
+  el("session-list").querySelectorAll("time.sess-time").forEach((t) => {
+    if (t.dateTime) t.textContent = sessRelTime(t.dateTime);
+  });
+}, 60000);
+
 async function openSession(sessionId) {
+  closeRowMenus();
   clearTranscript();
   state.sessionId = sessionId;
   updateRepoBar();
@@ -302,6 +535,7 @@ async function openSession(sessionId) {
     if (sub) handleSubscribeResult(sub);
     fetchPending();
     renderSessionList(state.sessionsCache);
+    el("input").focus();
     scrollDown(true);
   } catch (e) {
     // A session deleted outside the app (host TUI, another client, host
@@ -424,7 +658,11 @@ async function newSession(name, opts) {
 async function renameSession(sessionId, name, quiet) {
   const sid = sessionId || state.sessionId;
   if (!sid) return toast("no session", true);
-  const nm = (name != null ? name : prompt("Session name:") || "");
+  const hit = state.sessionsCache.find((s) => s.sessionId === sid);
+  // Prefill the real host name only: prefilling the synthetic
+  // "Untitled <id>" placeholder would save it as a permanent name.
+  const cur = hit ? (hit.name || "").trim() : "";
+  const nm = (name != null ? name : prompt("Session name:", cur) || "");
   if (!nm.trim()) return;
   try {
     await send({ type: "rename", sessionId: sid, name: nm.trim() });
@@ -527,6 +765,8 @@ function closeDrawer() {
   // Auto-shut is a mobile-drawer behavior; the desktop panel is
   // user-toggled and must survive session open/new.
   if (!isNarrow()) return;
+  if (el("sessions").contains(document.activeElement)) el("btn-sessions").focus();
+  closeRowMenus();
   el("sessions").classList.remove("open");
   syncScrim();
   savePanelState();
@@ -534,11 +774,14 @@ function closeDrawer() {
 function toggleSessions() {
   const p = el("sessions");
   if (p.classList.contains("open")) {
+    if (p.contains(document.activeElement)) el("btn-sessions").focus();
+    closeRowMenus();
     p.classList.remove("open");
   } else {
     if (isNarrow()) el("inspector").classList.remove("open");
     p.classList.add("open");
     refreshSessions().catch(() => {});
+    el("session-filter").focus();
   }
   syncScrim();
   savePanelState();
@@ -546,6 +789,7 @@ function toggleSessions() {
 function toggleInspector() {
   el("inspector").classList.toggle("open");
   if (isNarrow() && el("inspector").classList.contains("open")) {
+    closeRowMenus();
     el("sessions").classList.remove("open");
   }
   syncScrim();
@@ -561,6 +805,13 @@ function closeInspector() {
 // defaults to both bars hidden; opening them is explicit and persisted.
 const PANEL_KEYS = { sessions: "webmuse.sessionsOpen",
   inspector: "webmuse.inspectorOpen" };
+// "Other sessions" group visibility persists across reloads; default expanded.
+const OTHER_COLLAPSED_KEY = "webmuse.otherCollapsed";
+function saveOtherCollapsed() {
+  try {
+    localStorage.setItem(OTHER_COLLAPSED_KEY, state.otherCollapsed ? "1" : "0");
+  } catch (_) { /* storage unavailable: lasts the session */ }
+}
 function savePanelState() {
   try {
     localStorage.setItem(PANEL_KEYS.sessions,
@@ -583,6 +834,9 @@ function restorePanelState() {
     el("sessions").classList.toggle("open", s === "1");
     el("inspector").classList.toggle("open", insp === "1");
   }
+  try {
+    state.otherCollapsed = localStorage.getItem(OTHER_COLLAPSED_KEY) === "1";
+  } catch (_) {}
   syncScrim();
 }
 
@@ -742,7 +996,7 @@ function itemHeadLabel(it, kind) {
   // Transcript head line: kind plus tool call type and status when set.
   const stamp = it.timestamp || it.recordedAt;
   const when = stamp ? " · " + String(stamp).slice(11, 19) : "";
-  if (kind !== "tool") return esc(it.kind || kind) + when;
+  if (kind !== "tool") return String(it.kind || kind) + when;
   return [it.kind || kind, toolType(it), it.status].filter(Boolean).join(" · ") + when;
 }
 
@@ -1018,7 +1272,7 @@ function syncToolRow(itemId, it) {
     el("tab-tools").prepend(row);
     state.tools.set(itemId, row);
   }
-  row.querySelector(".t").textContent = esc([toolType(it), it.status].filter(Boolean).join(" · ") || it.kind || "tool");
+  row.querySelector(".t").textContent = String([toolType(it), it.status].filter(Boolean).join(" · ") || it.kind || "tool");
   row.querySelector(".s").textContent = toolSummary(it) || JSON.stringify(it).slice(0, 500);
 }
 
@@ -1164,9 +1418,9 @@ function onEvent(method, p) {
       });
       const term = p.terminal || "completed";
       if (term === "failed") {
-        sysLine("turn failed: " + esc((p.error && (p.error.message || p.error.code)) || p.reason || "unknown"), true);
+        sysLine("turn failed: " + String((p.error && (p.error.message || p.error.code)) || p.reason || "unknown"), true);
       } else if (term === "cancelled") {
-        sysLine("turn cancelled." + (p.reason ? " " + esc(p.reason) : ""));
+        sysLine("turn cancelled." + (p.reason ? " " + String(p.reason) : ""));
       } else if (p.usage && p.usage.totalTokens != null) {
         sysLine(`turn done · ${p.usage.totalTokens} tok` +
           (p.durationMs != null ? ` · ${(p.durationMs / 1000).toFixed(1)}s` : ""));
@@ -1185,7 +1439,7 @@ function onEvent(method, p) {
       sysLine("queued turn reclaimed.");
       break;
     case "turn/retryScheduled":
-      sysLine("turn retry scheduled" + (p.reason ? ": " + esc(p.reason) : "") + ".");
+      sysLine("turn retry scheduled" + (p.reason ? ": " + String(p.reason) : "") + ".");
       break;
     case "session/statusChanged":
       state.running = p.status === "running"; updateRunChip();
@@ -1227,7 +1481,7 @@ function onEvent(method, p) {
       onGithubResult(p);
       break;
     case "githubAutoApproved":
-      sysLine(`auto-approved (github policy): ${esc(p.command || "gh command")}`);
+      sysLine(`auto-approved (github policy): ${String(p.command || "gh command")}`);
       break;
     case "session/listChanged":
     case "session/started":
@@ -1778,9 +2032,14 @@ async function cmdResume(args) {
       `  ${s.sessionId.slice(0, 8)}  ${s.name || "(unnamed)"}  [${s.status || "?"}]`).join("\n"));
     return;
   }
-  const hit = state.sessionsCache.find((s) => s.sessionId.toLowerCase().startsWith(prefix));
-  if (!hit) { sysLine("No session matches prefix " + prefix, true); return; }
-  await openSession(hit.sessionId);
+  const hits = state.sessionsCache.filter((s) => s.sessionId.toLowerCase().startsWith(prefix));
+  if (!hits.length) { sysLine("No session matches prefix " + prefix, true); return; }
+  if (hits.length > 1) {
+    sysLine("Ambiguous prefix " + prefix + " — matches:\n" + hits.map((s) =>
+      `  ${s.sessionId.slice(0, 8)}  ${s.name || "(unnamed)"}`).join("\n"), true);
+    return;
+  }
+  await openSession(hits[0].sessionId);
 }
 
 function fmtModelRow(m) {
@@ -2506,7 +2765,7 @@ el("input").addEventListener("keydown", (ev) => {
       ev.preventDefault(); applySlash(); return;
     }
   }
-  if (ev.key === "Escape") { el("slash-popup").hidden = true; closeRepoMenus(); if (state.running) cmdCancel(); return; }
+  if (ev.key === "Escape") { el("slash-popup").hidden = true; closeRepoMenus(); const om = document.querySelector(".row-menu:not([hidden])"); if (om) { const op = om._opener; closeRowMenus(); if (op) op.focus(); return; } if (state.running) cmdCancel(); return; }
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); el("composer").requestSubmit(); return; }
   if (ev.key === "ArrowUp" && (el("input").selectionStart === 0 || !el("input").value)) {
     // Only hijack Up at top-of-input for history.
@@ -2528,6 +2787,20 @@ document.addEventListener("keydown", (ev) => {
     // already cancelled above (skip its bubbled copy to avoid double).
     if (!el("dir-dialog").hidden) return;
     if (ev.target === el("input")) return;
+    const openMenu = document.querySelector(".row-menu:not([hidden])");
+    if (openMenu) { const op = openMenu._opener; closeRowMenus(); if (op) op.focus(); return; }
+    if (ev.target === el("session-filter")) {
+      if (el("session-filter").value.trim() !== "") {
+        el("session-filter").value = "";
+        syncClearBtn();
+        renderSessionList(state.sessionsCache);
+      } else {
+        document.querySelector(".filter-box").hidden = true;
+        el("btn-search-sessions").setAttribute("aria-expanded", "false");
+        el("btn-search-sessions").focus();
+      }
+      return;
+    }
     if (state.running) cmdCancel();
     return;
   }
@@ -2618,6 +2891,19 @@ function renderDir(r) {
   }
 }
 el("btn-new").onclick = () => { openDirDialog(); };
+el("btn-search-sessions").onclick = () => {
+  const box = document.querySelector(".filter-box");
+  const show = box.hidden;
+  box.hidden = !show;
+  el("btn-search-sessions").setAttribute("aria-expanded", String(show));
+  if (show) {
+    el("session-filter").focus();
+  } else {
+    el("session-filter").value = "";
+    syncClearBtn();
+    renderSessionList(state.sessionsCache);
+  }
+};
 el("dir-go").onclick = () => loadDir(el("dir-path").value.trim());
 el("dir-path").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter") { ev.preventDefault(); loadDir(el("dir-path").value.trim()); }
@@ -2639,8 +2925,67 @@ el("dir-use").onclick = () => {
   newSession(undefined, { workspaceRoot: p });
   closeDrawer();
 };
-el("btn-refresh-sessions").onclick = () => refreshSessions().catch((e) => toast(e.message, true));
-el("session-filter").oninput = () => renderSessionList(state.sessionsCache);
+el("btn-refresh-sessions").onclick = async () => {
+  if (state.listBusy) return;
+  state.listBusy = true;
+  const btn = el("btn-refresh-sessions");
+  // Restart the one-shot 360° on every press, even mid-tail of a prior spin.
+  btn.classList.remove("spin");
+  void btn.offsetWidth;
+  btn.classList.add("spin");
+  btn.setAttribute("aria-busy", "true");
+  btn.setAttribute("aria-disabled", "true");
+  try {
+    await refreshSessions();
+    toast("sessions refreshed");
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    state.listBusy = false;
+    btn.removeAttribute("aria-busy");
+    btn.removeAttribute("aria-disabled");
+    // The refresh usually beats the 650ms spin: keep the class until the
+    // one-shot finishes, otherwise add+remove land before paint and the
+    // animation never starts.
+    setTimeout(() => btn.classList.remove("spin"), 650);
+  }
+};
+el("session-filter").oninput = () => {
+  const rendered = closeRowMenus();
+  syncClearBtn();
+  if (!rendered) renderSessionList(state.sessionsCache);
+};
+el("btn-clear-filter").onclick = () => {
+  el("session-filter").value = "";
+  const rendered = closeRowMenus();
+  syncClearBtn();
+  if (!rendered) renderSessionList(state.sessionsCache);
+  el("session-filter").focus();
+};
+el("session-filter").addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowDown") return;
+  const first = el("session-list").querySelector(".sess-open");
+  if (first) { e.preventDefault(); first.focus(); }
+});
+// Arrow-key movement between rows (all row buttons stay tabbable).
+el("session-list").addEventListener("keydown", (e) => {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+  const btns = [...el("session-list").querySelectorAll(".sess-open, .config-btn")];
+  const i = btns.indexOf(document.activeElement);
+  if (i === -1) return;
+  if (e.key === "ArrowUp" && i === 0) {
+    e.preventDefault();
+    el("session-filter").focus();
+    return;
+  }
+  let n = i;
+  if (e.key === "ArrowDown") n = Math.min(i + 1, btns.length - 1);
+  else if (e.key === "ArrowUp") n = Math.max(i - 1, 0);
+  else if (e.key === "Home") n = 0;
+  else n = btns.length - 1;
+  e.preventDefault();
+  btns[n].focus();
+});
 el("repo-pill").onclick = (e) => { e.stopPropagation(); if (!state.repoBusy) toggleRepoMenu(); };
 el("branch-pill").onclick = (e) => { e.stopPropagation(); if (!state.repoBusy) toggleBranchMenu(); };
 el("btn-older").onclick = loadOlder;
