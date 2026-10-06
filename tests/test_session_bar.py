@@ -414,5 +414,92 @@ class TestBridgeFirstOrdering(unittest.TestCase):
             self.assertIn(marker, APP_JS)
 
 
+class TestSessionViewCursor(unittest.TestCase):
+    """Cursor-like session view: grouped rows, relative time, human status."""
+
+    def test_human_helpers_present(self):
+        for marker in ("sessRelTime", "sessStatusLabel", "sessPreview",
+                       "sessIsUnnamed", "sess-group", "sess-time",
+                       "sess-preview", "sess-icon"):
+            self.assertIn(marker, APP_JS)
+
+    def test_no_raw_host_status_in_rows(self):
+        self.assertNotIn("${s.turnCount", APP_JS)
+        self.assertNotIn("notLoaded ·", APP_JS)
+
+    def test_singular_turn_and_group_labels(self):
+        for marker in ('turn${n === 1 ? "" : "s"}',
+                       '"Web session"', 'sessN(other.length, "Session")',
+                       "Showing ${sessN", "toLocaleDateString"):
+            self.assertIn(marker, APP_JS)
+        self.assertNotIn("Yesterday", APP_JS)
+
+    def test_row_accessibility_and_layout(self):
+        for marker in ("sess-open", "sess-line", "data-sid",
+                       "session-count", "(hover: none)",
+                       "aria-expanded", "focus-within"):
+            self.assertIn(marker, APP_JS + STYLE_CSS)
+        self.assertIn(":focus-visible", STYLE_CSS)
+        self.assertIn("listitem", APP_JS)
+        self.assertNotIn("function esc(", APP_JS)
+        self.assertNotIn(" esc(it", APP_JS)
+
+    def test_honest_fallbacks(self):
+        self.assertIn("Untitled ${shortId", APP_JS)
+        self.assertIn('return "Unknown"', APP_JS)
+        self.assertIn('return "Failed"', APP_JS)
+        self.assertNotIn(".status-dot", STYLE_CSS)
+
+    def test_group_semantics_and_menu_behavior(self):
+        for marker in ("sess-sec", 'role", "menu"', "aria-label",
+                       "flip", "focusout", "_opener",
+                       "toLocaleString", "sessN", "sess-count",
+                       "aria-current", "60000", "rawFilter",
+                       'menu.addEventListener("keydown"',
+                       'el("session-filter").value = ""',
+                       "box-shadow: 0 8px 24px", "sess-group-${kind}",
+                       'createElement("h2")', "aria-labelledby",
+                       'el("session-filter").focus()',
+                       'el("btn-sessions").focus()',
+                       'role", "list"', "box.append(h)",
+                       'prompt("Session name:", cur)',
+                       "listBusy", "sess-spin", "prevScroll",
+                       "aria-controls", "createElement(\"time\")",
+                       "sessions refreshed", "sess-body",
+                       "btn-clear-filter", "Starting", "Paused"):
+            self.assertIn(marker, APP_JS + STYLE_CSS)
+        self.assertNotIn("sec.append(h)", APP_JS)
+
+    def test_search_toggle_hides_on_empty_escape(self):
+        self.assertIn("filter-box", APP_JS)
+        self.assertIn('btn-search-sessions").focus()', APP_JS)
+
+    def test_other_collapse_persists(self):
+        self.assertIn("webmuse.otherCollapsed", APP_JS)
+        self.assertIn("saveOtherCollapsed()", APP_JS)
+        self.assertIn("localStorage.setItem(OTHER_COLLAPSED_KEY", APP_JS)
+        self.assertIn("localStorage.getItem(OTHER_COLLAPSED_KEY", APP_JS)
+
+    def test_header_icons_pinned_right_and_dim(self):
+        self.assertIn("#btn-search-sessions", STYLE_CSS)
+        self.assertIn("margin-left: auto", STYLE_CSS)
+        for marker in ("#btn-search-sessions:hover", "position: absolute",
+                        ".session-row:hover .sess-time"):
+            self.assertIn(marker, STYLE_CSS)
+
+    def test_sidebar_chrome(self):
+        index_html = (ROOT / "web" / "index.html").read_text()
+        self.assertNotIn("btn-new-session", index_html + APP_JS + STYLE_CSS)
+        self.assertIn("btn-search-sessions", index_html)
+        self.assertIn("sess-toggle", APP_JS)
+        self.assertIn("sessions-h1", index_html)
+        self.assertIn("aria-labelledby", index_html + APP_JS)
+        for marker in (".sess-group", ".sess-time", ".sess-preview",
+                       ".sess-icon", ".sess-toggle",
+                       ".session-row.active { background:"):
+            self.assertIn(marker, STYLE_CSS)
+        self.assertNotIn("border-left: 3px solid var(--accent)", STYLE_CSS)
+
+
 if __name__ == "__main__":
     unittest.main()

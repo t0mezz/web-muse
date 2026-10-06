@@ -18,19 +18,27 @@
     <select id="model-picker" title="Model" aria-label="Model"><option value="">model…</option></select>
     <button id="btn-inspector" title="Toggle inspector (Ctrl+.)" aria-label="Inspector">ⓘ</button>
     <a id="btn-progress" href="/progress.html" title="Live bridge status page" aria-label="Progress">⏱</a>
-    <button id="btn-new" title="New session (/new)">＋</button>
+    <button id="btn-new" title="New session (/new)" aria-label="New session">＋</button>
   </header>
 
   <div id="layout">
-    <aside id="sessions" aria-label="Sessions">
+    <aside id="sessions" aria-labelledby="sessions-h1">
+      <h1 class="vh" id="sessions-h1">Sessions</h1>
       <div class="side-head">
-        <input id="session-filter" type="search" placeholder="Filter sessions…" aria-label="Filter sessions">
+        <span class="filter-box" hidden>
+          <input id="session-filter" type="search" placeholder="Filter sessions…" aria-label="Filter sessions">
+          <button id="btn-clear-filter" title="Clear filter" aria-label="Clear filter" hidden>✕</button>
+        </span>
+        <button id="btn-search-sessions" title="Search sessions" aria-label="Search sessions" aria-expanded="false">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+        </button>
         <button id="btn-refresh-sessions" title="Refresh list (/list)" aria-label="Refresh sessions">
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>
         </button>
-        <button id="btn-close-sessions" title="Close">✕</button>
+        <button id="btn-close-sessions" title="Close" aria-label="Close sessions">✕</button>
       </div>
-      <div id="session-list" role="listbox" aria-label="Session list"></div>
+      <div id="sess-count" class="session-count" role="status" hidden></div>
+      <div id="session-list"></div>
     </aside>
     <div id="scrim" hidden></div>
 
