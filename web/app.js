@@ -2506,7 +2506,7 @@ el("input").addEventListener("keydown", (ev) => {
       ev.preventDefault(); applySlash(); return;
     }
   }
-  if (ev.key === "Escape") { el("slash-popup").hidden = true; closeRepoMenus(); return; }
+  if (ev.key === "Escape") { el("slash-popup").hidden = true; closeRepoMenus(); if (state.running) cmdCancel(); return; }
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); el("composer").requestSubmit(); return; }
   if (ev.key === "ArrowUp" && (el("input").selectionStart === 0 || !el("input").value)) {
     // Only hijack Up at top-of-input for history.
@@ -2522,6 +2522,15 @@ el("btn-stop").onclick = () => cmdInterrupt();
 el("btn-send").onclick = null; // submit via form
 el("btn-sessions").onclick = toggleSessions;
 document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    // Turn canceling on Escape anywhere outside the composer: the
+    // directory dialog owns Escape while open, and the composer input
+    // already cancelled above (skip its bubbled copy to avoid double).
+    if (!el("dir-dialog").hidden) return;
+    if (ev.target === el("input")) return;
+    if (state.running) cmdCancel();
+    return;
+  }
   if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey) {
     const k = (ev.key || "").toLowerCase();
     if (k === "b") {
