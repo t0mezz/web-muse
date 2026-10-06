@@ -11,7 +11,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 760px; margin: 0 auto; padding: 20px 16px 40px; }
+main { max-width: 760px; margin: 0 auto; padding: 20px 16px 40px; text-align: center; }
 header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 h1 { font-size: 18px; margin: 0; flex: 1; }
 a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
@@ -29,14 +29,14 @@ a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
 h2 { font-size: 13px; color: var(--dim); margin: 18px 0 6px; font-weight: 600; }
 #log { background: #0a0c10; border: 1px solid var(--line); border-radius: 12px;
   font-family: var(--mono); font-size: 12px; padding: 10px 12px; max-height: 46vh;
-  overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  overflow-y: auto; display: flex; flex-direction: column; gap: 2px; text-align: left; }
 #log[hidden] { display: none; }
 #log .ts { color: #6b7280; margin-right: 8px; }
 #log .ev-ok { color: var(--ok); }
 #log .ev-err { color: var(--err); }
 #log .ev-info { color: var(--dim); }
 #log .ev-live { color: var(--accent); }
-.row { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.row { display: flex; gap: 8px; margin-top: 12px; align-items: center; justify-content: center; }
 button { background: var(--panel); color: var(--fg); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
 button:hover { border-color: var(--accent); }
