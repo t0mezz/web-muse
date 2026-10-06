@@ -1224,8 +1224,65 @@ function setBodyContent(rec, txt, kind, streaming) {
   const s = String(txt == null ? "" : txt);
   const useMd = !streaming && (kind === "agent" || kind === "user") && !!s.trim();
   rec.body.classList.toggle("md", useMd);
-  if (useMd) rec.body.innerHTML = renderMarkdown(s);
-  else rec.body.textContent = s;
+  if (useMd) {
+    rec.body.innerHTML = renderMarkdown(s);
+    addCodeCopyButtons(rec.body);
+  } else rec.body.textContent = s;
+}
+
+/* Code-block copy buttons: a small transparent copy/check button pinned
+ * top-right of each fenced block, after the animate-ui CopyButton
+ * (clipboard write with execCommand fallback, check feedback for 3s). */
+const COPY_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+const CHECK_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+function addCodeCopyButtons(root) {
+  root.querySelectorAll("pre").forEach((pre) => {
+    if (pre.parentElement && pre.parentElement.classList.contains("code-wrap")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "code-wrap";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-btn";
+    btn.setAttribute("aria-label", "Copy code to clipboard");
+    btn.title = "Copy code to clipboard";
+    btn.innerHTML = COPY_SVG;
+    btn.onclick = () => copyCodeBlock(btn, pre);
+    pre.replaceWith(wrap);
+    wrap.append(pre, btn);
+  });
+}
+function copyCodeBlock(btn, pre) {
+  const code = pre.querySelector("code");
+  const text = code ? code.textContent : pre.textContent;
+  if (!text) return;
+  const done = () => flashCopied(btn);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done)
+      .catch((e) => console.error("Error copying code block", e));
+  } else {
+    // Fallback for non-secure contexts without the async clipboard API.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); }
+    catch (e) { console.error("Error copying code block", e); }
+    ta.remove();
+  }
+}
+function flashCopied(btn) {
+  if (btn.dataset.copied) return;
+  btn.dataset.copied = "1";
+  btn.innerHTML = CHECK_SVG;
+  btn.setAttribute("aria-label", "Copied");
+  btn.classList.remove("pop");
+  void btn.offsetWidth;
+  btn.classList.add("pop");
+  setTimeout(() => {
+    delete btn.dataset.copied;
+    btn.innerHTML = COPY_SVG;
+    btn.setAttribute("aria-label", "Copy code to clipboard");
+  }, 3000);
 }
 
 // Optimistic echoes (itemId "local-*") are placeholders until the server's
