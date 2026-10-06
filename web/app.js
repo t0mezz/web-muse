@@ -488,9 +488,12 @@ setInterval(() => {
 }, 60000);
 
 async function openSession(sessionId) {
+  stopStarsFxNow();
   closeRowMenus();
-  clearTranscript();
+  // Assign before clearTranscript: its updateWelcome() would otherwise see
+  // a stale null sessionId and restart the starfield mid-open.
   state.sessionId = sessionId;
+  clearTranscript();
   updateRepoBar();
   closeDrawer();
   el("session-title").textContent = titleForSession(sessionId);
@@ -858,7 +861,72 @@ function clearTranscript() {
 
 /* Welcome state: centered composer until the first message opens the transcript. */
 function updateWelcome() {
-  el("center").classList.toggle("is-welcome", state.items.size === 0);
+  const welcome = state.items.size === 0;
+  el("center").classList.toggle("is-welcome", welcome);
+  if (welcome && !state.sessionId) startStarsFx();
+}
+
+/* Welcome starfield (web/stars.js): fullscreen backdrop behind the app,
+ * shown until the first message is sent or a real session opens. The
+ * bottom-right switch toggles it by hand; the choice persists per browser. */
+const STARS_KEY = "web-muse:stars";
+// Locked-in look: dimmed, thinned-out, gentle parallax.
+const STARS_OPTIONS = {
+  starColor: "#e6e9ef",
+  counts: [650, 260, 130],
+  opacity: 0.7,
+  factor: 0.0125,
+};
+let stopStarsFx = null;
+// Explicit toggle choice wins; otherwise follow prefers-reduced-motion.
+function starsWanted() {
+  try {
+    const saved = localStorage.getItem(STARS_KEY);
+    if (saved !== null) return saved === "1";
+  } catch (_) {}
+  return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+function startStarsFx() {
+  if (stopStarsFx || typeof window.Stars === "undefined") return;
+  if (!starsWanted()) return;
+  const old = el("stars-bg");
+  if (old) old.remove();
+  const bg = document.createElement("div");
+  bg.id = "stars-bg";
+  document.body.prepend(bg);
+  try {
+    stopStarsFx = window.Stars.createStarsBackground(bg, STARS_OPTIONS);
+  } catch (_) {
+    bg.remove();
+    stopStarsFx = null;
+  }
+  syncStarsToggle();
+}
+function stopStarsFxNow() {
+  if (stopStarsFx) {
+    try { stopStarsFx(); } catch (_) {}
+    stopStarsFx = null;
+  }
+  const bg = el("stars-bg");
+  if (bg) bg.remove();
+  syncStarsToggle();
+}
+// Bottom-right switch: reflects whether the field is up; flipping it
+// shows/hides the field at once and remembers the choice.
+function syncStarsToggle() {
+  const t = el("stars-toggle");
+  if (!t) return;
+  t.setAttribute("aria-checked", stopStarsFx ? "true" : "false");
+}
+function toggleStarsFx() {
+  if (stopStarsFx) {
+    try { localStorage.setItem(STARS_KEY, "0"); } catch (_) {}
+    stopStarsFxNow();
+  } else {
+    try { localStorage.setItem(STARS_KEY, "1"); } catch (_) {}
+    startStarsFx();
+    syncStarsToggle();
+  }
 }
 
 /* TUI-style thinking status: heads the turn's block while it runs (tool
@@ -2656,6 +2724,7 @@ async function submitComposer() {
   const box = el("input");
   const text = box.value.trim();
   if (!text) return;
+  stopStarsFxNow();
   if (!state.ws || state.ws.readyState !== 1) { toast("not connected", true); return; }
   el("slash-popup").hidden = true;
   closeRepoMenus();
@@ -2748,6 +2817,7 @@ function selectTab(name) {
 }
 
 /* ---------- wiring ---------- */
+el("stars-toggle").addEventListener("click", () => { toggleStarsFx(); });
 el("composer").addEventListener("submit", (ev) => { ev.preventDefault(); submitComposer(); });
 el("input").addEventListener("input", () => { autosize(); state.slashSel = 0; updateSlashPopup(); });
 el("input").addEventListener("keydown", (ev) => {
@@ -3103,6 +3173,7 @@ function startComposerHints() {
 // Stored UI prefs win; first run falls back to hidden bars, no model pick.
 restorePanelState();
 updateWelcome();
+syncStarsToggle();
 updateRepoBar();
 loadPickedModel();
 updateRunChip();

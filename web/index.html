@@ -80,7 +80,7 @@
             aria-label="Prompt input" autocomplete="off" spellcheck="true"></textarea>
           <div class="composer-btns">
             <button type="button" id="btn-stop" title="Stop turn (/interrupt)" aria-label="Stop turn" disabled>■</button>
-            <button type="submit" id="btn-send" title="Send (Enter)" aria-label="Send">↑</button>
+            <button type="submit" id="btn-send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8.791045833333332 0.4881416666666667c-0.437525 -0.437525 -1.1480666666666666 -0.437525 -1.5855916666666667 0L1.6051416666666667 6.088454166666666c-0.437525 0.437525 -0.437525 1.1480666666666666 0 1.5855916666666667s1.1480666666666666 0.43752083333333336 1.5855916666666667 0l3.6892041666666664 -3.692708333333333v10.7386c0 0.6195333333333333 0.5005291666666667 1.1200625 1.1200625 1.1200625s1.1200625 -0.5005291666666667 1.1200625 -1.1200625V3.9813374999999995l3.6892041666666664 3.689208333333333c0.437525 0.43752083333333336 1.1480666666666666 0.43752083333333336 1.5855916666666667 0s0.43752083333333336 -1.1480666666666666 0 -1.5855916666666667L8.794545833333332 0.48464166666666664Z"/></svg></button>
           </div>
         </form>
         <div id="hintbar">
@@ -146,6 +146,8 @@
   </div>
 </div>
 <div id="toast" hidden role="status"></div>
+<button id="stars-toggle" role="switch" aria-checked="false" aria-label="Toggle starfield" title="Toggle starfield"><span class="stars-thumb" aria-hidden="true"></span></button>
+<script src="/stars.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

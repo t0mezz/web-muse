@@ -11,11 +11,15 @@ body {
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 #app { display: flex; flex-direction: column; height: 100dvh; }
+/* welcome starfield backdrop: negative z-index keeps it below ALL app
+ * content (even non-positioned blocks like the topbar), above only the
+ * body canvas background; pointer-transparent so it never eats input */
+#stars-bg { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
 
 /* topbar: quiet icon buttons + a subtle model picker */
 #topbar {
   display: flex; align-items: center; gap: 4px;
-  padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line);
+  padding: 6px 8px; background: rgba(14, 17, 22, 0.4); border-bottom: 1px solid var(--line);
   flex: none;
 }
 #topbar button, #btn-progress {
@@ -43,7 +47,7 @@ body {
 /* sessions sidebar / drawer */
 #sessions {
   position: fixed; top: 0; left: 0; bottom: 0; width: min(84vw, 320px); z-index: 30;
-  background: var(--panel); border-right: 1px solid var(--line);
+  background: rgba(14, 17, 22, 0.4); border-right: 1px solid var(--line);
   display: none; flex-direction: column;
 }
 #sessions.open { display: flex; }
@@ -506,7 +510,7 @@ body {
 /* inspector */
 #inspector {
   position: fixed; top: 0; right: 0; bottom: 0; width: min(84vw, 320px); z-index: 30;
-  background: var(--panel); border-left: 1px solid var(--line);
+  background: rgba(14, 17, 22, 0.4); border-left: 1px solid var(--line);
   display: none; flex-direction: column;
 }
 #inspector.open { display: flex; }
@@ -588,6 +592,30 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 .dir-foot { display: flex; gap: 8px; align-items: center; }
 .dir-foot .spacer { flex: 1; }
 .dir-foot .primary { background: var(--accent); color: #06101f; border: none; font-weight: 700; }
+
+/* starfield toggle: small bottom-right switch (32x20 track, 16px thumb,
+ * 19px pressed width, focus ring) after the animate-ui Switch pattern */
+#stars-toggle {
+  position: fixed; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 40;
+  width: 32px; height: 20px; padding: 0 1px; flex: none;
+  display: flex; align-items: center; justify-content: flex-start;
+  border-radius: 999px; border: 1px solid transparent;
+  background: var(--line); cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  outline: none;
+}
+#stars-toggle[aria-checked="true"] { background: var(--accent); justify-content: flex-end; }
+#stars-toggle:hover { border-color: var(--faint); }
+#stars-toggle:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110, 168, 254, .3); }
+#stars-toggle .stars-thumb {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  background: #fff; pointer-events: none;
+  transition: width .15s ease;
+}
+#stars-toggle:active .stars-thumb { width: 19px; }
+@media (prefers-reduced-motion: reduce) {
+  #stars-toggle .stars-thumb { transition: none; }
+}
 
 /* toast */
 #toast {
