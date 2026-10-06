@@ -25,6 +25,10 @@ const state = {
   sessionsHidden: 0,
   // "Other sessions" group collapsed (persisted across reloads).
   otherCollapsed: false,
+  // Transcript density: active filter chip (all|edits|commands|errors)
+  // and the open turn's rollup block (null between turns).
+  txFilter: "all",
+  turnBlock: null,
   // Renames the host has admitted but not yet applied (list still shows
   // the old name): sessionId -> {name, at}. Re-applied over every
   // refresh until the host catches up or 30s pass.
@@ -865,7 +869,12 @@ function clearTranscript() {
   el("tab-approvals").innerHTML = "";
   el("tab-tools").innerHTML = "";
   state.items.clear(); state.tools.clear();
-  state.running = false; state.turnId = null;
+  state.running = false; state.turnId = null; state.turnBlock = null;
+  // A fresh transcript reads unfiltered; the chip row reflects it.
+  state.txFilter = "all";
+  document.querySelectorAll("#tx-filters button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.txf === "all"));
+  });
   state.cursor = ""; state.pageCursor = null; state.hasOlder = false;
   state.ctxLine = "";
   state.lastCumulative = null; state.lastContext = null; state.sessionMcp = [];
@@ -979,7 +988,7 @@ function showThinking() {
   const clock = document.createElement("span");
   status.append(clock);
   line.append(status);
-  el("terminal").append(line);
+  turnContainer().append(line);
   thinkingStartedAt = Date.now();
   const tick = () => {
     const s = Math.max(0, Math.round((Date.now() - thinkingStartedAt) / 1000));
@@ -998,7 +1007,7 @@ function hideThinking() {
    it while it stays fixed at the end of the turn's block. */
 function pinThinking() {
   const think = document.getElementById("thinking-row");
-  if (think) el("terminal").append(think);
+  if (think) turnContainer().append(think);
 }
 
 function scrollDown(force) {
@@ -1016,7 +1025,8 @@ function sysLine(text, isErr) {
   const body = document.createElement("span");
   body.className = "body"; body.textContent = text;
   line.append(gut, body);
-  el("terminal").append(line);
+  turnContainer().append(line);
+  applyTranscriptFilter();
   pinThinking();
   scrollDown();
   return line;
@@ -1082,6 +1092,305 @@ function itemHeadLabel(it, kind) {
   const when = stamp ? " · " + String(stamp).slice(11, 19) : "";
   if (kind !== "tool") return String(it.kind || kind) + when;
   return [it.kind || kind, toolType(it), it.status].filter(Boolean).join(" · ") + when;
+}
+
+/* Consecutive tool-call grouping: N same-tool rows in a row collapse
+ * into one expandable group ("edit × 3 — app.js"); the member rows move
+ * inside untouched, so expanding shows the actual calls. Only completed
+ * rows group (streaming rows would churn). Failed rows never collapse:
+ * they stay loud and force their group open. History prepends group
+ * symmetrically. Groups live under any parent (terminal or turn block),
+ * so all moves go through the line's own parent node. */
+function toolGroupKey(it) {
+  return String(toolType(it) || (it && it.kind) || "tool").toLowerCase();
+}
+function toolArgsObj(it) {
+  if (it && it.args && typeof it.args === "object") return it.args;
+  if (it && typeof it.args === "string" && it.args) {
+    try {
+      const o = JSON.parse(it.args);
+      if (o && typeof o === "object") return o;
+    } catch (_) { /* plain-text args: no file fields */ }
+  }
+  return null;
+}
+function toolFiles(it) {
+  // Basename list of path-like args (path, file, filePath, ...), deduped.
+  const a = toolArgsObj(it);
+  if (!a) return [];
+  const out = [];
+  const grab = (v) => {
+    if (typeof v === "string" && v) {
+      const b = v.split("/").pop().split("\\").pop().trim();
+      if (b) out.push(b);
+    } else if (Array.isArray(v)) v.forEach(grab);
+  };
+  for (const k of Object.keys(a)) if (/path|file/i.test(k)) grab(a[k]);
+  return [...new Set(out)].filter(Boolean).slice(0, 6);
+}
+function toolFailed(it) {
+  const s = String((it && it.status) || "").toLowerCase();
+  return s === "failed" || s === "error" || !!(it && it.isError);
+}
+function toolGroupLabel(tool, n, files) {
+  const f = (files || []).filter(Boolean);
+  const tail = f.length
+    ? " — " + f.slice(0, 3).join(", ") + (f.length > 3 ? `, +${f.length - 3}` : "")
+    : "";
+  return `${tool} × ${n}${tail}`;
+}
+// Stamp a tool row for grouping, filtering, and header file lists.
+function tagToolLine(rec) {
+  rec.line.dataset.toolKey = toolGroupKey(rec.item);
+  const files = toolFiles(rec.item);
+  if (files.length) rec.line.dataset.files = files.join("|");
+  else delete rec.line.dataset.files;
+  if (toolFailed(rec.item)) rec.line.dataset.failed = "1";
+  else delete rec.line.dataset.failed;
+}
+function makeToolGroup(tool) {
+  const group = document.createElement("div");
+  group.className = "tool-group";
+  group.dataset.tool = tool;
+  const det = document.createElement("details");
+  const sum = document.createElement("summary");
+  sum.className = "tool-group-head";
+  const items = document.createElement("div");
+  items.className = "tool-group-items";
+  det.append(sum, items);
+  group.append(det);
+  return group;
+}
+function refreshToolGroup(group) {
+  const det = group.querySelector(":scope > details");
+  const items = group.querySelector(":scope > details > .tool-group-items");
+  const sum = group.querySelector(":scope > details > summary");
+  const n = items ? items.children.length : 0;
+  if (n < 2) {
+    // Dissolve: a lone row reads better ungrouped.
+    const parent = group.parentNode || el("terminal");
+    while (items && items.firstChild) parent.insertBefore(items.firstChild, group);
+    group.remove();
+    return;
+  }
+  const tool = group.dataset.tool || "tool";
+  const files = [];
+  items.querySelectorAll(":scope > .tline").forEach((l) => {
+    String(l.dataset.files || "").split("|").forEach((f) => {
+      if (f && !files.includes(f)) files.push(f);
+    });
+  });
+  sum.textContent = toolGroupLabel(tool, n, files);
+  sum.title = `${n} consecutive ${tool} calls` +
+    (files.length ? ` — ${files.join(", ")}` : "") + " — expand for detail";
+  // A failed member forces the group open and tinted; a clean group
+  // keeps whatever toggle state the user left it in.
+  if (items.querySelector(":scope > .tline[data-failed]")) {
+    group.dataset.failed = "1";
+    if (det) det.open = true;
+  } else delete group.dataset.failed;
+}
+function groupItemsBox(group) {
+  return group.querySelector(":scope > details > .tool-group-items");
+}
+// Live + history-replay direction: the new row is the last child.
+function groupToolLine(rec) {
+  if (!rec || !rec.line || rec.line.classList.contains("streaming")) return;
+  if (!rec.line.classList.contains("tool")) return;
+  tagToolLine(rec);
+  const key = toolGroupKey(rec.item);
+  if (toolFailed(rec.item)) { ungroupToolLine(rec.line); return; }
+  if (rec.line.closest(".tool-group")) {
+    refreshToolGroup(rec.line.closest(".tool-group"));
+    return;
+  }
+  const parent = rec.line.parentNode || el("terminal");
+  let prev = rec.line.previousSibling;
+  while (prev && prev.id === "thinking-row") prev = prev.previousSibling;
+  if (prev && prev.classList && prev.classList.contains("tool-group") && prev.dataset.tool === key) {
+    const box = groupItemsBox(prev);
+    if (box.querySelector(".streaming")) return;
+    box.append(rec.line);
+    refreshToolGroup(prev);
+    return;
+  }
+  if (prev && prev.classList && prev.classList.contains("tline") && prev.classList.contains("tool")
+    && !prev.classList.contains("streaming") && prev.dataset.toolKey === key
+    && !prev.hasAttribute("data-failed")) {
+    const group = makeToolGroup(key);
+    parent.insertBefore(group, prev);
+    groupItemsBox(group).append(prev, rec.line);
+    refreshToolGroup(group);
+  }
+}
+// History-paging direction: the new row is prepended first.
+function groupToolLinePrepend(rec) {
+  if (!rec || !rec.line || !rec.line.classList.contains("tool")) return;
+  if (rec.line.classList.contains("streaming")) return;
+  tagToolLine(rec);
+  const key = toolGroupKey(rec.item);
+  if (toolFailed(rec.item)) return;
+  let next = rec.line.nextSibling;
+  while (next && next.id === "thinking-row") next = next.nextSibling;
+  if (next && next.classList && next.classList.contains("tool-group") && next.dataset.tool === key) {
+    groupItemsBox(next).prepend(rec.line);
+    refreshToolGroup(next);
+    return;
+  }
+  if (next && next.classList && next.classList.contains("tline") && next.classList.contains("tool")
+    && !next.classList.contains("streaming") && next.dataset.toolKey === key
+    && !next.hasAttribute("data-failed")) {
+    const group = makeToolGroup(key);
+    (rec.line.parentNode || el("terminal")).insertBefore(group, rec.line);
+    groupItemsBox(group).append(rec.line, next);
+    refreshToolGroup(group);
+  }
+}
+// A row leaving the transcript (or changing kind) restores its group.
+function ungroupToolLine(line) {
+  const group = line.closest ? line.closest(".tool-group") : null;
+  if (!group) return;
+  (group.parentNode || el("terminal")).insertBefore(line, group.nextSibling);
+  refreshToolGroup(group);
+}
+function removeGroupedLine(line) {
+  const group = line.closest ? line.closest(".tool-group") : null;
+  line.remove();
+  if (group) refreshToolGroup(group);
+}
+
+/* Turn-level rollup: each live turn gets a borderless section with a
+ * one-line head ("turn done · …") that collapses the whole turn. The
+ * head doubles as the turn's completion record, so turn/completed
+ * closes the block instead of printing a separate sysLine. History
+ * rows predate any open block and keep landing in the terminal. */
+function turnContainer() {
+  const t = state.turnBlock;
+  return (t && t.box.isConnected) ? t.box : el("terminal");
+}
+function openTurnBlock() {
+  const block = document.createElement("div");
+  block.className = "turn-block";
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "turn-head";
+  head.setAttribute("aria-expanded", "true");
+  head.textContent = "turn · running…";
+  head.title = "Collapse turn";
+  head.onclick = () => {
+    const shut = block.classList.toggle("collapsed");
+    head.setAttribute("aria-expanded", String(!shut));
+  };
+  const box = document.createElement("div");
+  box.className = "turn-items";
+  block.append(head, box);
+  el("terminal").append(block);
+  state.turnBlock = {
+    block, head, box, tools: new Map(), files: [], failed: false,
+  };
+}
+function recordTurnItem(kind, item) {
+  const t = state.turnBlock;
+  if (!t) return;
+  if (kind === "tool") {
+    const k = toolGroupKey(item);
+    t.tools.set(k, (t.tools.get(k) || 0) + 1);
+    for (const f of toolFiles(item)) {
+      if (f && !t.files.includes(f)) t.files.push(f);
+    }
+    if (toolFailed(item)) t.failed = true;
+  } else if (kind === "error") t.failed = true;
+}
+function closeTurnBlock(text, isErr) {
+  const t = state.turnBlock;
+  state.turnBlock = null;
+  if (!t || !t.block.isConnected) return;
+  const bits = [];
+  if (t.tools.size) {
+    bits.push([...t.tools].map(([k, c]) => (c > 1 ? `${k} ×${c}` : k)).join(", "));
+  }
+  if (t.files.length) {
+    bits.push(t.files.slice(0, 4).join(", ") +
+      (t.files.length > 4 ? `, +${t.files.length - 4}` : ""));
+  }
+  t.head.textContent = text + (bits.length ? " · " + bits.join(" · ") : "");
+  if (isErr || t.failed) t.head.classList.add("failed");
+  t.block.dataset.closed = "1";
+}
+function dissolveTurnBlock() {
+  const t = state.turnBlock;
+  state.turnBlock = null;
+  if (!t || !t.block.isConnected) return;
+  while (t.box.firstChild) t.block.parentNode.insertBefore(t.box.firstChild, t.block);
+  t.block.remove();
+}
+
+/* Long-output collapse: tool bodies past 12 lines (or 2000 chars)
+ * show a head excerpt plus a "show all N lines" toggle. Agent and
+ * user markdown is untouched. */
+const OUT_MAX_LINES = 12;
+const OUT_MAX_CHARS = 2000;
+function maybeCollapseOutput(rec, txt) {
+  if (!rec || !rec.body) return;
+  const s = String(txt == null ? "" : txt);
+  const lines = s.split("\n");
+  if (lines.length <= OUT_MAX_LINES && s.length <= OUT_MAX_CHARS) return;
+  const head = lines.slice(0, OUT_MAX_LINES).join("\n");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "out-toggle";
+  btn.textContent = `show all ${lines.length} lines`;
+  btn.title = `${s.length} characters — expand full output`;
+  let open = false;
+  btn.onclick = () => {
+    open = !open;
+    rec.body.textContent = open ? s : head;
+    rec.body.append(btn);
+    btn.textContent = open ? "show less" : `show all ${lines.length} lines`;
+  };
+  rec.body.textContent = head;
+  rec.body.append(btn);
+}
+
+/* Transcript filter chips: all | edits | commands | errors. Specific
+ * filters hide agent/user chatter and non-matching tool rows; groups
+ * and turn blocks hide only when none of their rows match. */
+function txVisible(line) {
+  const f = state.txFilter || "all";
+  if (f === "all") return true;
+  if (line.id === "thinking-row") return true;
+  if (line.classList.contains("error") || line.hasAttribute("data-failed")) {
+    return f === "errors";
+  }
+  if (!line.classList.contains("tool")) return false;
+  const k = line.dataset.toolKey || "";
+  if (f === "edits") return k.includes("edit") || k.includes("write") || k.includes("apply");
+  if (f === "commands") {
+    return k.includes("bash") || k.includes("shell") ||
+      k.includes("command") || k.includes("exec");
+  }
+  return false;
+}
+function applyTranscriptFilter() {
+  const term = el("terminal");
+  term.querySelectorAll(".tline").forEach((l) => { l.hidden = !txVisible(l); });
+  term.querySelectorAll(".tool-group").forEach((g) => {
+    let any = false;
+    g.querySelectorAll(":scope > details > .tool-group-items > .tline").forEach((k) => {
+      if (!k.hidden) any = true;
+    });
+    g.hidden = !any;
+  });
+  term.querySelectorAll(".turn-block").forEach((b) => {
+    b.hidden = !b.querySelector(".tline:not([hidden])");
+  });
+}
+function setTranscriptFilter(f) {
+  state.txFilter = f;
+  document.querySelectorAll("#tx-filters button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.txf === f));
+  });
+  applyTranscriptFilter();
 }
 
 /* ---------- markdown (transcript bodies) ---------- */
@@ -1324,7 +1633,7 @@ function renderItem(it, streaming) {
   let rec = state.items.get(it.itemId);
   const kind = itemKind(it);
   if (isReminder(it)) {
-    if (rec) { rec.line.remove(); state.items.delete(it.itemId); }
+    if (rec) { removeGroupedLine(rec.line); state.items.delete(it.itemId); }
     return;
   }
   if (!rec) {
@@ -1342,7 +1651,7 @@ function renderItem(it, streaming) {
     body.className = "txt";
     wrap.append(head, body);
     line.append(gut, wrap);
-    el("terminal").append(line);
+    turnContainer().append(line);
     rec = { line, body, head, item: it };
     state.items.set(it.itemId, rec);
   } else {
@@ -1350,6 +1659,12 @@ function renderItem(it, streaming) {
     rec.line.className = `tline ${kind}`;
     rec.line.querySelector(".gut").textContent = GUTTER[kind] || "●";
     rec.head.textContent = itemHeadLabel(rec.item, kind);
+    if (kind === "tool") tagToolLine(rec);
+    else {
+      delete rec.line.dataset.toolKey;
+      delete rec.line.dataset.files;
+      delete rec.line.dataset.failed;
+    }
   }
   let txt = itemText(rec.item);
   if (!txt && kind === "tool" && !streaming) txt = toolSummary(rec.item);
@@ -1369,6 +1684,7 @@ function renderItem(it, streaming) {
   } else if (kind === "tool") {
     syncToolRow(it.itemId, rec.item);
   }
+  if (kind === "tool" && !streaming) maybeCollapseOutput(rec, txt);
   // Streaming caret
   rec.body.querySelectorAll(".caret").forEach((c) => c.remove());
   if (streaming) {
@@ -1377,6 +1693,10 @@ function renderItem(it, streaming) {
     rec.body.append(c);
   }
   rec.line.classList.toggle("streaming", !!streaming);
+  if (kind === "tool" && !streaming) groupToolLine(rec);
+  else ungroupToolLine(rec.line);
+  if (!streaming && state.turnBlock) recordTurnItem(kind, rec.item);
+  applyTranscriptFilter();
   updateWelcome();
   pinThinking();
   scrollDown();
@@ -1508,6 +1828,8 @@ function renderItemPrepend(it) {
   const rec = { line, body, head, item: it };
   state.items.set(it.itemId, rec);
   setBodyContent(rec, txt, kind, false);
+  if (kind === "tool") { tagToolLine(rec); groupToolLinePrepend(rec); }
+  applyTranscriptFilter();
   updateWelcome();
 }
 
@@ -1542,6 +1864,7 @@ function onEvent(method, p) {
       break;
     case "turn/started":
       state.running = true; state.turnId = p.turnId || null; updateRunChip();
+      openTurnBlock();
       showThinking();
       if (state.queuedTurnId && p.turnId === state.queuedTurnId) {
         state.queuedTurnId = null;
@@ -1558,7 +1881,22 @@ function onEvent(method, p) {
         d.querySelectorAll(".caret").forEach((c) => c.remove());
       });
       const term = p.terminal || "completed";
-      if (term === "failed") {
+      const tok = (p.usage && p.usage.totalTokens != null) ? ` · ${p.usage.totalTokens} tok` : "";
+      const dur = (p.durationMs != null) ? ` · ${(p.durationMs / 1000).toFixed(1)}s` : "";
+      // The open turn block's head doubles as the completion record;
+      // without one (missed turn/started) fall back to a plain sysLine.
+      if (state.turnBlock) {
+        if (term === "failed") {
+          closeTurnBlock("turn failed: " +
+            String((p.error && (p.error.message || p.error.code)) || p.reason || "unknown") + dur + tok, true);
+        } else if (term === "cancelled") {
+          closeTurnBlock("turn cancelled" +
+            (p.reason ? ": " + String(p.reason) : "") + dur + tok, false);
+        } else {
+          closeTurnBlock("turn done" + dur + tok, false);
+        }
+        applyTranscriptFilter();
+      } else if (term === "failed") {
         sysLine("turn failed: " + String((p.error && (p.error.message || p.error.code)) || p.reason || "unknown"), true);
       } else if (term === "cancelled") {
         sysLine("turn cancelled." + (p.reason ? " " + String(p.reason) : ""));
@@ -1572,6 +1910,7 @@ function onEvent(method, p) {
     }
     case "turn/retracted":
       hideThinking();
+      dissolveTurnBlock();
       sysLine("turn retracted — prompt restored to the composer.");
       if (p.promptText) { el("input").value = p.promptText; autosize(); }
       break;
@@ -2930,6 +3269,9 @@ el("input").addEventListener("keydown", (ev) => {
 el("btn-stop").onclick = () => cmdInterrupt();
 el("btn-send").onclick = null; // submit via form
 el("btn-sessions").onclick = toggleSessions;
+document.querySelectorAll("#tx-filters button").forEach((b) => {
+  b.onclick = () => setTranscriptFilter(b.dataset.txf || "all");
+});
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
     // Turn canceling on Escape anywhere outside the composer: the

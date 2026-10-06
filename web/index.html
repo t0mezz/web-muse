@@ -47,6 +47,12 @@
       <div id="toolbar">
         <span id="run-chip" class="chip idle" title="Turn state">idle</span>
         <button id="btn-older" title="Load older history">↑ older</button>
+        <span id="tx-filters" role="group" aria-label="Transcript filter">
+          <button data-txf="all" aria-pressed="true" title="Show everything">all</button>
+          <button data-txf="edits" aria-pressed="false" title="Show file edits only">edits</button>
+          <button data-txf="commands" aria-pressed="false" title="Show shell commands only">commands</button>
+          <button data-txf="errors" aria-pressed="false" title="Show errors only">errors</button>
+        </span>
         <span id="cursor-chip" class="chip dim" title="View cursor"></span>
         <span class="spacer"></span>
         <span id="sess-meta" class="dim"></span>
