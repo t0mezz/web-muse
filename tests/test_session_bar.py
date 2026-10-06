@@ -299,11 +299,25 @@ class TestSessionBarUI(unittest.TestCase):
             self.assertIn(action, APP_JS)
         self.assertNotIn('"acts"', APP_JS)
 
-    def test_config_dots_spin_on_hover(self):
-        # Hover-only, anti-clockwise: clicks just toggle the menu and
-        # carry no spin state.
-        self.assertIn(".config-btn:hover svg", STYLE_CSS)
-        self.assertIn("rotate(-90deg)", STYLE_CSS)
+    def test_refresh_spin_plays_fully(self):
+        self.assertIn("void btn.offsetWidth", APP_JS)
+        self.assertIn('setTimeout(() => btn.classList.remove("spin"), 650)', APP_JS)
+        self.assertIn('[aria-busy="true"]', STYLE_CSS)
+
+    def test_config_second_click_closes_menu(self):
+        self.assertIn('cfg.addEventListener("mousedown"', APP_JS)
+        self.assertIn("if (!menu.hidden) e.preventDefault()", APP_JS)
+
+    def test_config_hamburger_animates_on_menu_open(self):
+        self.assertIn("line-top-bottom", APP_JS + STYLE_CSS)
+        self.assertIn('config-btn[aria-expanded="true"]', STYLE_CSS)
+        self.assertIn("stroke-dashoffset", STYLE_CSS)
+
+    def test_config_no_spin_on_hover(self):
+        # No hover rotation: the icon only animates into an X while its
+        # menu is open (aria-expanded), never on hover.
+        self.assertNotIn("rotate(-90deg)", STYLE_CSS)
+        self.assertNotIn(".config-btn:hover svg", STYLE_CSS)
         self.assertNotIn('cfg.classList.toggle("open"', APP_JS)
         self.assertNotIn(".config-btn.open", APP_JS + STYLE_CSS)
 
@@ -474,6 +488,11 @@ class TestSessionViewCursor(unittest.TestCase):
         self.assertIn("filter-box", APP_JS)
         self.assertIn('btn-search-sessions").focus()', APP_JS)
 
+    def test_rename_prefills_real_name_only(self):
+        self.assertIn('(hit.name || "").trim()', APP_JS)
+        self.assertIn("Ambiguous prefix", APP_JS)
+        self.assertNotIn('sessN(sessions.length, "Session")', APP_JS)
+
     def test_other_collapse_persists(self):
         self.assertIn("webmuse.otherCollapsed", APP_JS)
         self.assertIn("saveOtherCollapsed()", APP_JS)
@@ -484,7 +503,7 @@ class TestSessionViewCursor(unittest.TestCase):
         self.assertIn("#btn-search-sessions", STYLE_CSS)
         self.assertIn("margin-left: auto", STYLE_CSS)
         for marker in ("#btn-search-sessions:hover", "position: absolute",
-                        ".session-row:hover .sess-time"):
+                        ".session-row:hover .sess-preview"):
             self.assertIn(marker, STYLE_CSS)
 
     def test_sidebar_chrome(self):

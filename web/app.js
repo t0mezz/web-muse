@@ -314,7 +314,7 @@ function renderSessionList(sessions) {
         ? `No sessions match "${rawFilter.trim()}"`
         : rows.length < sessions.length
           ? `Showing ${sessN(rows.length, "session")} of ${sessions.length}`
-          : `${sessN(sessions.length, "Session")}`;
+          : `${sessN(sessions.length, "session")}`;
       counter._t = setTimeout(() => { counter.textContent = text; counter.hidden = false; }, 400);
     } else {
       counter.hidden = true;
@@ -380,7 +380,7 @@ function appendSessionRow(box, s) {
   cfg.setAttribute("aria-label", `Actions for ${sessionDisplayName(s)}`);
   cfg.setAttribute("aria-haspopup", "menu");
   cfg.setAttribute("aria-expanded", "false");
-  cfg.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="8" cy="3" r="1.6"/><circle cx="8" cy="8" r="1.6"/><circle cx="8" cy="13" r="1.6"/></svg>';
+  cfg.innerHTML = '<svg viewBox="0 0 32 32" width="16" height="16" aria-hidden="true"><path class="line line-top-bottom" d="M27 10 13 10C10.8 10 9 8.2 9 6 9 3.5 10.8 2 13 2 15.2 2 17 3.8 17 6L17 26C17 28.2 18.8 30 21 30 23.2 30 25 28.2 25 26 25 23.8 23.2 22 21 22L7 22"/><path class="line" d="M7 16 27 16"/></svg>';
   top.append(nm, tm);
   const meta = document.createElement("span");
   meta.className = "meta sess-preview";
@@ -434,6 +434,10 @@ function appendSessionRow(box, s) {
     else i = items.length - 1;
     items[i].focus();
   });
+  // Clicking the opener while its menu is open must close, not reopen:
+  // without this, mousedown steals focus first, the menu focusout closes
+  // it, and the click then sees a hidden menu and reopens it.
+  cfg.addEventListener("mousedown", (e) => { if (!menu.hidden) e.preventDefault(); });
   cfg.onclick = (e) => {
     e.stopPropagation();
     const willOpen = menu.hidden;
@@ -441,6 +445,7 @@ function appendSessionRow(box, s) {
     if (!cfg.isConnected) return;
     menu.hidden = !willOpen;
     cfg.setAttribute("aria-expanded", String(willOpen));
+    if (!willOpen) cfg.focus({ preventScroll: true });
     if (willOpen) {
       menu._opener = cfg;
       menu.classList.remove("flip");
@@ -654,7 +659,9 @@ async function renameSession(sessionId, name, quiet) {
   const sid = sessionId || state.sessionId;
   if (!sid) return toast("no session", true);
   const hit = state.sessionsCache.find((s) => s.sessionId === sid);
-  const cur = hit ? sessionDisplayName(hit) : "";
+  // Prefill the real host name only: prefilling the synthetic
+  // "Untitled <id>" placeholder would save it as a permanent name.
+  const cur = hit ? (hit.name || "").trim() : "";
   const nm = (name != null ? name : prompt("Session name:", cur) || "");
   if (!nm.trim()) return;
   try {
@@ -2025,9 +2032,14 @@ async function cmdResume(args) {
       `  ${s.sessionId.slice(0, 8)}  ${s.name || "(unnamed)"}  [${s.status || "?"}]`).join("\n"));
     return;
   }
-  const hit = state.sessionsCache.find((s) => s.sessionId.toLowerCase().startsWith(prefix));
-  if (!hit) { sysLine("No session matches prefix " + prefix, true); return; }
-  await openSession(hit.sessionId);
+  const hits = state.sessionsCache.filter((s) => s.sessionId.toLowerCase().startsWith(prefix));
+  if (!hits.length) { sysLine("No session matches prefix " + prefix, true); return; }
+  if (hits.length > 1) {
+    sysLine("Ambiguous prefix " + prefix + " — matches:\n" + hits.map((s) =>
+      `  ${s.sessionId.slice(0, 8)}  ${s.name || "(unnamed)"}`).join("\n"), true);
+    return;
+  }
+  await openSession(hits[0].sessionId);
 }
 
 function fmtModelRow(m) {
@@ -2917,6 +2929,9 @@ el("btn-refresh-sessions").onclick = async () => {
   if (state.listBusy) return;
   state.listBusy = true;
   const btn = el("btn-refresh-sessions");
+  // Restart the one-shot 360° on every press, even mid-tail of a prior spin.
+  btn.classList.remove("spin");
+  void btn.offsetWidth;
   btn.classList.add("spin");
   btn.setAttribute("aria-busy", "true");
   btn.setAttribute("aria-disabled", "true");
@@ -2927,9 +2942,12 @@ el("btn-refresh-sessions").onclick = async () => {
     toast(e.message, true);
   } finally {
     state.listBusy = false;
-    btn.classList.remove("spin");
     btn.removeAttribute("aria-busy");
     btn.removeAttribute("aria-disabled");
+    // The refresh usually beats the 650ms spin: keep the class until the
+    // one-shot finishes, otherwise add+remove land before paint and the
+    // animation never starts.
+    setTimeout(() => btn.classList.remove("spin"), 650);
   }
 };
 el("session-filter").oninput = () => {
