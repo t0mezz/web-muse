@@ -3035,6 +3035,48 @@ document.addEventListener("click", (ev) => {
   }
 });
 
+/* Rotating typed placeholder for the composer: type → pause (blink) →
+ * delete → next hint. Hints live in composer-hints.json; a one-item
+ * fallback covers the fetch. Harmless while the user has typed (the
+ * placeholder is hidden then anyway); skipped under prefers-reduced-motion. */
+let composerHints = ["Ask Muse…"];
+fetch("composer-hints.json")
+  .then((r) => (r.ok ? r.json() : Promise.reject(new Error("hints " + r.status))))
+  .then((j) => { if (Array.isArray(j) && j.length) composerHints = j.map(String); })
+  .catch(() => {});
+function startComposerHints() {
+  const input = el("input");
+  if (!input || input.dataset.hintsOn) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  input.dataset.hintsOn = "1";
+  const TYPE_MS = 65, DELETE_MS = 32, PAUSE_MS = 1500, START_MS = 800, BLINK_MS = 450;
+  let wi = 0, ci = 0, phase = "typing", blinkOn = true, blinkT = 0;
+  const render = () => {
+    const text = Array.from(composerHints[wi]).slice(0, ci).join("");
+    input.placeholder = text + (blinkOn ? "|" : "");
+  };
+  const step = () => {
+    if (!input.isConnected) return;
+    const len = Array.from(composerHints[wi]).length;
+    if (phase === "typing") {
+      blinkOn = true;
+      if (ci < len) { ci++; render(); setTimeout(step, TYPE_MS); }
+      else { phase = "pause"; blinkT = 0; setTimeout(step, BLINK_MS); }
+    } else if (phase === "pause") {
+      blinkT++;
+      blinkOn = !blinkOn; render();
+      if (blinkT * BLINK_MS >= PAUSE_MS) { phase = "deleting"; setTimeout(step, DELETE_MS); }
+      else setTimeout(step, BLINK_MS);
+    } else {
+      blinkOn = true;
+      if (ci > 0) { ci--; render(); setTimeout(step, DELETE_MS); }
+      else { wi = (wi + 1) % composerHints.length; phase = "typing"; setTimeout(step, TYPE_MS); }
+    }
+  };
+  render();
+  setTimeout(step, START_MS);
+}
+
 // Stored UI prefs win; first run falls back to hidden bars, no model pick.
 restorePanelState();
 updateWelcome();
@@ -3044,3 +3086,4 @@ updateRunChip();
 
 connect();
 autosize();
+startComposerHints();

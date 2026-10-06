@@ -299,6 +299,15 @@ class TestSessionBarUI(unittest.TestCase):
             self.assertIn(action, APP_JS)
         self.assertNotIn('"acts"', APP_JS)
 
+    def test_composer_typing_placeholder(self):
+        import json
+        hints = json.loads((ROOT / "web" / "composer-hints.json").read_text())
+        self.assertEqual(len(hints), 100)
+        self.assertTrue(all(isinstance(h, str) and h.strip() for h in hints))
+        self.assertIn("startComposerHints()", APP_JS)
+        self.assertIn("composer-hints.json", APP_JS)
+        self.assertIn("input.placeholder", APP_JS)
+
     def test_refresh_spin_plays_fully(self):
         self.assertIn("void btn.offsetWidth", APP_JS)
         self.assertIn('setTimeout(() => btn.classList.remove("spin"), 650)', APP_JS)
