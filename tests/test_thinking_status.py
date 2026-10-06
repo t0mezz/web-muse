@@ -3,7 +3,11 @@
 A "Thinking… (Ns)" row stays pinned below each running turn's lines
 (tool logs stack above it) and is removed as soon as the model's answer
 fires — turn/completed and retraction clear it as a backstop. The timer
-interval is always cleared, including on transcript reset.
+interval is always cleared, including on transcript reset. A turn already
+active when the session opens (reload, late join) or started elsewhere
+(TUI, other client) never fires turn/started here, so opening a session
+and session/statusChanged reconcile the thinking status and running-state
+CSS from the session status instead.
 
 No JS harness in this repo, so the contract is guarded at the source
 level, following tests/test_session_toggle.py.
@@ -63,6 +67,30 @@ class TestThinkingStatus(unittest.TestCase):
 
     def test_turn_started_shows_status(self):
         self.assertIn("showThinking();", case_body("turn/started"))
+
+    def test_open_session_reconciles_running_turn(self):
+        # Late join: resume + replay settle first, then reconcile.
+        body = fn_body("openSession")
+        self.assertIn("handleSubscribeResult(sub)", body)
+        self.assertIn("reconcileRunningState();", body)
+        self.assertLess(body.index("handleSubscribeResult(sub)"),
+                        body.index("reconcileRunningState();"))
+
+    def test_reconcile_helper_starts_verbs_when_running(self):
+        self.assertIn("function reconcileRunningState()", APP_JS)
+        body = fn_body("reconcileRunningState")
+        self.assertIn("state.session", body)
+        self.assertIn("status", body)
+        self.assertIn("state.running", body)
+        self.assertIn("updateRunChip()", body)
+        # Starts the morph only when no row is playing already.
+        self.assertIn("thinking-row", body)
+        self.assertIn("showThinking();", body)
+
+    def test_status_changed_starts_verbs(self):
+        body = case_body("session/statusChanged")
+        self.assertIn("showThinking();", body)
+        self.assertIn("thinking-row", body)
 
     def test_answer_firing_clears_status(self):
         body = case_body("item/completed")

@@ -536,6 +536,9 @@ async function openSession(sessionId) {
     updateSessionDetail();
     const sub = await send({ type: "subscribe", sessionId, after: state.cursor || undefined }).catch(() => null);
     if (sub) handleSubscribeResult(sub);
+    // A turn already running when the session opens (reload, late join)
+    // never re-fires turn/started here: reconcile after replay settles.
+    reconcileRunningState();
     fetchPending();
     renderSessionList(state.sessionsCache);
     el("input").focus();
@@ -554,6 +557,18 @@ async function openSession(sessionId) {
       sysLine("resume failed: " + e.message, true); toast("resume failed: " + e.message, true);
     }
   }
+}
+
+/* Late-join/reconnect reconcile: the thinking status and the running-state
+ * CSS (run chip, idle glow, stop button) must reflect an already-active
+ * turn even though its turn/started fired before this client subscribed.
+ * Strictly additive: never hides the row (lifecycle events own that) and
+ * never restarts a status row already showing. */
+function reconcileRunningState() {
+  const st = String((state.session && state.session.status) || "").toLowerCase().trim();
+  state.running = st === "running" || state.running;
+  updateRunChip();
+  if (state.running && !document.getElementById("thinking-row")) showThinking();
 }
 
 function handleSubscribeResult(r) {
@@ -1568,7 +1583,11 @@ function onEvent(method, p) {
       sysLine("turn retry scheduled" + (p.reason ? ": " + String(p.reason) : "") + ".");
       break;
     case "session/statusChanged":
-      state.running = p.status === "running"; updateRunChip();
+      state.running = String(p.status || "").toLowerCase().trim() === "running";
+      updateRunChip();
+      // A turn started elsewhere (TUI, other client, reconnect) never fires
+      // turn/started here: start the verbs off the status flip instead.
+      if (state.running && !document.getElementById("thinking-row")) showThinking();
       if (state.session) { state.session.status = p.status; updateSessionDetail(); }
       break;
     case "session/tokenUsage":
