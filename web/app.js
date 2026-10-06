@@ -2688,11 +2688,14 @@ function updateSlashPopup() {
   if (!list.length) { pop.hidden = true; return; }
   state.slashSel = Math.min(state.slashSel, list.length - 1);
   pop.innerHTML = "";
+  // Pad every usage to the longest one shown so all descriptions start
+  // in the same column (.cmd keeps the spaces with white-space: pre).
+  const width = Math.max(...list.map((c) => c.usage.length));
   list.forEach((c, i) => {
     const d = document.createElement("div");
     d.className = "slash-item" + (i === state.slashSel ? " sel" : "");
     const cmd = document.createElement("span");
-    cmd.className = "cmd"; cmd.textContent = c.usage;
+    cmd.className = "cmd"; cmd.textContent = c.usage.padEnd(width);
     const desc = document.createElement("span");
     desc.className = "desc"; desc.textContent = c.desc;
     d.append(cmd, desc);

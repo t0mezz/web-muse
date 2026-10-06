@@ -501,7 +501,7 @@ body {
   border-radius: 12px; padding: 6px 12px 6px 35px;
 }
 .slash-item { padding: 3px 0; cursor: pointer; display: flex; gap: 10px; font-size: 13px; background: none; }
-.slash-item .cmd { font-family: var(--mono); color: var(--dim); font-weight: 400; flex: none; min-width: 96px; }
+.slash-item .cmd { font-family: var(--mono); color: var(--dim); font-weight: 400; flex: none; min-width: 96px; white-space: pre; }
 .slash-item .desc { color: var(--faint); }
 .slash-item.sel { background: none; }
 .slash-item.sel .cmd { color: var(--fg); font-weight: 700; }
