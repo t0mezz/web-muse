@@ -1,6 +1,6 @@
 """Welcome starfield: dependency-free star backdrop on the empty welcome
-view, disabled as soon as the first message is sent or a real session
-opens, with a persisted bottom-right toggle switch.
+view, auto-stopped when the first message is sent but left running when
+a real session opens, with a persisted bottom-right toggle switch.
 
 No JS harness in this repo, so the contract is guarded at the source
 level, following tests/test_panel_persist.py.
@@ -37,12 +37,15 @@ class TestStarsWelcome(unittest.TestCase):
         # its updateWelcome() sees a stale null id and restarts the field.
         self.assertIn("state.sessionId = sessionId;\n  clearTranscript();", APP_JS)
 
-    def test_stops_on_first_message_and_session_open(self):
+    def test_stops_on_first_message(self):
         self.assertIn("stopStarsFxNow()", APP_JS)
         # First submit kills it (placed right after the empty-text guard).
         self.assertIn("if (!text) return;\n  stopStarsFxNow();", APP_JS)
-        # Opening a real session kills it too.
-        self.assertIn("async function openSession(sessionId) {\n  stopStarsFxNow();", APP_JS)
+
+    def test_stays_on_when_session_opened(self):
+        # The toggle owns the field now: opening a session leaves it up.
+        self.assertNotIn(
+            "async function openSession(sessionId) {\n  stopStarsFxNow();", APP_JS)
 
     def test_reduced_motion_opt_out(self):
         self.assertIn("prefers-reduced-motion", APP_JS)

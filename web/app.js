@@ -488,7 +488,7 @@ setInterval(() => {
 }, 60000);
 
 async function openSession(sessionId) {
-  stopStarsFxNow();
+  // The starfield stays up: the bottom-right switch owns it now.
   closeRowMenus();
   // Assign before clearTranscript: its updateWelcome() would otherwise see
   // a stale null sessionId and restart the starfield mid-open.
@@ -867,8 +867,9 @@ function updateWelcome() {
 }
 
 /* Welcome starfield (web/stars.js): fullscreen backdrop behind the app,
- * shown until the first message is sent or a real session opens. The
- * bottom-right switch toggles it by hand; the choice persists per browser. */
+ * shown on the empty welcome view until the first message is sent.
+ * Opening a session leaves it running: the bottom-right switch owns it,
+ * and the choice persists per browser. */
 const STARS_KEY = "web-muse:stars";
 // Locked-in look: dimmed, thinned-out, gentle parallax.
 const STARS_OPTIONS = {
