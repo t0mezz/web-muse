@@ -346,7 +346,7 @@ body {
 .tline summary { cursor: pointer; color: var(--faint); font-size: 11px; }
 .tline pre.raw {
   margin: 5px 0 0; padding: 7px 9px; background: #0a0c10; border: 1px solid var(--line);
-  border-radius: 999px; overflow-x: auto; font-size: 11.5px; color: var(--dim);
+  border-radius: 10px; overflow-x: auto; font-size: 11.5px; color: var(--dim);
   white-space: pre; max-height: 260px; overflow-y: auto;
 }
 .tline .caret { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; animation: blink 1s infinite; }
@@ -370,7 +370,7 @@ body {
 }
 .tline .txt.md pre {
   margin: 6px 0; padding: 7px 9px; background: #0a0c10;
-  border: 1px solid var(--line); border-radius: 999px;
+  border: 1px solid var(--line); border-radius: 10px;
   overflow-x: auto; font-size: 11.5px;
 }
 .tline .txt.md pre code { background: none; padding: 0; }
@@ -397,7 +397,7 @@ body {
 #cards { display: flex; flex-direction: column; gap: 8px; padding: 0 12px; max-height: 32vh; overflow-y: auto; flex: none; }
 #cards:empty { padding: 0; }
 .card {
-  border: 1px solid var(--warn); border-radius: 999px; padding: 10px 12px;
+  border: 1px solid var(--warn); border-radius: 14px; padding: 10px 12px;
   background: #1d180c; font-size: 13px; font-family: system-ui, sans-serif;
 }
 .card h4 { margin: 0 0 5px; font-size: 13.5px; }
@@ -416,7 +416,7 @@ body {
 .card .opts:empty { display: none; }
 .card .opt {
   display: block; width: 100%; text-align: left; cursor: pointer;
-  padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--bg); color: var(--fg); font-size: 13px; font-family: inherit;
 }
 .card .opt:hover { border-color: var(--accent); }
@@ -494,7 +494,7 @@ body {
 #center.is-welcome #slash-popup { width: min(680px, 100%); }
 #slash-popup.running {
   background: var(--panel); border: 1px solid var(--line);
-  border-radius: 999px; padding: 6px 12px 6px 35px;
+  border-radius: 12px; padding: 6px 12px 6px 35px;
 }
 .slash-item { padding: 3px 0; cursor: pointer; display: flex; gap: 10px; font-size: 13px; background: none; }
 .slash-item .cmd { font-family: var(--mono); color: var(--dim); font-weight: 400; flex: none; min-width: 96px; }
@@ -505,7 +505,7 @@ body {
 
 /* inspector */
 #inspector {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(88vw, 330px); z-index: 30;
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(84vw, 320px); z-index: 30;
   background: var(--panel); border-left: 1px solid var(--line);
   display: none; flex-direction: column;
 }
@@ -519,7 +519,7 @@ body {
 }
 .tabpanel { flex: 1; overflow-y: auto; padding: 10px; font-size: 13px; }
 #inspector .card { margin-bottom: 8px; }
-.tool-row { border: 1px solid var(--line); border-radius: 999px; padding: 7px 9px; margin-bottom: 7px; font-family: var(--mono); font-size: 12px; }
+.tool-row { border: 1px solid var(--line); border-radius: 10px; padding: 7px 9px; margin-bottom: 7px; font-family: var(--mono); font-size: 12px; }
 .tool-row .t { color: var(--warn); font-weight: 700; }
 .tool-row .s { color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: hidden; }
 #tab-session label { display: block; margin-bottom: 10px; font-size: 12px; color: var(--dim); }
@@ -541,7 +541,7 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 .dir-box {
   width: min(560px, 100%); max-height: min(76vh, 640px);
   display: flex; flex-direction: column; gap: 8px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
   padding: 12px;
 }
 .dir-head { display: flex; align-items: center; gap: 8px; }
@@ -571,7 +571,7 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 .dir-crumbs .sep { color: var(--faint); }
 .dir-list {
   flex: 1; min-height: 180px; overflow-y: auto;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
 }
 .dir-row {
   display: block; width: 100%; text-align: left; cursor: pointer;
@@ -636,7 +636,7 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
   #btn-close-sessions, #scrim { display: none !important; }
   #sessions { position: static; width: 264px; flex: none; border-right: 1px solid var(--line); }
   #center { max-width: 880px; margin: 0 auto; width: 100%; border: none; }
-  #inspector { position: static; width: 300px; flex: none; }
+  #inspector { position: static; width: 264px; flex: none; }
   #inspector.open { display: flex; }
   #terminal { padding: 16px 20px 20px; }
 }
@@ -670,14 +670,14 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
   position: absolute; bottom: calc(100% + 6px); left: 0;
   min-width: 220px; max-width: min(340px, 78vw); max-height: 240px;
   overflow-y: auto; z-index: 30;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
   padding: 4px;
 }
 .repo-menu[hidden] { display: none; }
 #branch-menu { min-width: 110px; max-width: min(170px, 39vw); }
 .repo-opt {
   display: block; width: 100%; text-align: left; cursor: pointer;
-  background: none; border: none; border-radius: 999px;
+  background: none; border: none; border-radius: 8px;
   color: var(--fg); padding: 6px 10px; font-size: 13px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

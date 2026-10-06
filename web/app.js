@@ -3039,8 +3039,8 @@ document.addEventListener("click", (ev) => {
  * delete → next hint. Hints live in composer-hints.json; a one-item
  * fallback covers the fetch. Harmless while the user has typed (the
  * placeholder is hidden then anyway); skipped under prefers-reduced-motion. */
-let composerHints = ["Ask Muse…"];
-fetch("composer-hints.json")
+let composerHints = null;
+const hintsReady = fetch("composer-hints.json")
   .then((r) => (r.ok ? r.json() : Promise.reject(new Error("hints " + r.status))))
   .then((j) => { if (Array.isArray(j) && j.length) composerHints = j.map(String); })
   .catch(() => {});
@@ -3050,14 +3050,33 @@ function startComposerHints() {
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   input.dataset.hintsOn = "1";
   const TYPE_MS = 65, DELETE_MS = 32, PAUSE_MS = 1500, START_MS = 800, BLINK_MS = 450;
-  let wi = 0, ci = 0, phase = "typing", blinkOn = true, blinkT = 0;
+  let ci = 0, phase = "typing", blinkOn = true, blinkT = 0, stopped = false;
+  // Random cycle with no repeats: shuffled index order, reshuffled per pass.
+  const shuffle = (n) => {
+    const a = Array.from({ length: n }, (_, i) => i);
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+  const list = composerHints && composerHints.length ? composerHints : ["Ask Muse…"];
+  let order = shuffle(list.length), oi = 0;
+  const cur = () => list[order[oi]] ?? "";
+  const advance = () => {
+    oi++;
+    if (oi >= order.length) {
+      order = shuffle(list.length);
+      oi = 0;
+    }
+  };
   const render = () => {
-    const text = Array.from(composerHints[wi]).slice(0, ci).join("");
+    const text = Array.from(cur()).slice(0, ci).join("");
     input.placeholder = text + (blinkOn ? "|" : "");
   };
   const step = () => {
-    if (!input.isConnected) return;
-    const len = Array.from(composerHints[wi]).length;
+    if (stopped || !input.isConnected) return;
+    const len = Array.from(cur()).length;
     if (phase === "typing") {
       blinkOn = true;
       if (ci < len) { ci++; render(); setTimeout(step, TYPE_MS); }
@@ -3070,9 +3089,13 @@ function startComposerHints() {
     } else {
       blinkOn = true;
       if (ci > 0) { ci--; render(); setTimeout(step, DELETE_MS); }
-      else { wi = (wi + 1) % composerHints.length; phase = "typing"; setTimeout(step, TYPE_MS); }
+      else { advance(); phase = "typing"; setTimeout(step, TYPE_MS); }
     }
   };
+  // Once the user enters the box, the loop stops for good (until reload);
+  // blurring just restores the classic static placeholder.
+  input.addEventListener("focus", () => { stopped = true; input.placeholder = ""; });
+  input.addEventListener("blur", () => { if (stopped) input.placeholder = "Ask Muse…"; });
   render();
   setTimeout(step, START_MS);
 }
@@ -3086,4 +3109,6 @@ updateRunChip();
 
 connect();
 autosize();
-startComposerHints();
+// Start the hints only once the file has loaded (or 1.5s max), so the
+// first hint already comes from the shuffled file, not the fallback.
+Promise.race([hintsReady, new Promise((r) => setTimeout(r, 1500))]).then(startComposerHints);

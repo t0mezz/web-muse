@@ -307,6 +307,11 @@ class TestSessionBarUI(unittest.TestCase):
         self.assertIn("startComposerHints()", APP_JS)
         self.assertIn("composer-hints.json", APP_JS)
         self.assertIn("input.placeholder", APP_JS)
+        self.assertIn('input.addEventListener("focus"', APP_JS)
+        self.assertIn('input.addEventListener("blur"', APP_JS)
+        self.assertIn('input.placeholder = "Ask Muse…"', APP_JS)
+        self.assertIn('input.placeholder = ""', APP_JS)
+        self.assertIn("Math.random()", APP_JS)
 
     def test_refresh_spin_plays_fully(self):
         self.assertIn("void btn.offsetWidth", APP_JS)

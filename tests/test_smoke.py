@@ -178,6 +178,9 @@ class SmokeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(st, 200)
         self.assertIn(b"Bridge progress", body)
         self.assertIn(b"/health", body)
+        self.assertIn(b"syncLogVisibility", body)
+        self.assertIn(b"log-h", body)
+        self.assertIn(b"#log[hidden]", body)
         for asset in ("/app.js", "/style.css"):
             st, hdrs, body = await asyncio.to_thread(self.http_get, asset)
             self.assertEqual(st, 200, asset)
