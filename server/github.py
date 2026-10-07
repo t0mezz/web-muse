@@ -146,6 +146,38 @@ def validate_branch(name):
     return branch
 
 
+LEAF_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}")
+
+# Fallback leaf name when a repo slug is somehow not dir-safe (validated
+# fullNames always yield a safe slug; this is defense in depth so session
+# layout never breaks on an odd name).
+FALLBACK_LEAF_NAME = "repo"
+
+
+def repo_dir_name(full_name):
+    """Clone-leaf dir name for one `owner/repo` fullname (pure).
+
+    Returns the repo slug as-is (validated slugs are dir-safe), or
+    FALLBACK_LEAF_NAME when the slug is missing or not dir-safe
+    (leading dots/dashes, dot-segments, bad charset, wrong length).
+    Never raises.
+    """
+    try:
+        slug = (full_name or "").strip().split("/")[-1]
+    except (AttributeError, IndexError):
+        return FALLBACK_LEAF_NAME
+    if (not LEAF_NAME_RE.fullmatch(slug) or slug[:1] in (".", "-")
+            or slug in (".", "..")):
+        return FALLBACK_LEAF_NAME
+    return slug
+
+
+def is_safe_leaf_name(name):
+    """True when a clone-leaf dir name is safe to create/remove (pure)."""
+    return (isinstance(name, str) and bool(LEAF_NAME_RE.fullmatch(name))
+            and name[:1] not in (".", "-") and name not in (".", ".."))
+
+
 def build_clone_argv(full_name, dest, gh_bin=GH_BIN, branch=None):
     """`gh repo clone` argv (shallow); fullname must already be validated.
 
@@ -396,8 +428,9 @@ def _remove_half_clone(dest):
     import shutil
     try:
         target = Path(dest)
-        # Only touch paths that look like our clone leaf (named "repo").
-        if target.name == "repo" and target.is_dir():
+        # Only touch paths that look like our clone leaf (a safe dir
+        # name — the repo slug, or the legacy "repo").
+        if is_safe_leaf_name(target.name) and target.is_dir():
             shutil.rmtree(target, ignore_errors=True)
     except Exception:
         LOG.warning("half-clone cleanup failed for %s", dest, exc_info=True)

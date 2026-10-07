@@ -378,12 +378,42 @@ class TestStubBranches(GhStubCase):
             asyncio.run(run_gh_branches("../escape"))
 
 
+class TestRepoDirName(unittest.TestCase):
+    def test_slug_used_as_is(self):
+        from server.github import repo_dir_name
+        self.assertEqual(repo_dir_name("octo/hello"), "hello")
+        self.assertEqual(repo_dir_name("a.b-c_d/e.f-g_h"), "e.f-g_h")
+
+    def test_unsafe_slugs_fall_back(self):
+        from server.github import repo_dir_name
+        # A bare but dir-safe slug passes through (callers always pass
+        # validated owner/repo; this is just the last-segment rule).
+        self.assertEqual(repo_dir_name("no-slash"), "no-slash")
+        for bad in ("octo/.hidden", "octo/-flags", "octo/..", "octo/",
+                    "", "   ", None, 123, ["a/b"]):
+            self.assertEqual(repo_dir_name(bad), "repo", repr(bad))
+
+    def test_safe_leaf_names(self):
+        from server.github import is_safe_leaf_name
+        self.assertTrue(is_safe_leaf_name("hello"))
+        self.assertTrue(is_safe_leaf_name("repo"))  # legacy leaf
+        for bad in ("", ".hidden", "-flags", ".", "..", "a/b",
+                    "has space", None, 123):
+            self.assertFalse(is_safe_leaf_name(bad), repr(bad))
+
+
 class TestCloneLeaf(unittest.TestCase):
     def test_leaf_shape(self):
         with tempfile.TemporaryDirectory() as base:
             r = SessionRouter(msp=None, workspace_base=base)
             dest = r._clone_leaf("sid-1")
             self.assertEqual(dest, str(Path(base) / "sid-1" / "repo"))
+
+    def test_named_leaf_from_fullname(self):
+        with tempfile.TemporaryDirectory() as base:
+            r = SessionRouter(msp=None, workspace_base=base)
+            dest = r._clone_leaf("sid-1n", "octo/hello")
+            self.assertEqual(dest, str(Path(base) / "sid-1n" / "hello"))
 
     def test_unsafe_sid_rejected(self):
         with tempfile.TemporaryDirectory() as base:
@@ -395,19 +425,19 @@ class TestCloneLeaf(unittest.TestCase):
     def test_existing_git_is_dest_exists(self):
         with tempfile.TemporaryDirectory() as base:
             r = SessionRouter(msp=None, workspace_base=base)
-            dest = r._clone_leaf("sid-2")
+            dest = r._clone_leaf("sid-2", "octo/hello")
             (Path(dest) / ".git").mkdir(parents=True)
             with self.assertRaises(GithubError) as cm:
-                r._clone_leaf("sid-2")
+                r._clone_leaf("sid-2", "octo/hello")
             self.assertEqual(cm.exception.code, "dest_exists")
 
     def test_residue_cleared_for_retry(self):
         with tempfile.TemporaryDirectory() as base:
             r = SessionRouter(msp=None, workspace_base=base)
-            dest = r._clone_leaf("sid-3")
+            dest = r._clone_leaf("sid-3", "octo/hello")
             Path(dest).mkdir(parents=True)
             (Path(dest) / "partial.out").write_text("half")
-            self.assertEqual(r._clone_leaf("sid-3"), dest)
+            self.assertEqual(r._clone_leaf("sid-3", "octo/hello"), dest)
             self.assertFalse(Path(dest).exists())
 
     def test_no_base_refuses(self):
@@ -417,18 +447,36 @@ class TestCloneLeaf(unittest.TestCase):
 
 
 class TestGithubClean(unittest.TestCase):
-    def test_removes_leaf_only(self):
+    def test_removes_named_leaf_only(self):
         with tempfile.TemporaryDirectory() as base:
             r = SessionRouter(msp=None, workspace_base=base)
-            dest = r._clone_leaf("sid-5")
-            Path(dest).mkdir(parents=True)
+            dest = r._clone_leaf("sid-5", "octo/hello")
+            (Path(dest) / ".git").mkdir(parents=True)
             (Path(dest) / "f").write_text("x")
-            keep = Path(base) / "sid-5" / "notes.txt"
-            keep.write_text("keep me")
+            keep = Path(base) / "sid-5" / "AGENTS.md"
+            keep.write_text("# session workspace\n")
             out = r._clean_github_clone("sid-5")
             self.assertEqual(out, {"removed": True, "dest": dest})
             self.assertFalse(Path(dest).exists())
-            self.assertTrue(keep.is_file())  # sibling untouched
+            self.assertTrue(keep.is_file())  # session file untouched
+
+    def test_removes_legacy_repo_leaf(self):
+        with tempfile.TemporaryDirectory() as base:
+            r = SessionRouter(msp=None, workspace_base=base)
+            dest = r._clone_leaf("sid-5b")
+            (Path(dest) / ".git").mkdir(parents=True)
+            out = r._clean_github_clone("sid-5b")
+            self.assertEqual(out, {"removed": True, "dest": dest})
+
+    def test_bare_dir_without_git_is_not_a_clone(self):
+        with tempfile.TemporaryDirectory() as base:
+            r = SessionRouter(msp=None, workspace_base=base)
+            wsdir = Path(base) / "sid-5c"
+            wsdir.mkdir()
+            (wsdir / "scratch.txt").write_text("x")
+            out = r._clean_github_clone("sid-5c")
+            self.assertFalse(out["removed"])
+            self.assertTrue((wsdir / "scratch.txt").is_file())
 
     def test_missing_is_not_an_error(self):
         with tempfile.TemporaryDirectory() as base:

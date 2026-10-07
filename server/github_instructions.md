@@ -1,9 +1,12 @@
 # web-muse: instructions for GitHub-cloned sessions (do not commit this file)
 
 This file was seeded by the web-muse bridge into a fresh clone of
-__FULL_NAME__. It is bridge-owned: do not commit it, do not move it,
-and if the repo ships its own AGENTS.md, that file still governs the
-project — this one only adds how to work with the clone itself.
+__FULL_NAME__ because the repo ships no AGENTS.md of its own. It is
+bridge-owned: do not commit it, do not move it. If the repo gains its
+own AGENTS.md upstream, that file governs the project instead — this
+one only adds how to work with the clone itself. (Your session
+workspace root holds a second bridge-owned AGENTS.md that points at
+this clone and at the app-orders protocol.)
 
 ## Where you are
 
