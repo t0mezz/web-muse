@@ -18,7 +18,8 @@ const state = {
   // Last explicitly chosen reasoning effort (picker, /effort or
   // /default-effort): applied to the current session AND remembered as
   // the default for created sessions (parity with pickedModel).
-  pickedEffort: null,
+  // Medium is the default: absence of a pick still carries it.
+  pickedEffort: "medium",
   // Last explicitly chosen approval mode (Session panel): applied to the
   // current session AND remembered as the default for created sessions.
   pickedApprovalMode: null,
@@ -2499,12 +2500,12 @@ function savePickedEffort() {
   } catch (_) { /* storage unavailable: memory-only */ }
 }
 function loadPickedEffort() {
+  // Missing, corrupt, or retired tiers (e.g. none/ultra) fall back to
+  // the medium default rather than the host default.
   try {
     const raw = localStorage.getItem(PICKED_EFFORT_KEY);
-    if (EFFORT_TIERS.includes(raw)) {
-      state.pickedEffort = raw;
-    }
-  } catch (_) { /* corrupt or unavailable: no default */ }
+    state.pickedEffort = EFFORT_TIERS.includes(raw) ? raw : "medium";
+  } catch (_) { state.pickedEffort = "medium"; }
 }
 function syncEffortPicker() {
   const sel = el("effort-picker");
@@ -3168,17 +3169,14 @@ async function cmdSetEffort(args) {
 async function cmdDefaultEffort(args) {
   const want = (args[0] || "").toLowerCase();
   if (!want || want === "show") {
-    sysLine(state.pickedEffort
-      ? `Default reasoning effort: ${state.pickedEffort} (applies to new chats).`
-      : "No default reasoning effort — new chats use the host default. " +
-        "Set one: /default-effort <tier>  tiers: " + EFFORTS.join(" | "));
+    sysLine(`Default reasoning effort: ${state.pickedEffort} (applies to new chats).`);
     return;
   }
   if (want === "clear") {
-    state.pickedEffort = null;
+    state.pickedEffort = "medium";
     savePickedEffort();
     syncEffortPicker();
-    sysLine("Default reasoning effort cleared — new chats use the host default.");
+    sysLine("Default reasoning effort reset to medium.");
     return;
   }
   if (!EFFORTS.includes(want)) {
@@ -3668,11 +3666,11 @@ el("terminal").addEventListener("scroll", () => {
 el("effort-picker").onchange = (ev) => {
   const v = ev.target.value || "";
   if (!v) {
-    // Placeholder (effort…): clear the remembered default.
-    state.pickedEffort = null;
+    // Placeholder (effort…): back to the medium default.
+    state.pickedEffort = "medium";
     savePickedEffort();
     syncEffortPicker();
-    toast("default effort cleared (new chats use the host default)");
+    toast("default effort → medium");
     return;
   }
   // Remembered as the default for created chats, not just this one.
