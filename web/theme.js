@@ -70,7 +70,16 @@
     return VAR_NAMES[key] || ('--' + key);
   }
 
+  // Last palette produced by apply(): the live theme. get() reads from
+  // here so canvas/inline-style consumers (stars.js) follow /theme
+  // switches and stored overrides; COLORS stays the pristine default.
+  var applied = null;
+
   function get(key, fallback) {
+    if (applied && Object.prototype.hasOwnProperty.call(COLORS, key) &&
+        typeof applied[key] === 'string' && applied[key]) {
+      return applied[key];
+    }
     var v = COLORS[key];
     if (typeof v === 'string' && v) return v;
     return fallback !== undefined ? fallback : v;
@@ -102,6 +111,7 @@
         } catch (_) {}
       }
     }
+    applied = merged;
     return merged;
   }
 

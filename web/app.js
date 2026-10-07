@@ -2311,6 +2311,11 @@ async function cmdTheme(args) {
   if (!n) return sysLine(`Theme ${hit} has no known color keys.`, true);
   try { localStorage.setItem(T.storageKey, JSON.stringify(clean)); } catch (_) {}
   T.apply(clean);
+  // The starfield paints inline styles (box-shadows, backdrop), not CSS
+  // vars, so a running field would keep its old sky: rebuild it when it
+  // is up so the new star / starBg0 / starBg1 take effect at once
+  // (same as applyThemeOrder).
+  if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }
   sysLine(`Theme → ${hit} (${n} colors).`);
   toast(`theme → ${hit}`);
 }
