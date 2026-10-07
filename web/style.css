@@ -234,8 +234,8 @@ body {
   letter-spacing: inherit; text-transform: inherit; color: inherit;
   display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
 }
-.sess-toggle::before { content: "▸"; font-size: 10px; }
-.sess-toggle[aria-expanded="true"]::before { content: "▾"; }
+.sess-toggle::after { content: "▸"; font-size: 10px; margin-left: auto; }
+.sess-toggle[aria-expanded="true"]::after { content: "▾"; }
 .session-row { position: relative; display: flex; align-items: flex-start; gap: 8px; padding: 9px 12px; border-radius: 0; cursor: default; }
 .session-row:hover, .session-row:focus-within { background: var(--panel2); }
 .session-row.active { background: var(--select); }
