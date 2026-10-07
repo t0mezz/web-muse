@@ -119,8 +119,23 @@ body {
 .ticker { font: inherit; font-size: 12px; }
 .ticker:disabled { opacity: 0.45; cursor: default; }
 .ticker:hover:not(:disabled) { border-color: var(--accent); }
-.session-row.selected { background: var(--pickedBg); }
-.session-row.selected:hover { background: var(--select); }
+/* circular tick box below checkmark — replaces background highlight */
+.sess-icon-col { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; margin-top: 2px; }
+.sess-check {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 1.5px solid var(--line); background: transparent;
+  display: none; align-items: center; justify-content: center;
+  cursor: pointer; flex: none;
+}
+.sess-check::after {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); opacity: 0; transform: scale(0.5);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.session-row:hover .sess-check, .session-row:focus-within .sess-check, .sess-check.checked { display: inline-flex; }
+.sess-check.checked { border-color: var(--accent); background: var(--accent); }
+.sess-check.checked::after { opacity: 1; transform: scale(1); background: var(--onAccent); }
+@media (prefers-reduced-motion: reduce) { .sess-check::after { transition: none; } }
 #btn-delete-selected[hidden] { display: none; }
 /* From Uiverse.io by philipo30 — animated trash */
 .delete-button {

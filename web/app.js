@@ -382,8 +382,9 @@ function syncSelectionUI() {
   if (trash) trash.hidden = n === 0;
   document.querySelectorAll(".session-row").forEach((row) => {
     const sid = row.dataset.sid;
-    row.classList.toggle("selected", state.selectedIds.has(sid));
     row.setAttribute("aria-selected", state.selectedIds.has(sid) ? "true" : "false");
+    const cb = row.querySelector(".sess-check");
+    if (cb) cb.classList.toggle("checked", state.selectedIds.has(sid));
   });
 }
 
@@ -429,15 +430,24 @@ async function deleteSelected() {
 
 function appendSessionRow(box, s) {
   const row = document.createElement("div");
-  row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "") + (state.selectedIds.has(s.sessionId) ? " selected" : "");
+  row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "");
   row.setAttribute("role", "listitem");
   row.dataset.sid = s.sessionId;
   row.setAttribute("aria-selected", state.selectedIds.has(s.sessionId) ? "true" : "false");
+  const iconCol = document.createElement("span");
+  iconCol.className = "sess-icon-col";
   const icon = document.createElement("span");
   const running = sessStatusLabel(s) === "Working";
   icon.className = "sess-icon" + (running ? " running" : "");
   icon.setAttribute("aria-hidden", "true");
   icon.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.4 8.2l1.8 1.8 3.4-3.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const check = document.createElement("button");
+  check.type = "button";
+  check.className = "sess-check" + (state.selectedIds.has(s.sessionId) ? " checked" : "");
+  check.setAttribute("aria-label", state.selectedIds.has(s.sessionId) ? "Deselect session" : "Select session");
+  check.setAttribute("aria-pressed", state.selectedIds.has(s.sessionId) ? "true" : "false");
+  check.onclick = (e) => { e.stopPropagation(); toggleSelection(s.sessionId); };
+  iconCol.append(icon, check);
   const open = document.createElement("button");
   open.type = "button";
   open.className = "sess-open";
@@ -504,7 +514,7 @@ function appendSessionRow(box, s) {
   const body = document.createElement("span");
   body.className = "sess-body";
   body.append(top, meta);
-  open.append(icon, body);
+  open.append(body);
   // Path hidden by design; identity stays on the name hover. Row actions
   // live behind the config button.
   const menu = document.createElement("div");
@@ -590,7 +600,7 @@ function appendSessionRow(box, s) {
   row.addEventListener("touchmove", clearPress);
   row.addEventListener("touchcancel", clearPress);
 
-  row.append(open, cfg, menu);
+  row.append(iconCol, open, cfg, menu);
   box.append(row);
 }
 

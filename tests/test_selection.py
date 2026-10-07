@@ -84,8 +84,12 @@ class TestSelectionUI(unittest.TestCase):
         self.assertIn('trash.hidden = n === 0', APP_JS)
 
     def test_selected_row_styled(self):
-        self.assertIn(".session-row.selected", STYLE_CSS)
-        self.assertIn('row.classList.toggle("selected"', APP_JS)
+        self.assertIn(".sess-check", STYLE_CSS)
+        self.assertIn(".sess-check.checked", STYLE_CSS)
+        self.assertIn(".sess-icon-col", STYLE_CSS)
+        self.assertIn('sess-check', APP_JS)
+        self.assertIn('classList.toggle("checked"', APP_JS)
+        self.assertNotIn('row.classList.toggle("selected"', APP_JS)
 
     def test_ticker_clears_and_escape(self):
         self.assertIn('el("selection-ticker").onclick = clearSelection', APP_JS)
