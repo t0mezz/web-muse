@@ -176,10 +176,10 @@ body {
   fill: var(--fg);
   pointer-events: none;
 }
-.checkbox .icon-check { opacity: 1; }
+.checkbox .icon-check { opacity: 0; }
 .checkbox .icon-cross { opacity: 0; }
-.checkbox input:checked ~ .icon-check { opacity: 0; }
-.checkbox input:checked ~ .icon-cross { opacity: 1; }
+.checkbox input:checked ~ .icon-check { opacity: 1; }
+.checkbox input:checked ~ .icon-cross { opacity: 0; }
 .checkbox.checked { background: var(--select); }
 @media (prefers-reduced-motion: reduce) {
   .checkbox .inner { transition: none; }
