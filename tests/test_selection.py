@@ -92,10 +92,14 @@ class TestSelectionUI(unittest.TestCase):
         self.assertIn('el("btn-delete-selected").onclick = deleteSelected', APP_JS)
         self.assertIn('key === "Escape"', APP_JS)
 
-    def test_delete_confirmation(self):
-        self.assertIn("Delete", APP_JS)
+    def test_delete_no_confirmation(self):
+        # verification removed: delete is immediate, no confirm()
         self.assertIn('type: "delete"', APP_JS)
-        self.assertIn("confirm(", APP_JS)
+        # ensure deleteSelected body does not gate on confirm
+        body = APP_JS.split("async function deleteSelected")[1].split("async function")[0]
+        self.assertNotIn("confirm(", body)
+        body2 = APP_JS.split("async function deleteSession")[1].split("\n}")[0]
+        self.assertNotIn("confirm(", body2)
 
 
 if __name__ == "__main__":

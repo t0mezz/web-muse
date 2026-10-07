@@ -417,7 +417,6 @@ function clearSelection() {
 async function deleteSelected() {
   const ids = [...state.selectedIds];
   if (!ids.length) return;
-  if (!confirm(`Delete ${ids.length} session${ids.length === 1 ? "" : "s"}?`)) return;
   let ok = 0;
   for (const sid of ids) {
     try { await send({ type: "delete", sessionId: sid }); ok++; } catch (_) {}
@@ -898,7 +897,6 @@ async function cmdSync() {
 async function deleteSession(sessionId) {
   const sid = sessionId || state.sessionId;
   if (!sid) return toast("no session", true);
-  if (!confirm("Delete session " + shortId(sid) + "?")) return;
   try {
     await send({ type: "delete", sessionId: sid });
     toast("deleted " + shortId(sid));
