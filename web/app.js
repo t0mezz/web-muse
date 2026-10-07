@@ -2269,48 +2269,103 @@ function themeValueOk(k, v) {
   if (k === "scrim") return /^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0|1|0?\.\d+)\s*\)$/.test(v);
   return /^(?:#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|#[0-9a-fA-F]{8})$/.test(v);
 }
-async function cmdTheme(args) {
-  // Named themes from web/themes/*.json (bridge lists them at /themes).
-  // Bare /theme lists what is saved; /theme <name> applies one,
-  // replacing the stored override so no colors leak across switches.
-  const T = window.WebMuseTheme;
-  if (!T) return sysLine("theme support missing (theme.js not loaded).", true);
-  let names = [];
-  try {
-    const r = await fetch("themes");
-    if (!r.ok) throw new Error("themes " + r.status);
-    const j = await r.json();
-    if (j && Array.isArray(j.themes)) names = j.themes.map(String);
-  } catch (e) { return sysLine("theme list failed: " + e.message, true); }
-  const want = ((args[0] || "").replace(/\.json$/i, ""));
-  if (!want) {
-    sysLine(names.length
-      ? "Themes:\n" + names.map((n) => "  " + n).join("\n") + "\nApply: /theme <name>"
-      : "(no themes saved yet — add one as web/themes/<name>.json)");
-    return;
-  }
-  const hit = names.find((n) => n.toLowerCase() === want.toLowerCase());
-  if (!hit) {
-    return sysLine(`Unknown theme "${want}" — available: ${names.join(", ") || "(none)"}`, true);
-  }
-  let colors;
-  try {
-    const r = await fetch("themes/" + encodeURIComponent(hit) + ".json");
-    if (!r.ok) throw new Error("theme " + r.status);
-    colors = await r.json();
-  } catch (e) { return sysLine("theme load failed: " + e.message, true); }
+// Saved theme currently applied via /theme <name> (canonical server
+// name). /theme reload re-fetches this file, so editing
+// web/themes/<name>.json takes effect in one step — no bridge restart,
+// no switching away and back.
+const THEME_NAME_KEY = "web-muse:theme-name";
+function activeThemeName() {
+  try { return localStorage.getItem(THEME_NAME_KEY) || null; }
+  catch (_) { return null; }
+}
+async function fetchThemeColors(hit) {
+  // Never cached: an edited theme file must come back fresh when the
+  // same name is applied again (the bridge also serves no-store).
+  const r = await fetch("themes/" + encodeURIComponent(hit) + ".json", { cache: "no-store" });
+  if (!r.ok) throw new Error("theme " + r.status);
+  const colors = await r.json();
   if (!colors || typeof colors !== "object") {
-    return sysLine(`Theme ${hit} is not a JSON object.`, true);
+    throw new Error(`Theme ${hit} is not a JSON object.`);
   }
+  return colors;
+}
+function applyThemeColors(hit, colors) {
+  // Wholesale replace (same as before): switching themes never leaks
+  // colors from the previous one. Returns the applied count, 0 when
+  // the file holds no known color keys.
+  const T = window.WebMuseTheme;
   const clean = {};
   for (const k of Object.keys(colors)) {
     if (typeof T.colors[k] === "string" && typeof colors[k] === "string"
         && colors[k]) clean[k] = colors[k];
   }
   const n = Object.keys(clean).length;
-  if (!n) return sysLine(`Theme ${hit} has no known color keys.`, true);
+  if (!n) return 0;
   try { localStorage.setItem(T.storageKey, JSON.stringify(clean)); } catch (_) {}
+  try { localStorage.setItem(THEME_NAME_KEY, hit); } catch (_) {}
   T.apply(clean);
+  // The starfield paints inline styles (box-shadows, backdrop), not CSS
+  // vars, so a running field would keep its old sky: rebuild it when it
+  // is up so the new star / starBg0 / starBg1 take effect at once
+  // (same as applyThemeOrder).
+  if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }
+  return n;
+}
+async function cmdThemeReload(names) {
+  const active = activeThemeName();
+  if (!active) {
+    return sysLine("No saved theme applied yet — pick one: /theme <name>.", true);
+  }
+  const hit = (names || []).find((n) => n.toLowerCase() === active.toLowerCase());
+  if (!hit) {
+    return sysLine(`Active theme "${active}" is gone — available: ${names.join(", ") || "(none)"}`, true);
+  }
+  let n;
+  try {
+    n = applyThemeColors(hit, await fetchThemeColors(hit));
+  } catch (e) { return sysLine("theme load failed: " + e.message, true); }
+  if (!n) return sysLine(`Theme ${hit} has no known color keys.`, true);
+  sysLine(`Theme → ${hit} (${n} colors, reloaded).`);
+  toast(`theme → ${hit} (reloaded)`);
+}
+async function cmdTheme(args) {
+  // Named themes from web/themes/*.json (bridge lists them at /themes).
+  // Bare /theme lists what is saved; /theme <name> applies one,
+  // replacing the stored override so no colors leak across switches.
+  // Re-running /theme <name> (or /theme reload for the active one)
+  // re-fetches the file uncached, so edits apply in one step.
+  const T = window.WebMuseTheme;
+  if (!T) return sysLine("theme support missing (theme.js not loaded).", true);
+  let names = [];
+  try {
+    const r = await fetch("themes", { cache: "no-store" });
+    if (!r.ok) throw new Error("themes " + r.status);
+    const j = await r.json();
+    if (j && Array.isArray(j.themes)) names = j.themes.map(String);
+  } catch (e) { return sysLine("theme list failed: " + e.message, true); }
+  const want = ((args[0] || "").replace(/\.json$/i, ""));
+  if (!want) {
+    const active = activeThemeName();
+    sysLine(names.length
+      ? "Themes:\n" + names.map((n) => (n === active ? "* " : "  ") + n).join("\n") +
+        "\nApply: /theme <name>\nReload active: /theme reload"
+      : "(no themes saved yet — add one as web/themes/<name>.json)");
+    return;
+  }
+  // A saved theme actually named "reload" wins over the keyword, so
+  // every file stays reachable; otherwise reload re-applies the active
+  // theme in one step.
+  const hit = names.find((n) => n.toLowerCase() === want.toLowerCase());
+  if (!hit) {
+    if (want.toLowerCase() === "reload") return cmdThemeReload(names);
+    return sysLine(`Unknown theme "${want}" — available: ${names.join(", ") || "(none)"}`, true);
+  }
+  let colors;
+  try {
+    colors = await fetchThemeColors(hit);
+  } catch (e) { return sysLine("theme load failed: " + e.message, true); }
+  const n = applyThemeColors(hit, colors);
+  if (!n) return sysLine(`Theme ${hit} has no known color keys.`, true);
   sysLine(`Theme → ${hit} (${n} colors).`);
   toast(`theme → ${hit}`);
 }

@@ -35,6 +35,12 @@
     dim: '#736B63',
     faint: '#81786F',
     accent: '#AEAC78',
+    // Keyboard focus ring: accent mixed 2/3 toward espresso so the
+    // 2px :focus-visible outline holds >= 3:1 on every light surface
+    // (accent alone only reaches ~1.5-2.3:1 there). Dark themes reuse
+    // their accent, which already passes; tests/test_focus_rings.py
+    // guards the ratio per theme.
+    focus: '#6D6753',
     ok: '#78735A',
     warn: '#F2C46A',
     err: '#8B7551',
@@ -70,7 +76,16 @@
     return VAR_NAMES[key] || ('--' + key);
   }
 
+  // Last palette produced by apply(): the live theme. get() reads from
+  // here so canvas/inline-style consumers (stars.js) follow /theme
+  // switches and stored overrides; COLORS stays the pristine default.
+  var applied = null;
+
   function get(key, fallback) {
+    if (applied && Object.prototype.hasOwnProperty.call(COLORS, key) &&
+        typeof applied[key] === 'string' && applied[key]) {
+      return applied[key];
+    }
     var v = COLORS[key];
     if (typeof v === 'string' && v) return v;
     return fallback !== undefined ? fallback : v;
@@ -102,6 +117,7 @@
         } catch (_) {}
       }
     }
+    applied = merged;
     return merged;
   }
 

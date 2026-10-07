@@ -27,10 +27,10 @@
   'use strict';
 
   /**
-   * Build a CSS box-shadow list of `count` stars scattered over a
-   * 4000x4000px area, each rendered in `starColor`.
-   * Mirrors generateStars() from the original component exactly
-   * (Math.floor(Math.random() * 4000) - 2000 per axis).
+   * Build a CSS box-shadow list of `count` stars scattered over `bounds`
+   * (default: the classic 4000x4000px area), each rendered in
+   * `starColor`. Mirrors generateStars() from the original component
+   * (Math.floor(Math.random() * span) + min per axis).
    */
   function themeColor(key, fallback) {
     var T = root.WebMuseTheme;
@@ -38,12 +38,42 @@
     return fallback;
   }
 
-  function generateStars(count, starColor) {
+  // Scatter area for one star layer. The two dot-fields of a layer share
+  // one shadow set painted at +0 / +2000px, so the -2000px loop stays
+  // seamless for any area: horizontally the field spans the viewport
+  // (plus a parallax margin); vertically each dot-field keeps at least
+  // +-2000px so viewports up to 2000px tall see the exact same density
+  // as before, and taller ones grow the scatter instead of going empty.
+  var SCATTER_MARGIN = 64;
+  function scatterBounds(container) {
+    var w = 0, h = 0;
+    try {
+      if (container && container.clientWidth) {
+        w = container.clientWidth;
+        h = container.clientHeight;
+      }
+    } catch (_) {}
+    try {
+      if ((!w || !h) && root.window) {
+        if (!w && root.window.innerWidth) w = root.window.innerWidth;
+        if (!h && root.window.innerHeight) h = root.window.innerHeight;
+      }
+    } catch (_) {}
+    var halfH = Math.max(2000, h + SCATTER_MARGIN);
+    var width = Math.max(4000, w + SCATTER_MARGIN * 2);
+    return {
+      x0: -SCATTER_MARGIN, x1: -SCATTER_MARGIN + width,
+      y0: -halfH, y1: halfH,
+    };
+  }
+
+  function generateStars(count, starColor, bounds) {
     if (starColor === undefined) starColor = themeColor('star', '#4C4541');
+    if (!bounds) bounds = { x0: -2000, x1: 2000, y0: -2000, y1: 2000 };
     const shadows = [];
     for (let i = 0; i < count; i++) {
-      const x = Math.floor(Math.random() * 4000) - 2000;
-      const y = Math.floor(Math.random() * 4000) - 2000;
+      const x = Math.floor(Math.random() * (bounds.x1 - bounds.x0)) + bounds.x0;
+      const y = Math.floor(Math.random() * (bounds.y1 - bounds.y0)) + bounds.y0;
       shadows.push(x + 'px ' + y + 'px ' + starColor);
     }
     return shadows.join(', ');
@@ -72,6 +102,7 @@
     const size = options.size !== undefined ? options.size : 1;
     const duration = options.duration !== undefined ? options.duration : 50;
     const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#4C4541');
+    const bounds = options.bounds !== undefined ? options.bounds : null;
 
     const layer = document.createElement('div');
     layer.setAttribute('data-slot', 'star-layer');
@@ -82,7 +113,7 @@
     layer.style.height = '2000px';
     layer.style.willChange = 'transform';
 
-    const boxShadow = generateStars(count, starColor);
+    const boxShadow = generateStars(count, starColor, bounds);
 
     const makeDots = (top) => {
       const dots = document.createElement('div');
@@ -166,6 +197,7 @@
     const background =
       options.background !== undefined ? options.background : defaultBackground();
     const pointerEvents = options.pointerEvents !== undefined ? options.pointerEvents : true;
+    const bounds = scatterBounds(container);
 
     const previous = {
       overflow: container.style.overflow,
@@ -189,6 +221,7 @@
         size: i + 1,
         duration: speed * (i + 1),
         starColor,
+        bounds,
       }),
     );
 

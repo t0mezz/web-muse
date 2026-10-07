@@ -69,6 +69,18 @@ class TestStarsWelcome(unittest.TestCase):
             APP_JS)
 
 
+class TestStarsCoverage(unittest.TestCase):
+    def test_scatter_spans_viewport_not_fixed_box(self):
+        # Regression: stars scattered over a fixed +-2000px box left the
+        # rightmost quarter empty on viewports wider than 2000px. The
+        # scatter area must derive from the viewport size instead.
+        self.assertIn("innerWidth", STARS_JS)
+        self.assertNotIn("Math.random() * 4000) - 2000", STARS_JS)
+
+    def test_layer_api_still_takes_counts(self):
+        self.assertIn("counts = options.counts", STARS_JS)
+
+
 class TestStarsTuning(unittest.TestCase):
     def test_locked_tuning_values(self):
         self.assertIn("counts: [650, 260, 130],", APP_JS)

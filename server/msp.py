@@ -176,12 +176,24 @@ class MspClient:
         rid = self._next_id
         fut = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
-        await self._send({"jsonrpc": "2.0", "id": rid, "method": method,
-                          "params": params or {}})
         try:
-            msg = await asyncio.wait_for(fut, timeout=timeout)
+            try:
+                await self._send({"jsonrpc": "2.0", "id": rid,
+                                  "method": method, "params": params or {}})
+            except MspError:
+                raise
+            except Exception as e:
+                raise MspError(-32000, f"msp send failed: {e}") from e
+            try:
+                msg = await asyncio.wait_for(fut, timeout=timeout)
+            except asyncio.TimeoutError as e:
+                raise MspError(-32000, f"msp call timed out: {method}") from e
         finally:
+            # A dead pipe or a cancelled waiter must not leak the entry
+            # (or leave the future hanging for _dispatch to trip on).
             self._pending.pop(rid, None)
+            if not fut.done():
+                fut.cancel()
         if "error" in msg:
             err = msg["error"] or {}
             raise MspError(err.get("code", -32000),

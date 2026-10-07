@@ -387,7 +387,7 @@ THEME_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 # tests/test_orders.py pins parity both ways).
 THEME_KEYS = frozenset({
     "bg", "panel", "panel2", "line", "fg", "dim", "faint",
-    "accent", "ok", "warn", "err", "user", "agent",
+    "accent", "focus", "ok", "warn", "err", "user", "agent",
     "select", "warnBg", "warnFg", "errFg", "codeBg", "cardBg",
     "pickedBg", "onOk", "onAccent", "chipInk", "light",
     "glow", "scrim", "star", "starBg0", "starBg1",

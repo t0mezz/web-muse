@@ -52,7 +52,7 @@ class TestThemeConfig(unittest.TestCase):
     def test_config_shape(self):
         colors = theme_colors()
         self.assertGreaterEqual(len(colors), 20)  # every major color
-        for key in ("bg", "panel", "fg", "dim", "accent", "ok", "warn",
+        for key in ("bg", "panel", "fg", "dim", "accent", "focus", "ok", "warn",
                     "err", "user", "agent", "select", "warnBg", "warnFg",
                     "errFg", "codeBg", "cardBg", "pickedBg", "onOk",
                     "onAccent", "chipInk", "light", "glow", "scrim",
@@ -66,7 +66,8 @@ class TestThemeConfig(unittest.TestCase):
     PALETTE = {
         "bg": "#FCF0DA", "panel": "#F1E6D1", "panel2": "#E9DDC9",
         "line": "#D5CAB8", "fg": "#4C4541", "dim": "#736B63",
-        "faint": "#81786F", "accent": "#AEAC78", "ok": "#78735A",
+        "faint": "#81786F", "accent": "#AEAC78", "focus": "#6D6753",
+        "ok": "#78735A",
         "warn": "#F2C46A", "err": "#8B7551", "user": "#F6D89C",
         "agent": "#E9DDC9", "select": "#F6D89C", "warnBg": "#F4CC7E",
         "warnFg": "#71614A", "errFg": "#77664C", "codeBg": "#EEE2CE",

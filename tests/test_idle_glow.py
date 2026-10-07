@@ -70,11 +70,16 @@ class TestIdleGlowStyling(unittest.TestCase):
         self.assertIn("#input.idle-glow:focus", STYLE_CSS)
 
     def test_breathe_freezes_under_reduced_motion(self):
-        m = re.search(r"@media \(prefers-reduced-motion: no-preference\) "
-                      r"\{(.*?)\n\}", STYLE_CSS, re.S)
-        self.assertIsNotNone(m, "reduced-motion guard missing")
-        self.assertIn("#input.idle-glow", m.group(1))
-        self.assertIn("input-breathe", m.group(1))
+        # style.css legitimately holds several no-preference blocks
+        # (copy-pop, idle-glow breathe, ...): scan all of them, not just
+        # the first match.
+        blocks = re.findall(r"@media \(prefers-reduced-motion: no-preference\) "
+                            r"\{(.*?)\n\}", STYLE_CSS, re.S)
+        self.assertTrue(blocks, "reduced-motion guard missing")
+        self.assertTrue(
+            any("#input.idle-glow" in b and "input-breathe" in b
+                for b in blocks),
+            "idle-glow breathe not gated under reduced-motion guard")
 
     def test_narrow_phones_stay_static(self):
         m = re.search(r"@media \(max-width: 560px\) \{(.*?)\n\}\n",

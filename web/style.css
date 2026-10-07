@@ -4,7 +4,7 @@
 :root {
   --bg: #FCF0DA; --panel: #F1E6D1; --panel2: #E9DDC9; --line: #D5CAB8;
   --fg: #4C4541; --dim: #736B63; --faint: #81786F;
-  --accent: #AEAC78; --ok: #78735A; --warn: #F2C46A; --err: #8B7551;
+  --accent: #AEAC78; --focus: #6D6753; --ok: #78735A; --warn: #F2C46A; --err: #8B7551;
   --user: #F6D89C; --agent: #E9DDC9; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --select: #F6D89C; --warnBg: #F4CC7E; --warnFg: #71614A;
   --errFg: #77664C; --codeBg: #EEE2CE; --cardBg: #F8DEAD;
@@ -850,6 +850,30 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
   padding: 8px 16px; border-radius: 999px; font-size: 13px; z-index: 50; max-width: 88vw;
 }
 #toast.err { border-color: var(--err); }
+
+/* keyboard focus: one shared ring (same 2px idiom as
+ * .sess-open/.config-btn/.row-opt) for every control that previously
+ * had only :hover styling, so keyboard users get the themed ring
+ * instead of the browser default; mouse users see no change.
+ * The ring uses --focus, not --accent: accent fails 3:1 on the
+ * default theme's light surfaces (1.5-2.3:1), while --focus is
+ * verified >= 3:1 per theme (see tests/test_focus_rings.py). */
+#topbar button:focus-visible, #btn-progress:focus-visible,
+#model-picker:focus-visible, #effort-picker:focus-visible,
+.side-head button:focus-visible, .sess-toggle:focus-visible,
+#btn-older:focus-visible, #tx-filters button:focus-visible,
+#jump-latest:focus-visible, .tab:focus-visible,
+#btn-close-inspector:focus-visible, #approval-mode:focus-visible,
+.card button:focus-visible, .card .opt:focus-visible,
+.row-btns button:focus-visible,
+.repo-pill:focus-visible, .repo-opt:focus-visible,
+.composer-btns button:focus-visible, #selection-ticker:focus-visible,
+.out-toggle:focus-visible,
+.dir-head button:focus-visible, .dir-pathrow button:focus-visible,
+.dir-navrow button:focus-visible, .dir-crumbs button:focus-visible,
+.dir-row:focus-visible, .dir-foot button:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 1px;
+}
 
 /* touch: no double-tap zoom delay, no scroll chaining out of panes */
 button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {

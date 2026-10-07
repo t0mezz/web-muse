@@ -23,6 +23,13 @@ themes never leaks colors from the previous one. Agent `theme.apply`
 orders replace the same way; an approved agent `theme.save` order lands
 here as a new `<name>.json` file.
 
+## Iterating
+
+Editing a file here takes effect in one step — no bridge restart, no
+switching away and back. The composer fetches theme files uncached, so
+just re-apply: `/theme <name>` for any saved theme, or `/theme reload`
+for the active one (bare `/theme` marks it with `*`).
+
 ## Colors
 
 What each key in `../theme.js` (`WebMuseTheme.colors`) is used for.
@@ -51,7 +58,8 @@ theme key but is not one — it is the fixed monospace font stack.
 
 | Key      | Used for |
 |----------|----------|
-| `accent` | Links in rendered markdown, focus rings/outlines, the active tab underline, the streaming caret, the thinking spinner, the selected option border, the toast border, and the on-state of the starfield toggle. |
+| `accent` | Links in rendered markdown, the active tab underline, the streaming caret, the thinking spinner, the selected option border, the toast border, and the on-state of the starfield toggle. |
+| `focus`  | Keyboard `:focus-visible` outline (2px shared ring). A darker accent on light themes so it holds 3:1 on every surface; dark themes reuse their accent. Guarded per theme by `tests/test_focus_rings.py`. |
 | `ok`     | Connection dot (`.dot.on`), running-session icon, approval-card Allow button (with `onOk` text). |
 | `warn`   | Busy connection dot, approval notice icon, tool-row kind label, approval-card and notice-pill borders. |
 | `err`    | Offline connection dot; destructive/failed states (danger row hover, failed tool-group border, deny button, error toast border). |
