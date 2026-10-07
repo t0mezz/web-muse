@@ -384,7 +384,11 @@ function syncSelectionUI() {
     const sid = row.dataset.sid;
     row.setAttribute("aria-selected", state.selectedIds.has(sid) ? "true" : "false");
     const cb = row.querySelector(".sess-check");
-    if (cb) cb.classList.toggle("checked", state.selectedIds.has(sid));
+    if (cb) {
+      cb.classList.toggle("checked", state.selectedIds.has(sid));
+      const inp = cb.querySelector('input[type="checkbox"]');
+      if (inp) inp.checked = state.selectedIds.has(sid);
+    }
   });
 }
 
@@ -441,12 +445,19 @@ function appendSessionRow(box, s) {
   icon.className = "sess-icon" + (running ? " running" : "");
   icon.setAttribute("aria-hidden", "true");
   icon.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.4 8.2l1.8 1.8 3.4-3.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  const check = document.createElement("button");
-  check.type = "button";
+  const check = document.createElement("label");
   check.className = "sess-check" + (state.selectedIds.has(s.sessionId) ? " checked" : "");
   check.setAttribute("aria-label", state.selectedIds.has(s.sessionId) ? "Deselect session" : "Select session");
-  check.setAttribute("aria-pressed", state.selectedIds.has(s.sessionId) ? "true" : "false");
-  check.onclick = (e) => { e.stopPropagation(); toggleSelection(s.sessionId); };
+  const cbInput = document.createElement("input");
+  cbInput.type = "checkbox";
+  cbInput.checked = state.selectedIds.has(s.sessionId);
+  cbInput.setAttribute("aria-hidden", "true");
+  cbInput.tabIndex = -1;
+  const cbVisual = document.createElement("span");
+  cbVisual.className = "cb-visual";
+  cbVisual.innerHTML = '<svg viewBox="0 0 12 10" fill="none" aria-hidden="true"><path d="M1 5l2.8 2.8L11 1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  check.append(cbInput, cbVisual);
+  check.onclick = (e) => { e.stopPropagation(); toggleSelection(s.sessionId); e.preventDefault(); };
   iconCol.append(icon, check);
   const open = document.createElement("button");
   open.type = "button";
