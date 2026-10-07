@@ -1963,6 +1963,9 @@ class SessionRouter:
             if mtype == "skills":
                 return reply(True, result=await self._msp.call(
                     "skill/list", {"sessionId": msg["sessionId"]}))
+            if mtype == "plugins":
+                return reply(True, result=await self._msp.call(
+                    "plugin/list", {"sessionId": msg["sessionId"]}))
             if mtype == "readOutput":
                 return reply(True, result=await self._msp.call(
                     "item/readOutput",

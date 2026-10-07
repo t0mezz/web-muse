@@ -84,6 +84,7 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 | `compact`, `usage`, `pending` | `session/compact`, `usage/read`, `approval/listPending` |
 | `setEffort {reasoningEffort}` | `session/setReasoningEffort` (tier validated) |
 | `skills` | `skill/list` |
+| `plugins {sessionId}` | `plugin/list` (one row per installed plugin) |
 | `readOutput {itemId, outputRef, ...}` | `item/readOutput` |
 | `mcp` | local `settings.json` inventory (MSP v1 has no mcp/* methods) |
 | `browse {path?}` | list one server-side directory for the `+` explorer (empty → `$HOME`) |
@@ -133,7 +134,7 @@ nextCursor}`, live `item/delta` + `turn/completed` streaming. Two caveats:
 ## Slash commands (in the composer, `Tab`-completed)
 
 `/help /new /list /sessions /resume /open /rename /fork /delete /clear`
-`/models /model /effort /default-effort /skills /mcp /output /compact /usage /pending`
+`/models /model /effort /default-effort /skills /plugins /mcp /output /compact /usage /pending`
 `/interrupt /stop /cancel /steer /unqueue /older`
 `/github list|clone|open|clean|cancel`
 `/theme [name]`

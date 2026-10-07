@@ -2989,6 +2989,7 @@ const SLASH = [
   { name: "effort", usage: "/effort <tier>", desc: "Set reasoning effort for current session (remembers default)", run: (a) => cmdSetEffort(a) },
   { name: "default-effort", usage: "/default-effort <tier|clear|show>", desc: "Set default reasoning effort for new chats", run: (a) => cmdDefaultEffort(a) },
   { name: "skills", usage: "/skills", desc: "List session skills", run: () => cmdSkills() },
+  { name: "plugins", usage: "/plugins", desc: "List installed plugins", run: () => cmdPlugins() },
   { name: "mcp", usage: "/mcp", desc: "Show configured MCP servers", run: () => cmdMcp() },
   { name: "github", usage: "/github list|clone|open|clean|cancel …", desc: "GitHub repos via gh", run: (a) => cmdGithub(a) },
   { name: "output", usage: "/output <itemId>", desc: "Fetch full truncated output", run: (a) => cmdOutput(a) },
@@ -3205,6 +3206,21 @@ async function cmdSkills() {
     // Re-render the preview in case it is open — the cache just changed.
     if (!el("slash-popup").hidden) updateSlashPopup();
   } catch (e) { sysLine("skills failed: " + e.message, true); }
+}
+
+async function cmdPlugins() {
+  if (!state.sessionId) return sysLine("No session — open one first.", true);
+  try {
+    const r = await send({ type: "plugins", sessionId: state.sessionId });
+    const rows = Array.isArray(r.plugins) ? r.plugins : [];
+    sysLine(rows.length
+      ? "Plugins:\n" + rows.map((p) =>
+        `  ${p.id || "(unnamed)"}` +
+        (p.version ? ` v${p.version}` : "") +
+        ` [${p.enabled === false ? "disabled" : "enabled"}]` +
+        (p.source ? ` (${p.source})` : "")).join("\n")
+      : "(no plugins installed)");
+  } catch (e) { sysLine("plugins failed: " + e.message, true); }
 }
 
 async function cmdSkillInvoke(selector, args) {
