@@ -975,6 +975,31 @@ function toggleStarsFx() {
    i.e. removed — as soon as generation finishes. */
 let thinkingTimer = null;
 let thinkingStartedAt = 0;
+// Derive the active turn's start time for late-join/new-browser cases:
+// the server keeps running but this browser never saw turn/started, so
+// Date.now() would reset the clock. Use the earliest recordedAt for the
+// active turn (userMessage) when available; fall back to session
+// updatedAt/createdAt; else null (caller falls back to now).
+function thinkingStartForActiveTurn() {
+  const sid = state.session && (state.session.activeTurnId || state.turnId);
+  const turnId = sid || state.turnId;
+  if (turnId) {
+    let earliest = null;
+    for (const rec of state.items.values()) {
+      const it = rec && rec.item;
+      if (!it || it.turnId !== turnId) continue;
+      const ts = Date.parse(it.recordedAt || it.timestamp || "");
+      if (!Number.isNaN(ts) && (earliest === null || ts < earliest)) earliest = ts;
+    }
+    if (earliest !== null) return earliest;
+  }
+  const st = String((state.session && state.session.status) || "").toLowerCase().trim();
+  if (st === "running") {
+    const u = Date.parse((state.session && (state.session.updatedAt || state.session.createdAt)) || "");
+    if (!Number.isNaN(u)) return u;
+  }
+  return null;
+}
 function showThinking() {
   hideThinking();
   const line = document.createElement("div");
@@ -1005,7 +1030,9 @@ function showThinking() {
   status.append(clock);
   line.append(status);
   turnContainer().append(line);
-  thinkingStartedAt = Date.now();
+  // On late join, keep true elapsed instead of resetting to 0s.
+  const derived = thinkingStartForActiveTurn();
+  thinkingStartedAt = (derived !== null && derived <= Date.now()) ? derived : Date.now();
   const tick = () => {
     const s = Math.max(0, Math.round((Date.now() - thinkingStartedAt) / 1000));
     clock.textContent = `(${s}s)`;
@@ -1940,10 +1967,17 @@ function onEvent(method, p) {
     case "session/statusChanged":
       state.running = String(p.status || "").toLowerCase().trim() === "running";
       updateRunChip();
+      if (state.session) {
+        state.session.status = p.status;
+        if (p.activeTurnId !== undefined) state.session.activeTurnId = p.activeTurnId;
+        else if (p.turnId !== undefined) state.session.activeTurnId = p.turnId;
+        updateSessionDetail();
+      }
       // A turn started elsewhere (TUI, other client, reconnect) never fires
       // turn/started here: start the verbs off the status flip instead.
+      // thinkingStartForActiveTurn() inside showThinking() picks the true
+      // start time so a new browser does not reset the clock.
       if (state.running && !document.getElementById("thinking-row")) showThinking();
-      if (state.session) { state.session.status = p.status; updateSessionDetail(); }
       break;
     case "session/tokenUsage":
       if (p.cumulative) {
