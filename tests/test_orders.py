@@ -71,6 +71,24 @@ class TestSkillDoc(unittest.TestCase):
                        "needsConfirm", "rejected", "Done when:"):
             self.assertIn(marker, SKILL_MD)
 
+    def test_skill_doc_names_every_theme_key(self):
+        # An agent can only set what the doc names: every bridge key
+        # (including the starfield sky trio) must be listed.
+        for key in theme_keys():
+            self.assertIn(f"`{key}`", SKILL_MD, f"skill doc omits {key}")
+
+    def test_skill_doc_states_merge_semantics(self):
+        # theme.apply merges: omitted keys keep their values, so a
+        # star-only recolor is a complete order on its own.
+        self.assertIn("keep their current values", SKILL_MD)
+
+    def test_skill_doc_names_no_phantom_actions(self):
+        # Only bridge-enforced actions may be documented; anything else
+        # is rejected and the doc must not promise it.
+        for phantom in ("theme.save", "bridge.restart", "/theme",
+                        "web/themes"):
+            self.assertNotIn(phantom, SKILL_MD)
+
     def test_seed_writes_every_workspace(self):
         async def body():
             with tempfile.TemporaryDirectory() as tmp:
@@ -105,6 +123,55 @@ class TestThemeKeys(unittest.TestCase):
         self.assertIsNotNone(m, "THEME_KEYS missing from sessions.py")
         bridge_keys = set(re.findall(r'"([A-Za-z0-9]+)"', m.group(1)))
         self.assertEqual(bridge_keys, theme_keys())
+
+
+class TestThemeShapes(unittest.TestCase):
+    def _check(self, colors):
+        from server.sessions import validate_orders
+        valid, rejected = validate_orders(
+            {"orders": [{"id": "s1", "action": "theme.apply",
+                         "params": {"colors": colors}}]}, {})
+        return valid, rejected
+
+    def test_full_palette_shape_accepted(self):
+        # Every documented shape passes, including the sky trio that
+        # drives the starfield and the non-hex roles.
+        colors = {"accent": "#AEAC78", "light": "#fff",
+                  "onAccent": "#4C4541", "cardBg": "#F8DEADaa",
+                  "glow": "174, 172, 120",
+                  "scrim": "rgba(241, 230, 209, 0.4)",
+                  "star": "#4C4541", "starBg0": "#F7DAA2",
+                  "starBg1": "#FCF0DA"}
+        valid, rejected = self._check(colors)
+        self.assertEqual(rejected, {})
+        self.assertEqual(len(valid), 1)
+
+    def test_sky_only_recolor_accepted(self):
+        # A star-effect-only order is complete on its own (merge
+        # semantics): no full palette required.
+        valid, rejected = self._check({"star": "#000000",
+                                       "starBg0": "#111111",
+                                       "starBg1": "#222222"})
+        self.assertEqual(rejected, {})
+        self.assertEqual(len(valid), 1)
+
+    def test_bad_shapes_rejected_with_reason(self):
+        for colors in ({"accent": "red"},
+                       {"accent": "#ab"},
+                       {"accent": "#abcd"},
+                       {"accent": "#gggggg"},
+                       {"accent": ""},
+                       {"glow": "#AEAC78"},
+                       {"glow": "300, 0, 0"},
+                       {"glow": "174, 172"},
+                       {"scrim": "#FCF0DA"},
+                       {"scrim": "red"},
+                       {"scrim": "rgba(1, 2, 3, 2)"},
+                       {"star": "white"}):
+            valid, rejected = self._check(colors)
+            self.assertEqual(valid, [], colors)
+            self.assertIn("s1", rejected, colors)
+            self.assertIn("hex", rejected["s1"], colors)
 
 
 class TestOrdersEngine(unittest.IsolatedAsyncioTestCase):

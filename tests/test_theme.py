@@ -114,20 +114,33 @@ class TestThemeConfig(unittest.TestCase):
 
     def test_js_reads_theme_with_literal_fallback(self):
         # stars.js: theme roles with the current colors as fallback; the
-        # full gradient literal stays as the fallback constant (pinned by
-        # test_stars).
-        for key, fallback in (("star", "#fff"),
-                              ("starBg0", "#1a2334"),
-                              ("starBg1", "#0c0e12")):
+        # gradient is composed at each call from the live theme values
+        # (pinned by test_stars), never cached at load.
+        for key, fallback in (("star", "#4C4541"),
+                              ("starBg0", "#F7DAA2"),
+                              ("starBg1", "#FCF0DA")):
             self.assertIn(f"themeColor('{key}', '{fallback}')", STARS_JS)
-        self.assertIn(
-            "radial-gradient(ellipse at bottom, #1a2334 0%, #0c0e12 100%)",
-            STARS_JS)
+        self.assertIn("function defaultBackground()", STARS_JS)
+        self.assertNotIn("DEFAULT_BACKGROUND", STARS_JS)
         self.assertIn("WebMuseTheme", STARS_JS)
-        # app.js: starfield hue literal (pinned by test_stars), re-sourced
-        # from the theme right after.
-        self.assertIn('starColor: "#e6e9ef"', APP_JS)
-        self.assertIn('WebMuseTheme.get("fg", "#e6e9ef")', APP_JS)
+        # app.js: no baked star hue (stars.js resolves the live theme
+        # star role at each creation); a running field rebuilds on
+        # themeApply so the new sky takes effect at once.
+        self.assertNotIn("starColor", APP_JS)
+        self.assertIn(
+            "if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }",
+            APP_JS)
+
+    def test_style_root_matches_theme(self):
+        """style.css :root fallback mirrors theme.js (legacy var names
+        mapped), so the pre-script first paint already shows the active
+        palette instead of a stale one."""
+        colors = theme_colors()
+        root = {k: v.strip() for k, v in root_vars(STYLE_CSS).items()}
+        for key, value in colors.items():
+            var = {"glow": "glow-color"}.get(key, key)
+            self.assertIn(var, root, f"style :root --{var} missing")
+            self.assertEqual(root[var], value, f"style :root --{var}")
 
 
 if __name__ == "__main__":

@@ -439,6 +439,55 @@ def _validate_allowed_update(raw):
     return out, None
 
 
+HEX_COLOR = re.compile(r"#[0-9a-fA-F]{3}([0-9a-fA-F]{3}([0-9a-fA-F]{2})?)?")
+
+
+def _rgb_triplet(value):
+    """Parse an "r, g, b" triplet (each part 0-255) into [r, g, b], else None."""
+    if not isinstance(value, str):
+        return None
+    parts = [p.strip() for p in value.split(",")]
+    if len(parts) != 3:
+        return None
+    nums = []
+    for p in parts:
+        if re.fullmatch(r"\d{1,3}", p) is None:
+            return None
+        n = int(p)
+        if n > 255:
+            return None
+        nums.append(n)
+    return nums
+
+
+def _valid_theme_value(key, value):
+    """True when a theme.apply value has the shape its role needs.
+
+    Every role takes #rgb, #rrggbb or #rrggbbaa, except glow (an
+    "r, g, b" triplet with each part 0-255) and scrim (an rgba(...)
+    color). Mirrors the shapes documented in server/orders_skill.md.
+    """
+    if not isinstance(value, str) or not value \
+            or len(value) > MAX_PATTERN_LEN:
+        return False
+    if key == "glow":
+        return _rgb_triplet(value) is not None
+    if key == "scrim":
+        m = re.fullmatch(r"rgba\((.*)\)", value.strip(), re.S)
+        if not m:
+            return False
+        parts = [p.strip() for p in m.group(1).split(",")]
+        if len(parts) != 4 \
+                or _rgb_triplet(",".join(parts[:3])) is None:
+            return False
+        try:
+            alpha = float(parts[3])
+        except ValueError:
+            return False
+        return 0.0 <= alpha <= 1.0
+    return HEX_COLOR.fullmatch(value) is not None
+
+
 def validate_orders(payload, seen_ids):
     """Split an orders payload into (valid, rejected).
 
@@ -481,12 +530,12 @@ def validate_orders(payload, seen_ids):
                                  f"want: {sorted(THEME_KEYS)}")
                 continue
             bad_vals = [k for k, v in colors.items()
-                        if not isinstance(v, str) or not v
-                        or len(v) > MAX_PATTERN_LEN]
+                        if not _valid_theme_value(k, v)]
             if bad_vals:
                 rejected[oid] = (f"bad color values for {sorted(bad_vals)}: "
-                                 "non-empty strings, max "
-                                 f"{MAX_PATTERN_LEN} chars")
+                                 "hex #rgb/#rrggbb/#rrggbbaa, except glow "
+                                 "('r, g, b' with each part 0-255) and "
+                                 "scrim (rgba(r, g, b, alpha))")
                 continue
             valid.append((oid, action, {"colors": dict(colors)}))
         elif action == "allowedCommands.update":
@@ -867,7 +916,7 @@ def flag_missing_workspaces(result):
 
 
 # -- Seeded instructions for GitHub clones (Track 1) ------------------------
-GITHUB_INSTRUCTIONS_FILENAME = "AGENTS.md"
+GITHUB_INSTRUCTIONS_FILENAME = "WEB-MUSE.md"
 GITHUB_INSTRUCTIONS_MARKER = (
     "# web-muse: instructions for GitHub-cloned sessions "
     "(do not commit this file)")
@@ -911,11 +960,13 @@ def render_github_instructions(full_name, template=None):
 
 
 def seed_github_instructions(dest, full_name):
-    """Write AGENTS.md into a fresh clone unless one already exists.
+    """Write the bridge-owned instruction file into a fresh clone.
 
-    Never overwrites a repo's own file. Returns (seeded, path).
-    Raises OSError on write failure (the caller logs and continues —
-    seeding must never fail the open).
+    The name is deliberately NOT AGENTS.md, so a repo's own rules file
+    can never collide: both files coexist. An existing bridge file is
+    never overwritten. Returns (seeded, path). Raises OSError on write
+    failure (the caller logs and continues — seeding must never fail
+    the open).
     """
     target = Path(dest) / GITHUB_INSTRUCTIONS_FILENAME
     if target.exists():
@@ -925,7 +976,7 @@ def seed_github_instructions(dest, full_name):
 
 
 def has_seeded_instructions(root):
-    """True when root/AGENTS.md is bridge-seeded (marker first line)."""
+    """True when root holds the bridge-seeded file (marker first line)."""
     try:
         if not root:
             return False

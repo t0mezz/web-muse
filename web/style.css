@@ -2,15 +2,16 @@
  * theme.js applies the same values to :root at load and overrides them
  * from localStorage["web-muse:theme"], so edit colors there. */
 :root {
-  --bg: #0c0e12; --panel: #0e1116; --panel2: #191d26; --line: #262b36;
-  --fg: #e6e9ef; --dim: #9aa3b2; --faint: #6b7280;
-  --accent: #6ea8fe; --ok: #3fb950; --warn: #d29922; --err: #f85149;
-  --user: #1f6feb; --agent: #151a24; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --select: #27314a; --warnBg: #221d10; --warnFg: #f0d49a;
-  --errFg: #ffb4ae; --codeBg: #0a0c10; --cardBg: #1d180c;
-  --pickedBg: #22304d; --onOk: #04120a; --onAccent: #06101f;
-  --chipInk: #06130b; --light: #fff; --glow-color: 110, 168, 254;
-  --scrim: rgba(14, 17, 22, 0.4);
+  --bg: #FCF0DA; --panel: #F1E6D1; --panel2: #E9DDC9; --line: #D5CAB8;
+  --fg: #4C4541; --dim: #736B63; --faint: #81786F;
+  --accent: #AEAC78; --ok: #78735A; --warn: #F2C46A; --err: #8B7551;
+  --user: #F6D89C; --agent: #E9DDC9; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --select: #F6D89C; --warnBg: #F4CC7E; --warnFg: #71614A;
+  --errFg: #77664C; --codeBg: #EEE2CE; --cardBg: #F8DEAD;
+  --pickedBg: #F6D697; --onOk: #FCF0DA; --onAccent: #4C4541;
+  --chipInk: #4C4541; --light: #fff; --glow-color: 174, 172, 120;
+  --scrim: rgba(241, 230, 209, 0.4);
+  --star: #4C4541; --starBg0: #F7DAA2; --starBg1: #FCF0DA;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
