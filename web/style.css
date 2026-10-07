@@ -53,9 +53,13 @@ body {
 .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .dot.busy { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
 #model-picker, #effort-picker {
-  max-width: 24vw; background: none; color: var(--dim);
+  max-width: 24vw; background: var(--panel); color: var(--dim);
   border: 1px solid transparent; border-radius: 999px; padding: 5px; font-size: 13px;
   flex: none;
+}
+/* Desktop dropdown rows: best-effort theming (mobile native pickers ignore page CSS). */
+#model-picker option, #effort-picker option, #approval-mode option {
+  background: var(--panel); color: var(--fg);
 }
 #model-picker:hover, #effort-picker:hover { color: var(--fg); border-color: var(--line); }
 #effort-picker { max-width: 18vw; }
