@@ -107,13 +107,17 @@ body {
 @keyframes sess-spin-once { to { transform: rotate(360deg); } }
 #session-list { flex: 1; overflow-y: auto; padding: 2px 0 12px; }
 #selection-bar { padding: 4px 10px 0; }
-.ticker {
+#selection-ticker {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
-  border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12px; line-height: 1.2; cursor: pointer;
 }
-.ticker:hover:not(:disabled) { border-color: var(--accent); }
+#selection-ticker:hover:not(:disabled) { border-color: var(--accent); }
+#selection-ticker:disabled { opacity: 0.45; cursor: default; }
+/* keep class selectors for backwards compat (tests + old bar) */
+.ticker { font: inherit; font-size: 12px; }
 .ticker:disabled { opacity: 0.45; cursor: default; }
+.ticker:hover:not(:disabled) { border-color: var(--accent); }
 .session-row.selected { background: var(--pickedBg); }
 .session-row.selected:hover { background: var(--select); }
 #btn-delete-selected { color: var(--err); }
