@@ -447,12 +447,10 @@ function appendSessionRow(box, s) {
   icon.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.4 8.2l1.8 1.8 3.4-3.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const check = document.createElement("label");
   check.className = "checkbox" + (state.selectedIds.has(s.sessionId) ? " checked" : "");
-  check.setAttribute("for", `cb-${s.sessionId}`);
   check.setAttribute("aria-label", state.selectedIds.has(s.sessionId) ? "Deselect session" : "Select session");
   const cbInput = document.createElement("input");
   cbInput.type = "checkbox";
   cbInput.name = "checkbox";
-  cbInput.id = `cb-${s.sessionId}`;
   cbInput.checked = state.selectedIds.has(s.sessionId);
   cbInput.setAttribute("aria-hidden", "true");
   cbInput.tabIndex = -1;
@@ -471,7 +469,7 @@ function appendSessionRow(box, s) {
   svgCross.setAttribute("aria-hidden", "true");
   svgCross.innerHTML = '<g><path d="M697.4 759.2l61.8-61.8L573.8 512l185.4-185.4-61.8-61.8L512 450.2 326.6 264.8l-61.8 61.8L450.2 512 264.8 697.4l61.8 61.8L512 573.8z"></path></g>';
   check.append(cbInput, inner, svgCheck, svgCross);
-  check.addEventListener("click", (e) => { if (e.target.tagName !== "INPUT") { e.preventDefault(); toggleSelection(s.sessionId); } });
+  check.addEventListener("click", (e) => { e.stopPropagation(); });
   iconCol.append(icon, check);
   const open = document.createElement("button");
   open.type = "button";
@@ -503,7 +501,7 @@ function appendSessionRow(box, s) {
     openSession(s.sessionId);
   };
   row.addEventListener("click", (e) => {
-    if (e.target.closest(".config-btn") || e.target.closest(".row-menu") || e.target.closest(".sess-open")) return;
+    if (e.target.closest(".config-btn") || e.target.closest(".row-menu") || e.target.closest(".sess-open") || e.target.closest(".checkbox")) return;
     if (handleSelectClick(e)) return;
   });
   const top = document.createElement("span");

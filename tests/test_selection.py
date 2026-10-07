@@ -51,6 +51,14 @@ class TestSelectionInteractions(unittest.TestCase):
         self.assertIn("state.selectedIds.has(sid)", APP_JS)
         self.assertIn("state.selectedIds.delete", APP_JS)
 
+    def test_checkbox_single_toggle(self):
+        # label click must not manually toggle (single input change source) and row must ignore checkbox
+        self.assertIn('closest(".checkbox")', APP_JS)
+        # redundant for= attribute removed (contained input only) to avoid double activation
+        self.assertNotIn('setAttribute("for", `cb-', APP_JS)
+        # input change is the single toggle path for checkbox clicks
+        self.assertIn('addEventListener("change"', APP_JS)
+
 
 class TestSelectionUI(unittest.TestCase):
     def test_ticker_pinned_left_below_status(self):
