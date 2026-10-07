@@ -869,12 +869,31 @@ function restorePanelState() {
   } else {
     el("sessions").classList.toggle("open", s === "1");
     el("inspector").classList.toggle("open", insp === "1");
+    // Narrow screens fit one overlay drawer: a persisted both-open state
+    // keeps the inspector (approvals are time-sensitive) and shuts the
+    // sessions drawer, which is one tap away in the topbar.
+    if (isNarrow() && s === "1" && insp === "1") {
+      el("sessions").classList.remove("open");
+      savePanelState();
+    }
   }
   try {
     state.otherCollapsed = localStorage.getItem(OTHER_COLLAPSED_KEY) === "1";
   } catch (_) {}
   syncScrim();
 }
+
+// Shrinking from desktop (both panels docked) to a narrow viewport would
+// stack both overlay drawers: keep the inspector, shut the sessions drawer.
+window.addEventListener("resize", () => {
+  if (!isNarrow()) return;
+  if (el("sessions").classList.contains("open") &&
+      el("inspector").classList.contains("open")) {
+    el("sessions").classList.remove("open");
+    syncScrim();
+    savePanelState();
+  }
+});
 
 /* ---------- terminal transcript ---------- */
 function clearTranscript() {
@@ -959,6 +978,8 @@ function stopStarsFxNow() {
 // Bottom-right switch: reflects whether the field is up; flipping it
 // shows/hides the field at once and remembers the choice.
 function syncStarsToggle() {
+  // Star mode drives panel translucency (desktop only, see CSS).
+  document.body.classList.toggle("stars-on", !!stopStarsFx);
   const t = el("stars-toggle");
   if (!t) return;
   t.setAttribute("aria-checked", stopStarsFx ? "true" : "false");
@@ -3524,8 +3545,29 @@ function applySlash(i) {
 function autosize() {
   const box = el("input");
   box.style.height = "auto";
+  // Pill radius only fits a single line; soften the box once text wraps.
+  const cs = getComputedStyle(box);
+  const lh = parseFloat(cs.lineHeight) || 0;
+  const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) +
+    (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+  box.classList.toggle("multiline", lh > 0 && box.scrollHeight > pad + lh * 1.5);
   box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.3) + "px";
 }
+
+/* ---------- viewport / keyboard ---------- */
+// Mobile keyboards (notably iOS Safari) don't shrink dvh, which can leave
+// the composer buried. Track the real visible height and expose it as
+// --app-height, which #app prefers over 100dvh.
+function syncAppHeight() {
+  const vv = window.visualViewport;
+  const h = vv ? Math.round(vv.height) : window.innerHeight;
+  if (h > 0) document.documentElement.style.setProperty("--app-height", h + "px");
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", syncAppHeight);
+}
+window.addEventListener("orientationchange", syncAppHeight);
+syncAppHeight();
 
 async function submitComposer() {
   const box = el("input");
@@ -3608,13 +3650,13 @@ function openInspectorOnMobile(tab) {
     if (tab) selectTab(tab);
     return;
   }
-  // Mobile: flash the inspector open only for approvals so the card is seen.
+  // Mobile: leave the inspector open on approvals so the card can
+  // actually be decided; the user dismisses it (scrim or close button).
   if (tab === "approvals" && !el("inspector").classList.contains("open")) {
     el("inspector").classList.add("open");
     selectTab("approvals");
-    setTimeout(() => {
-      if (window.innerWidth < 900) el("inspector").classList.remove("open");
-    }, 100);
+    syncScrim();
+    savePanelState();
   }
 }
 function selectTab(name) {
@@ -3628,6 +3670,13 @@ function selectTab(name) {
 /* ---------- wiring ---------- */
 el("stars-toggle").addEventListener("click", () => { toggleStarsFx(); });
 el("composer").addEventListener("submit", (ev) => { ev.preventDefault(); submitComposer(); });
+el("input").addEventListener("focus", () => {
+  // Let the keyboard finish opening, then bring the composer into view.
+  setTimeout(() => {
+    el("composer-wrap").scrollIntoView({ block: "nearest" });
+    syncAppHeight();
+  }, 300);
+});
 el("input").addEventListener("input", () => { autosize(); state.slashSel = 0; updateSlashPopup(); });
 el("input").addEventListener("keydown", (ev) => {
   const popOpen = !el("slash-popup").hidden && state.slashList.length;

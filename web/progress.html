@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>web-muse · bridge progress</title>
 <style>
 /* Palette fallback = web/theme.js defaults (applied live when theme.js
@@ -14,7 +14,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-  min-height: 100dvh; display: flex; }
+  min-height: 100vh; min-height: 100dvh; display: flex;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 main { max-width: 760px; width: 100%; margin: auto; padding: 20px 16px 40px; text-align: center; }
 header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 h1 { font-size: 18px; margin: 0; flex: 1; }

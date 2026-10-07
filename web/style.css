@@ -18,7 +18,9 @@ body {
   margin: 0; background: var(--bg); color: var(--fg);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-#app { display: flex; flex-direction: column; height: 100dvh; }
+/* --app-height tracks visualViewport (see syncAppHeight) so the
+ * iOS keyboard can't bury the composer; 100vh covers pre-dvh browsers. */
+#app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; height: var(--app-height, 100dvh); }
 /* welcome starfield backdrop: negative z-index keeps it below ALL app
  * content (even non-positioned blocks like the topbar), above only the
  * body canvas background; pointer-transparent so it never eats input */
@@ -27,7 +29,8 @@ body {
 /* topbar: quiet icon buttons + a subtle model picker */
 #topbar {
   display: flex; align-items: center; gap: 4px;
-  padding: 6px 8px; background: var(--scrim); border-bottom: 1px solid var(--line);
+  padding: calc(6px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) 6px calc(8px + env(safe-area-inset-left));
+  background: var(--scrim); border-bottom: 1px solid var(--line);
   flex: none;
 }
 #topbar button, #btn-progress {
@@ -37,6 +40,11 @@ body {
   color: var(--dim); font-size: 15px; cursor: pointer; text-decoration: none;
 }
 #topbar button:hover, #btn-progress:hover { color: var(--fg); border-color: var(--line); }
+/* 44px touch targets without widening the crowded mobile topbar */
+#topbar button, #btn-progress { position: relative; }
+#topbar button::before, #btn-progress::before {
+  content: ""; position: absolute; inset: -6px;
+}
 #brand { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0 4px; }
 #session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .dot { width: 6px; height: 6px; border-radius: 35%; flex: none; }
@@ -56,8 +64,10 @@ body {
 /* sessions sidebar / drawer */
 #sessions {
   position: fixed; top: 0; left: 0; bottom: 0; width: min(84vw, 320px); z-index: 30;
-  background: var(--scrim); border-right: 1px solid var(--line);
+  background: var(--panel); border-right: 1px solid var(--line);
   display: none; flex-direction: column;
+  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
 }
 #sessions.open { display: flex; }
 .vh { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -192,7 +202,7 @@ body {
   background: var(--warnBg); border: 1px solid var(--warn); color: var(--warnFg);
 }
 #toolbar {
-  display: flex; align-items: center; gap: 8px; padding: 7px 12px; flex: none;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; row-gap: 6px; padding: 7px 12px; flex: none;
   border-bottom: none; font-size: 12px;
 }
 /* welcome: centered composer, transcript opens on first message */
@@ -401,7 +411,7 @@ body {
 }
 .out-toggle:hover { color: var(--accent); }
 /* Transcript filter chips in the toolbar. */
-#tx-filters { display: inline-flex; gap: 4px; margin-left: 2px; }
+#tx-filters { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 2px; }
 #tx-filters button {
   background: none; border: 1px solid var(--line); border-radius: 999px;
   color: var(--dim); font-size: 12px; padding: 2px 10px; cursor: pointer;
@@ -525,6 +535,9 @@ body {
   transition: box-shadow .4s ease, border-color .4s ease;
 }
 #input:focus { outline: none; border-color: var(--accent); }
+/* Frozen at the single-line pill's curvature (~half its height) so
+ * the corners stop growing into the text as the box gets taller. */
+#input.multiline { border-radius: 25px; }
 /* idle glow: orb-style aura on the composer while no turn runs */
 #input.idle-glow {
   --glow-color: 110, 168, 254;
@@ -579,9 +592,9 @@ body {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 12px; padding: 6px 12px 6px 35px;
 }
-.slash-item { padding: 3px 0; cursor: pointer; display: flex; gap: 10px; font-size: 13px; background: none; }
+.slash-item { padding: 3px 0; cursor: pointer; display: flex; gap: 10px; font-size: 13px; background: none; min-width: 0; }
 .slash-item .cmd { font-family: var(--mono); color: var(--dim); font-weight: 400; flex: none; min-width: 96px; white-space: pre; }
-.slash-item .desc { color: var(--faint); }
+.slash-item .desc { color: var(--faint); flex: 1; min-width: 0; overflow-wrap: break-word; }
 .slash-item.sel { background: none; }
 .slash-item.sel .cmd { color: var(--fg); font-weight: 700; }
 .slash-item.sel .desc { color: var(--dim); }
@@ -589,8 +602,10 @@ body {
 /* inspector */
 #inspector {
   position: fixed; top: 0; right: 0; bottom: 0; width: min(84vw, 320px); z-index: 30;
-  background: var(--scrim); border-left: 1px solid var(--line);
+  background: var(--panel); border-left: 1px solid var(--line);
   display: none; flex-direction: column;
+  padding-top: env(safe-area-inset-top); padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
 }
 #inspector.open { display: flex; }
 .tabs { display: flex; border-bottom: 1px solid var(--line); flex: none; }
@@ -654,7 +669,7 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 }
 .dir-pathrow button:hover, .dir-navrow button:hover, .dir-foot button:hover { border-color: var(--accent); }
 .dir-error { color: var(--errFg); font-size: 12.5px; }
-.dir-navrow { display: flex; gap: 6px; }
+.dir-navrow { display: flex; flex-wrap: wrap; gap: 6px; }
 .dir-crumbs { display: flex; gap: 2px; flex-wrap: wrap; font-size: 12.5px; }
 .dir-crumbs button {
   background: none; border: none; color: var(--dim); cursor: pointer;
@@ -679,7 +694,7 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 .dir-row.isfile { color: var(--faint); cursor: default; }
 .dir-row .tail { color: var(--faint); }
 .dir-empty { padding: 12px; color: var(--dim); font-size: 13px; }
-.dir-foot { display: flex; gap: 8px; align-items: center; }
+.dir-foot { display: flex; flex-wrap: wrap; gap: 8px; row-gap: 6px; align-items: center; }
 .dir-foot .spacer { flex: 1; }
 .dir-foot .primary { background: var(--accent); color: var(--onAccent); border: none; font-weight: 700; }
 
@@ -726,7 +741,7 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
 /* mobile */
 @media (max-width: 899px) {
   /* 16px inputs: iOS Safari zooms on focus below this. */
-  #input, #session-filter, .card input[type="text"], #model-picker, #effort-picker { font-size: 16px; }
+  #input, #session-filter, .card input[type="text"], #model-picker, #effort-picker, #dir-path, #approval-mode { font-size: 16px; }
   .composer-btns button { width: 44px; height: 44px; }
   .row-opt { padding: 8px 14px; }
   #btn-older { padding: 6px 12px; font-size: 13px; }
@@ -735,7 +750,8 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
 }
 /* narrow phones: declutter the topbar and toolbar */
 @media (max-width: 560px) {
-  #topbar { gap: 2px; padding: 6px; }
+  #topbar { gap: 2px; padding: calc(6px + env(safe-area-inset-top)) calc(6px + env(safe-area-inset-right)) 6px calc(6px + env(safe-area-inset-left)); }
+  .tline.user .body { max-width: 85%; }
   /* static, tighter glow: no bloom or motion on small screens */
   #input.idle-glow {
     animation: none;
@@ -758,6 +774,9 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
   #inspector { position: static; width: 264px; flex: none; }
   #inspector.open { display: flex; }
   #terminal { padding: 16px 20px 20px; }
+  /* Star-mode translucency is a desktop treat: phones stay opaque so the
+   * transcript never bleeds through the drawers. */
+  body.stars-on #sessions, body.stars-on #inspector { background: var(--scrim); }
 }
 @media (min-width: 1300px) {
   #center { max-width: 980px; }
@@ -765,7 +784,7 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
 
 /* composer repo/branch pills: small fully-rounded selectors above the input */
 #repo-bar {
-  display: flex; gap: 8px; align-items: center;
+  display: flex; flex-wrap: wrap; gap: 8px; row-gap: 6px; align-items: center;
   width: min(760px, 100%); margin: 0 auto; padding: 8px 12px 0;
 }
 #repo-bar[hidden] { display: none; }
