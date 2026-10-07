@@ -2042,6 +2042,9 @@ function removeCard(aid) {
 }
 function applyThemeOrder(p) {
   // Agent order (validated bridge-side): re-validate, apply, persist.
+  // Wholesale replace (same as /theme <name>): the stored override becomes
+  // exactly this order's colors, so experimenting agents never leak colors
+  // from earlier orders. Revert with /theme default.
   const colors = p && p.colors;
   const T = window.WebMuseTheme;
   if (!T || !colors || typeof colors !== "object") return;
@@ -2049,19 +2052,24 @@ function applyThemeOrder(p) {
   for (const k of Object.keys(colors)) {
     const v = colors[k];
     if (typeof T.colors[k] === "string" && typeof v === "string"
-        && v && v.length <= 500) clean[k] = v;
+        && v && v.length <= 500 && themeValueOk(k, v)) clean[k] = v;
   }
   const n = Object.keys(clean).length;
   if (!n) return;
-  let merged = {};
-  try {
-    merged = JSON.parse(localStorage.getItem(T.storageKey) || "{}") || {};
-  } catch (_) { merged = {}; }
-  Object.assign(merged, clean);
-  try { localStorage.setItem(T.storageKey, JSON.stringify(merged)); } catch (_) {}
-  T.apply(merged);
-  sysLine(`theme updated by session ${shortId(p.sessionId)} (${n} colors, order ${p.orderId}).`);
-  toast(`theme updated (${n} colors)`);
+  try { localStorage.setItem(T.storageKey, JSON.stringify(clean)); } catch (_) {}
+  T.apply(clean);
+  sysLine(`theme replaced by session ${shortId(p.sessionId)} (${n} colors, order ${p.orderId}). Revert: /theme default.`);
+  toast(`theme replaced (${n} colors)`);
+}
+function themeValueOk(k, v) {
+  // Frontend twin of the bridge's theme_color_error (server/sessions.py):
+  // hex roles take #rgb/#rrggbb/#rrggbbaa, glow an "r, g, b" triplet,
+  // scrim an rgba() color. Bridge already rejected bad shapes; this only
+  // stops a stale client from applying one.
+  if (k === "glow") return /^\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*$/.test(v)
+    && v.split(",").every((s) => +s >= 0 && +s <= 255);
+  if (k === "scrim") return /^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0|1|0?\.\d+)\s*\)$/.test(v);
+  return /^(?:#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|#[0-9a-fA-F]{8})$/.test(v);
 }
 async function cmdTheme(args) {
   // Named themes from web/themes/*.json (bridge lists them at /themes).

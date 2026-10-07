@@ -19,4 +19,6 @@ to the defaults in `../theme.js`, so a file may hold a full palette
 (like `default.json`) or just a few accents.
 
 Applying a theme replaces the stored override wholesale, so switching
-themes never leaks colors from the previous one.
+themes never leaks colors from the previous one. Agent `theme.apply`
+orders replace the same way; an approved agent `theme.save` order lands
+here as a new `<name>.json` file.

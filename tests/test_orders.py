@@ -67,9 +67,29 @@ def write_orders(root, payload):
 class TestSkillDoc(unittest.TestCase):
     def test_protocol_markers(self):
         for marker in (".web-muse/orders.json", ".web-muse/orders.receipt.json",
-                       "theme.apply", "allowedCommands.update",
+                       "theme.apply", "theme.save", "allowedCommands.update",
                        "needsConfirm", "rejected", "Done when:"):
             self.assertIn(marker, SKILL_MD)
+
+    def test_theme_quality_guidance(self):
+        # Palette docs, value shapes, pair rules, contrast advice and
+        # replace semantics are what lift agent themes above one-key
+        # recolors; the doc must keep teaching them.
+        for marker in ("glow", "scrim", "rgba(", "#rrggbb",
+                       "Change paired roles together",
+                       "Contrast (advisory",
+                       "Replaces the whole theme",
+                       "/theme default"):
+            self.assertIn(marker, SKILL_MD)
+
+    def test_embedded_defaults_match_theme_js(self):
+        m = re.search(r"```json\n(.*?)```", SKILL_MD, re.S)
+        self.assertIsNotNone(m, "embedded defaults palette missing")
+        cm = re.search(r"var COLORS = \{(.*?)\};", THEME_JS, re.S)
+        self.assertIsNotNone(cm, "COLORS map missing from theme.js")
+        self.assertEqual(json.loads(m.group(1)),
+                         dict(re.findall(r"^\s*([A-Za-z0-9]+):\s*'([^']+)'",
+                                         cm.group(1), re.M)))
 
     def test_seed_writes_every_workspace(self):
         async def body():
@@ -112,8 +132,9 @@ class TestOrdersEngine(unittest.IsolatedAsyncioTestCase):
         cfg = str(Path(tmp) / "allowed.json")
         Path(cfg).write_text(json.dumps({"allow": ["^echo(\\s|$)"],
                                          "deny": []}))
+        tdir = str(Path(tmp) / "themes")
         r = SessionRouter(FakeMsp(), workspace_base=str(Path(tmp) / "ws"),
-                          allowed_commands_path=cfg)
+                          allowed_commands_path=cfg, themes_dir=tdir)
         root = str(Path(tmp) / "wsroot")
         Path(root).mkdir()
         r._workspace_roots["sid-o1"] = root
@@ -144,6 +165,130 @@ class TestOrdersEngine(unittest.IsolatedAsyncioTestCase):
                 .read_text())
             self.assertEqual(receipt["processed"]["t1"]["status"],
                              "applied")
+
+    async def test_bad_color_shapes_rejected_with_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, root, _ = self._router(tmp)
+            conn = FakeConn()
+            r._conns.add(conn)
+            write_orders(root, {"orders": [
+                {"id": "s1", "action": "theme.apply",
+                 "params": {"colors": {"accent": "olive"}}},
+                {"id": "s2", "action": "theme.apply",
+                 "params": {"colors": {"glow": "#AEAC78"}}},
+                {"id": "s3", "action": "theme.apply",
+                 "params": {"colors": {"scrim": "blue"}}},
+                {"id": "s4", "action": "theme.apply",
+                 "params": {"colors": {"accent": "#AEAC78",
+                                       "glow": "174, 172, 120",
+                                       "scrim": "rgba(241, 230, 209, 0.4)"}}},
+            ]})
+            await r._check_orders("sid-o1")
+            receipt = json.loads(
+                (Path(root) / ".web-muse" / "orders.receipt.json")
+                .read_text())
+            proc = receipt["processed"]
+            self.assertEqual(proc["s1"]["status"], "rejected")
+            self.assertIn("#rrggbb", proc["s1"]["reason"])
+            self.assertEqual(proc["s2"]["status"], "rejected")
+            self.assertIn("r, g, b", proc["s2"]["reason"])
+            self.assertEqual(proc["s3"]["status"], "rejected")
+            self.assertIn("rgba(", proc["s3"]["reason"])
+            # Well-shaped values (incl. non-hex roles) still apply.
+            self.assertEqual(proc["s4"]["status"], "applied")
+            evs = self._events(conn, "themeApply")
+            self.assertEqual(len(evs), 1)
+            self.assertEqual(evs[0]["colors"]["glow"], "174, 172, 120")
+
+    async def test_theme_save_waits_for_human(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, root, _ = self._router(tmp)
+            conn = FakeConn()
+            r._conns.add(conn)
+            write_orders(root, {"orders": [
+                {"id": "sv1", "action": "theme.save",
+                 "params": {"name": "harbor-dusk",
+                           "colors": {"bg": "#1A2334",
+                                      "accent": "#6EA8FE"}}}]})
+            await r._check_orders("sid-o1")
+            # Held, not written: no file yet, card event emitted.
+            self.assertEqual(list(Path(tmp, "themes").glob("*.json")), [])
+            pend = self._events(conn, "ordersPending")
+            self.assertEqual(len(pend), 1)
+            self.assertTrue(pend[0]["needsConfirm"])
+            receipt = json.loads(
+                (Path(root) / ".web-muse" / "orders.receipt.json")
+                .read_text())
+            self.assertEqual(receipt["processed"]["sv1"]["status"],
+                             "needsConfirm")
+
+    async def test_theme_save_bad_name_and_shape_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, root, _ = self._router(tmp)
+            write_orders(root, {"orders": [
+                {"id": "n1", "action": "theme.save",
+                 "params": {"name": "../evil",
+                           "colors": {"bg": "#1A2334"}}},
+                {"id": "n2", "action": "theme.save",
+                 "params": {"name": "good-name",
+                           "colors": {"bg": "not-a-color"}}},
+                {"id": "n3", "action": "theme.save",
+                 "params": {"colors": {"bg": "#1A2334"}}},
+            ]})
+            await r._check_orders("sid-o1")
+            receipt = json.loads(
+                (Path(root) / ".web-muse" / "orders.receipt.json")
+                .read_text())
+            proc = receipt["processed"]
+            self.assertEqual(proc["n1"]["status"], "rejected")
+            self.assertIn("name", proc["n1"]["reason"])
+            self.assertEqual(proc["n2"]["status"], "rejected")
+            self.assertIn("#rrggbb", proc["n2"]["reason"])
+            self.assertEqual(proc["n3"]["status"], "rejected")
+
+    async def test_theme_save_approve_writes_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, root, _ = self._router(tmp)
+            conn = FakeConn()
+            colors = {"bg": "#1A2334", "accent": "#6EA8FE",
+                      "glow": "110, 168, 254"}
+            write_orders(root, {"orders": [
+                {"id": "sv1", "action": "theme.save",
+                 "params": {"name": "harbor-dusk", "colors": colors}}]})
+            await r._check_orders("sid-o1")
+            reply = await r.handle_client_message(
+                conn, {"id": 1, "type": "ordersDecide",
+                       "sessionId": "sid-o1", "orderId": "sv1",
+                       "approved": True})
+            self.assertTrue(reply["ok"], reply)
+            saved = json.loads(
+                (Path(tmp, "themes") / "harbor-dusk.json").read_text())
+            self.assertEqual(saved, colors)
+            receipt = json.loads(
+                (Path(root) / ".web-muse" / "orders.receipt.json")
+                .read_text())
+            self.assertEqual(receipt["processed"]["sv1"]["status"],
+                             "approved")
+
+    async def test_theme_save_deny_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, root, _ = self._router(tmp)
+            conn = FakeConn()
+            write_orders(root, {"orders": [
+                {"id": "sv1", "action": "theme.save",
+                 "params": {"name": "harbor-dusk",
+                           "colors": {"bg": "#1A2334"}}}]})
+            await r._check_orders("sid-o1")
+            reply = await r.handle_client_message(
+                conn, {"id": 1, "type": "ordersDecide",
+                       "sessionId": "sid-o1", "orderId": "sv1",
+                       "approved": False})
+            self.assertTrue(reply["ok"], reply)
+            self.assertEqual(list(Path(tmp, "themes").glob("*.json")), [])
+            receipt = json.loads(
+                (Path(root) / ".web-muse" / "orders.receipt.json")
+                .read_text())
+            self.assertEqual(receipt["processed"]["sv1"]["status"], "denied")
 
     async def test_rejections_carry_reasons(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -238,6 +383,21 @@ class TestFrontendWiring(unittest.TestCase):
     def test_theme_apply_handler(self):
         self.assertIn('"themeApply"', APP_JS)
         self.assertIn("WebMuseTheme", APP_JS)
+
+    def test_theme_apply_replaces_not_merges(self):
+        # Wholesale replace (same as /theme <name>): the stored override
+        # becomes exactly the order's colors, so no earlier-order colors
+        # leak across switches. Revert path is advertised in the line.
+        self.assertIn("localStorage.setItem(T.storageKey, "
+                      "JSON.stringify(clean))", APP_JS)
+        self.assertNotIn("Object.assign(merged, clean)", APP_JS)
+        self.assertIn("/theme default", APP_JS)
+
+    def test_theme_value_shapes_checked(self):
+        # Frontend twin of the bridge's theme_color_error: hex roles,
+        # glow triplet, scrim rgba.
+        self.assertIn("themeValueOk", APP_JS)
+        self.assertIn("rgba(", APP_JS)
 
     def test_orders_card_and_decide(self):
         self.assertIn('"ordersPending"', APP_JS)

@@ -324,8 +324,53 @@ ORDERS_MAX_COUNT = 20
 ORDERS_RECEIPT_CAP = 200
 ORDERS_TEMPLATE = (
     Path(__file__).resolve().parent / "orders_skill.md")
+# Saved themes live under <repo>/web/themes; an approved theme.save order
+# writes one file there so it appears under bare `/theme`.
+DEFAULT_THEMES_DIR = (
+    Path(__file__).resolve().parent.parent / "web" / "themes")
 
-ORDER_ACTIONS = ("theme.apply", "allowedCommands.update")
+ORDER_ACTIONS = ("theme.apply", "theme.save", "allowedCommands.update")
+
+# Theme value formats, per key shape in web/theme.js (pinned by
+# tests/test_orders.py): hex roles take #rgb / #rrggbb / #rrggbbaa,
+# `glow` takes an "r, g, b" triplet (0-255 each, applied verbatim into
+# CSS), and `scrim` takes an rgba(...) color. Anything else is rejected
+# with the expected shape in the reason so the agent can fix and resend.
+HEX_COLOR_RE = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\Z")
+GLOW_RE = re.compile(
+    r"\s*(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])"
+    r"\s*,\s*(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])"
+    r"\s*,\s*(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])\s*\Z")
+SCRIM_RE = re.compile(r"rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,"
+                      r"\s*(?:0|1|0?\.\d+)\s*\)\Z")
+
+
+def theme_color_error(key, value):
+    """Reason string when a theme value has the wrong shape; None when ok.
+
+    Pure: `glow`/`scrim` are non-hex roles (see web/theme.js), everything
+    else is a hex role.
+    """
+    if key == "glow":
+        if isinstance(value, str) and GLOW_RE.match(value):
+            return None
+        return (f"bad color value for 'glow': want an \"r, g, b\" triplet "
+                f"(0-255 each), e.g. \"174, 172, 120\"; got {value!r}")
+    if key == "scrim":
+        if isinstance(value, str) and SCRIM_RE.match(value):
+            return None
+        return (f"bad color value for 'scrim': want rgba(r, g, b, a), e.g. "
+                f"\"rgba(241, 230, 209, 0.4)\"; got {value!r}")
+    if isinstance(value, str) and HEX_COLOR_RE.match(value):
+        return None
+    return (f"bad color value for {key!r}: want #rgb, #rrggbb or "
+            f"#rrggbbaa, e.g. \"#AEAC78\"; got {value!r}")
+
+
+# Saved-theme names the bridge writes (web/themes/<name>.json via an
+# approved theme.save order): lowercase stems so they are safe path
+# segments and stable under the /theme command's case-insensitive match.
+THEME_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 
 # Theme color names the bridge accepts (must match web/theme.js COLORS;
 # tests/test_orders.py pins parity both ways).
@@ -470,7 +515,7 @@ def validate_orders(payload, seen_ids):
         if not isinstance(params, dict):
             rejected[oid] = "params must be an object"
             continue
-        if action == "theme.apply":
+        if action in ("theme.apply", "theme.save"):
             colors = params.get("colors")
             if not isinstance(colors, dict) or not colors:
                 rejected[oid] = "'colors' must be a non-empty object"
@@ -480,15 +525,31 @@ def validate_orders(payload, seen_ids):
                 rejected[oid] = (f"unknown color names {sorted(bad_keys)}; "
                                  f"want: {sorted(THEME_KEYS)}")
                 continue
-            bad_vals = [k for k, v in colors.items()
-                        if not isinstance(v, str) or not v
-                        or len(v) > MAX_PATTERN_LEN]
-            if bad_vals:
-                rejected[oid] = (f"bad color values for {sorted(bad_vals)}: "
-                                 "non-empty strings, max "
-                                 f"{MAX_PATTERN_LEN} chars")
+            shape_errors = []
+            for k, v in colors.items():
+                if not isinstance(v, str) or not v \
+                        or len(v) > MAX_PATTERN_LEN:
+                    shape_errors.append(
+                        f"bad color value for {k!r}: non-empty strings, "
+                        f"max {MAX_PATTERN_LEN} chars")
+                else:
+                    err = theme_color_error(k, v)
+                    if err is not None:
+                        shape_errors.append(err)
+            if shape_errors:
+                rejected[oid] = "; ".join(sorted(shape_errors))
                 continue
-            valid.append((oid, action, {"colors": dict(colors)}))
+            if action == "theme.apply":
+                valid.append((oid, action, {"colors": dict(colors)}))
+                continue
+            name = params.get("name")
+            if not isinstance(name, str) or not THEME_NAME_RE.match(name):
+                rejected[oid] = ("'name' must match [a-z0-9-]{1,64}, "
+                                 "starting with [a-z0-9] "
+                                 "(e.g. \"harbor-dusk\")")
+                continue
+            valid.append((oid, action,
+                          {"name": name, "colors": dict(colors)}))
         elif action == "allowedCommands.update":
             update, reason = _validate_allowed_update(params)
             if reason is not None:
@@ -939,7 +1000,8 @@ class SessionRouter:
     """Tracks WS<->sessionId subscriptions and last-seen view cursors."""
 
     def __init__(self, msp, workspace_base=None, gh_bin="gh",
-                 sessions_base=None, allowed_commands_path=None):
+                 sessions_base=None, allowed_commands_path=None,
+                 themes_dir=None):
         self._msp = msp
         # Base dir for per-session workspaces (None = send no workspaceRoot).
         self._workspace_base = str(workspace_base) if workspace_base else None
@@ -975,10 +1037,18 @@ class SessionRouter:
         for _w in _ac_warnings:
             LOG.warning("%s", _w)
         # Agent orders channel: sessionId -> workspace root (for locating
-        # `.web-muse/orders.json`) and staged policy orders awaiting a
-        # human's ordersDecide, keyed (sessionId, orderId).
+        # `.web-muse/orders.json`) and staged orders awaiting a human's
+        # ordersDecide (policy updates + saved themes), keyed
+        # (sessionId, orderId).
         self._workspace_roots = {}
         self._pending_orders = {}
+        # Destination for approved theme.save orders (None = the shipped
+        # web/themes dir). Kept as a path: approved saves write one
+        # <name>.json file there, which is what bare `/theme` lists.
+        # Tests pass a tmp dir to stay hermetic (same pattern as the
+        # allowed-commands path above).
+        self._themes_dir = (str(themes_dir) if themes_dir is not None
+                            else str(DEFAULT_THEMES_DIR))
         # Known repos/branches: every listing still shells out to `gh`
         # for new entries, then merges them in — so repeat picker opens
         # keep working (stale) when `gh` hiccups and accumulate rows
@@ -1208,6 +1278,16 @@ class SessionRouter:
                 processed[oid] = {"status": "applied"}
                 LOG.info("orders: theme.apply from session %s (%d "
                          "colors)", sid, len(colors))
+            elif action == "theme.save":
+                self._pending_orders[(sid, oid)] = {
+                    "action": action, "params": params}
+                self._emit_orders_event(sid, "ordersPending",
+                                        {"sessionId": sid, "orderId": oid,
+                                         "action": action, "params": params,
+                                         "needsConfirm": True})
+                processed[oid] = {"status": "needsConfirm"}
+                LOG.info("orders: theme.save staged for session %s "
+                         "(awaiting human)", sid)
             elif action == "allowedCommands.update":
                 self._pending_orders[(sid, oid)] = {
                     "action": action, "params": params}
@@ -1232,7 +1312,7 @@ class SessionRouter:
         _write_receipt(Path(root) / ORDERS_DIRNAME, {oid: entry})
 
     async def _decide_order(self, msg):
-        """Run a human's ordersDecide on a staged policy order."""
+        """Run a human's ordersDecide on a staged order."""
         sid = msg.get("sessionId")
         oid = msg.get("orderId")
         approved = msg.get("approved")
@@ -1243,10 +1323,36 @@ class SessionRouter:
             raise ValueError(f"unknown order {oid!r} for session {sid!r}")
         if not approved:
             self._mark_order(sid, oid, "denied")
-            LOG.info("orders: policy update denied for session %s", sid)
+            LOG.info("orders: %s denied for session %s",
+                     rec.get("action", "order"), sid)
             return {"orderId": oid, "approved": False}
-        self._apply_policy_update(sid, oid, rec["params"])
+        if rec.get("action") == "theme.save":
+            self._apply_theme_save(sid, oid, rec["params"])
+        else:
+            self._apply_policy_update(sid, oid, rec["params"])
         return {"orderId": oid, "approved": True}
+
+    def _apply_theme_save(self, sid, oid, params):
+        """Write an approved theme.save order to web/themes/<name>.json."""
+        name = params.get("name") if isinstance(params, dict) else None
+        colors = params.get("colors") if isinstance(params, dict) else None
+        if not isinstance(name, str) or not THEME_NAME_RE.match(name):
+            raise ValueError(f"bad theme name {name!r}")
+        if not isinstance(colors, dict) or not colors:
+            raise ValueError("theme.save needs a non-empty colors object")
+        for k, v in colors.items():
+            if k not in THEME_KEYS:
+                raise ValueError(f"unknown color name {k!r}")
+            err = theme_color_error(k, v)
+            if err is not None:
+                raise ValueError(err)
+        target = Path(self._themes_dir) / f"{name}.json"
+        if target.resolve().parent != Path(self._themes_dir).resolve():
+            raise ValueError(f"refusing to save outside themes dir: {name!r}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(dict(colors), indent=2) + "\n")
+        self._mark_order(sid, oid, "approved")
+        LOG.info("orders: theme saved as %s for session %s", target, sid)
 
     def _apply_policy_update(self, sid, oid, update):
         """Rewrite the allowed-commands file from an approved order."""
