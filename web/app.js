@@ -383,7 +383,7 @@ function syncSelectionUI() {
   document.querySelectorAll(".session-row").forEach((row) => {
     const sid = row.dataset.sid;
     row.setAttribute("aria-selected", state.selectedIds.has(sid) ? "true" : "false");
-    const cb = row.querySelector(".sess-check");
+    const cb = row.querySelector(".checkbox");
     if (cb) {
       cb.classList.toggle("checked", state.selectedIds.has(sid));
       const inp = cb.querySelector('input[type="checkbox"]');
@@ -446,18 +446,32 @@ function appendSessionRow(box, s) {
   icon.setAttribute("aria-hidden", "true");
   icon.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.4 8.2l1.8 1.8 3.4-3.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const check = document.createElement("label");
-  check.className = "sess-check" + (state.selectedIds.has(s.sessionId) ? " checked" : "");
+  check.className = "checkbox" + (state.selectedIds.has(s.sessionId) ? " checked" : "");
+  check.setAttribute("for", `cb-${s.sessionId}`);
   check.setAttribute("aria-label", state.selectedIds.has(s.sessionId) ? "Deselect session" : "Select session");
   const cbInput = document.createElement("input");
   cbInput.type = "checkbox";
+  cbInput.name = "checkbox";
+  cbInput.id = `cb-${s.sessionId}`;
   cbInput.checked = state.selectedIds.has(s.sessionId);
   cbInput.setAttribute("aria-hidden", "true");
   cbInput.tabIndex = -1;
-  const cbVisual = document.createElement("span");
-  cbVisual.className = "cb-visual";
-  cbVisual.innerHTML = '<svg viewBox="0 0 12 10" fill="none" aria-hidden="true"><path d="M1 5l2.8 2.8L11 1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  check.append(cbInput, cbVisual);
-  check.onclick = (e) => { e.stopPropagation(); toggleSelection(s.sessionId); e.preventDefault(); };
+  cbInput.addEventListener("click", (e) => { e.stopPropagation(); });
+  cbInput.addEventListener("change", (e) => { e.stopPropagation(); toggleSelection(s.sessionId); });
+  const inner = document.createElement("span");
+  inner.className = "inner";
+  const svgCheck = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svgCheck.setAttribute("class", "icon-check");
+  svgCheck.setAttribute("viewBox", "-3.2 -3.2 38.40 38.40");
+  svgCheck.setAttribute("aria-hidden", "true");
+  svgCheck.innerHTML = '<g><path d="M5 16.577l2.194-2.195 5.486 5.484L24.804 7.743 27 9.937l-14.32 14.32z"></path></g>';
+  const svgCross = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svgCross.setAttribute("class", "icon-cross");
+  svgCross.setAttribute("viewBox", "0 0 1024 1024");
+  svgCross.setAttribute("aria-hidden", "true");
+  svgCross.innerHTML = '<g><path d="M697.4 759.2l61.8-61.8L573.8 512l185.4-185.4-61.8-61.8L512 450.2 326.6 264.8l-61.8 61.8L450.2 512 264.8 697.4l61.8 61.8L512 573.8z"></path></g>';
+  check.append(cbInput, inner, svgCheck, svgCross);
+  check.addEventListener("click", (e) => { if (e.target.tagName !== "INPUT") { e.preventDefault(); toggleSelection(s.sessionId); } });
   iconCol.append(icon, check);
   const open = document.createElement("button");
   open.type = "button";

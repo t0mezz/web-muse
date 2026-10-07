@@ -84,10 +84,12 @@ class TestSelectionUI(unittest.TestCase):
         self.assertIn('trash.hidden = n === 0', APP_JS)
 
     def test_selected_row_styled(self):
-        self.assertIn(".sess-check", STYLE_CSS)
-        self.assertIn(".sess-check.checked", STYLE_CSS)
+        self.assertIn(".checkbox", STYLE_CSS)
+        self.assertIn(".checkbox .inner", STYLE_CSS)
+        self.assertIn(".icon-check", STYLE_CSS)
+        self.assertIn(".icon-cross", STYLE_CSS)
         self.assertIn(".sess-icon-col", STYLE_CSS)
-        self.assertIn('sess-check', APP_JS)
+        self.assertIn('"checkbox"', APP_JS)
         self.assertIn('classList.toggle("checked"', APP_JS)
         self.assertNotIn('row.classList.toggle("selected"', APP_JS)
 

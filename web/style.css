@@ -119,61 +119,71 @@ body {
 .ticker { font: inherit; font-size: 12px; }
 .ticker:disabled { opacity: 0.45; cursor: default; }
 .ticker:hover:not(:disabled) { border-color: var(--accent); }
-/* circular tick box below checkmark — replaces background highlight */
+/* checkbox below checkmark — theme-driven, based on provided HTML */
 .sess-icon-col { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; margin-top: 2px; }
-/* From Uiverse.io by Uncannypotato69 — stylised checkbox (orig: label h-3em w-3em rounded-[1.2em] bg-[#b3fffa]) scaled to ~1.4em for session row, Tailwind peer-checked converted to plain CSS input:checked sibling selectors */
-.sess-check {
-  width: 1.4em;
-  height: 1.4em;
-  border-radius: 0.55em;
-  background: #b3fffa;
-  border: 1px solid #9de8e3;
+.sess-icon-col .checkbox {
+  position: relative;
   display: none;
-  align-items: center;
-  justify-content: center;
+  height: 1.6em;
+  width: 1.6em;
+  font-size: 12px;
+  border-radius: 0.55em;
+  background: var(--panel2);
+  box-shadow:
+    inset -1px 1px 4px 0px var(--light),
+    inset 1px -1px 4px 0px var(--accent),
+    -1px 1px 2px 0px var(--line);
   cursor: pointer;
   flex: none;
-  position: relative;
-  overflow: hidden;
-  transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
 }
-.sess-check input {
+.session-row:hover .checkbox, .session-row:focus-within .checkbox, .checkbox.checked, .checkbox:has(input:checked) { display: block; }
+.checkbox input {
+  appearance: none;
+  -webkit-appearance: none;
   position: absolute;
+  inset: 0;
+  margin: 0;
   opacity: 0;
-  width: 0;
-  height: 0;
+  cursor: pointer;
+}
+.checkbox .inner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 1.15em;
+  width: 1.15em;
+  transform: translate(-50%, -50%);
+  border-radius: 0.4em;
+  background: var(--bg);
+  box-shadow:
+    inset -1px 1px 3px 0px var(--light),
+    inset 1px -1px 3px 0px var(--accent),
+    -1px 1px 2px 0px var(--line);
+  transition: box-shadow 200ms;
+}
+.checkbox input:checked ~ .inner {
+  box-shadow:
+    inset 1px -1px 3px 0px var(--light),
+    inset -1px 1px 3px 0px var(--accent);
+}
+.checkbox svg {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 1.15em;
+  width: 1.15em;
+  transform: translate(-50%, -50%);
+  fill: var(--fg);
   pointer-events: none;
 }
-.sess-check .cb-visual {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: inherit;
-  background: #b3fffa;
-  transition: background 0.2s ease;
+.checkbox .icon-check { opacity: 1; }
+.checkbox .icon-cross { opacity: 0; }
+.checkbox input:checked ~ .icon-check { opacity: 0; }
+.checkbox input:checked ~ .icon-cross { opacity: 1; }
+.checkbox.checked { background: var(--select); }
+@media (prefers-reduced-motion: reduce) {
+  .checkbox .inner { transition: none; }
 }
-.sess-check .cb-visual svg {
-  width: 0.85em;
-  height: 0.85em;
-  opacity: 0;
-  transform: scale(0.5) rotate(-12deg);
-  transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-.sess-check input:checked + .cb-visual,
-.sess-check.checked .cb-visual {
-  background: #7dd8d1;
-}
-.sess-check input:checked + .cb-visual svg,
-.sess-check.checked .cb-visual svg {
-  opacity: 1;
-  transform: scale(1) rotate(0);
-}
-.session-row:hover .sess-check, .session-row:focus-within .sess-check, .sess-check.checked, .sess-check:has(input:checked) { display: inline-flex; }
-.sess-check:hover { border-color: #7dd8d1; }
-.sess-check:active { transform: scale(0.94); }
-@media (prefers-reduced-motion: reduce) { .sess-check, .sess-check .cb-visual, .sess-check .cb-visual svg { transition: none; } }
 #btn-delete-selected[hidden] { display: none; }
 /* From Uiverse.io by philipo30 — animated trash */
 .delete-button {
