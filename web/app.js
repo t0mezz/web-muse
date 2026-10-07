@@ -990,6 +990,7 @@ function restorePanelState() {
 // Shrinking from desktop (both panels docked) to a narrow viewport would
 // stack both overlay drawers: keep the inspector, shut the sessions drawer.
 window.addEventListener("resize", () => {
+  placeStarsToggle();
   if (!isNarrow()) return;
   if (el("sessions").classList.contains("open") &&
       el("inspector").classList.contains("open")) {
@@ -1029,8 +1030,9 @@ function updateWelcome() {
 
 /* Welcome starfield (web/stars.js): fullscreen backdrop behind the app,
  * shown on the empty welcome view until the first message is sent.
- * Opening a session leaves it running: the bottom-right switch owns it,
- * and the choice persists per browser. */
+ * Opening a session leaves it running: the switch owns it (a corner
+ * toggle on desktop, docked into the hintbar row on mobile), and the
+ * choice persists per browser. */
 const STARS_KEY = "web-muse:stars";
 // Locked-in look: dimmed, thinned-out, gentle parallax. The star hue
 // and backdrop gradient are NOT baked here: stars.js resolves the live
@@ -1075,8 +1077,8 @@ function stopStarsFxNow() {
   if (bg) bg.remove();
   syncStarsToggle();
 }
-// Bottom-right switch: reflects whether the field is up; flipping it
-// shows/hides the field at once and remembers the choice.
+// Switch: reflects whether the field is up; flipping it shows/hides
+// the field at once and remembers the choice.
 function syncStarsToggle() {
   // Star mode drives panel translucency (desktop only, see CSS).
   document.body.classList.toggle("stars-on", !!stopStarsFx);
@@ -1092,6 +1094,21 @@ function toggleStarsFx() {
     try { localStorage.setItem(STARS_KEY, "1"); } catch (_) {}
     startStarsFx();
     syncStarsToggle();
+  }
+}
+// Narrow screens dock the switch into the hintbar status row: the
+// floating corner toggle crowds the composer send/stop buttons there.
+// Desktop restores the corner (starsHome remembers the exact slot).
+let starsHome = null;
+function placeStarsToggle() {
+  const t = el("stars-toggle");
+  if (!t) return;
+  if (!starsHome) starsHome = { parent: t.parentNode, next: t.nextSibling };
+  const inBar = t.parentNode === el("hintbar");
+  if (isNarrow()) {
+    if (!inBar) el("hintbar").appendChild(t);
+  } else if (inBar) {
+    starsHome.parent.insertBefore(t, starsHome.next);
   }
 }
 
@@ -4406,6 +4423,7 @@ function startComposerHints() {
 restorePanelState();
 updateWelcome();
 syncStarsToggle();
+placeStarsToggle();
 updateRepoBar();
 loadPickedModel();
 loadPickedEffort();

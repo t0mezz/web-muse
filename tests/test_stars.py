@@ -6,6 +6,7 @@ No JS harness in this repo, so the contract is guarded at the source
 level, following tests/test_panel_persist.py.
 """
 
+import re
 import unittest
 from pathlib import Path
 
@@ -140,6 +141,38 @@ class TestStarsToggle(unittest.TestCase):
             'el("stars-toggle").addEventListener("click", () => { toggleStarsFx(); });',
             APP_JS,
         )
+
+
+class TestStarsToggleMobile(unittest.TestCase):
+    """Narrow screens dock the switch into the hintbar status row: the
+    floating corner toggle crowds the composer send/stop buttons there."""
+
+    def test_docks_into_hintbar_on_narrow(self):
+        self.assertIn("function placeStarsToggle() {", APP_JS)
+        self.assertIn('el("hintbar").appendChild(', APP_JS)
+
+    def test_restores_corner_on_wide(self):
+        m = re.search(r"function placeStarsToggle\(\) \{(.*?)\n\}",
+                      APP_JS, re.S)
+        self.assertIsNotNone(m, "placeStarsToggle missing")
+        self.assertIn("isNarrow()", m.group(1))
+        self.assertIn("insertBefore(", m.group(1))
+
+    def test_repositioned_on_resize_and_boot(self):
+        m = re.search(r'window\.addEventListener\("resize", \(\) => \{(.*?)\n\}\);',
+                      APP_JS, re.S)
+        self.assertIsNotNone(m, "resize handler missing")
+        self.assertIn("placeStarsToggle();", m.group(1))
+        self.assertIn("\nplaceStarsToggle();\n", APP_JS)
+
+    def test_hintbar_docking_rule(self):
+        m = re.search(r"@media \(max-width: 899px\) \{\n  #hintbar #stars-toggle \{(.*?)\n  \}",
+                      STYLE_CSS, re.S)
+        self.assertIsNotNone(m, "mobile hintbar docking rule missing")
+        self.assertIn("position: relative", m.group(1))
+
+    def test_docked_touch_target(self):
+        self.assertIn("#hintbar #stars-toggle::before", STYLE_CSS)
 
 
 if __name__ == "__main__":

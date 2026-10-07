@@ -842,6 +842,20 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 @media (prefers-reduced-motion: reduce) {
   #stars-toggle .stars-thumb { transition: none; }
 }
+/* mobile: the floating corner switch crowds the composer send/stop
+ * buttons, so narrow screens dock it into the hintbar status row
+ * instead (see placeStarsToggle): in-flow, spaced by the row gap.
+ * Desktop keeps the corner. */
+@media (max-width: 899px) {
+  #hintbar #stars-toggle {
+    position: relative; right: auto; bottom: auto; z-index: auto;
+    align-self: center;
+  }
+  /* 44x40 touch target without moving the 32x20 switch */
+  #hintbar #stars-toggle::before {
+    content: ""; position: absolute; inset: -10px -6px;
+  }
+}
 
 /* toast */
 #toast {
