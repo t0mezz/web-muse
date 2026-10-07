@@ -30,9 +30,17 @@
           <input id="session-filter" type="search" placeholder="Filter sessions…" aria-label="Filter sessions">
           <button id="btn-clear-filter" title="Clear filter" aria-label="Clear filter" hidden>✕</button>
         </span>
-        <button id="selection-ticker" type="button" class="ticker" aria-label="Selected sessions"></button>
-        <button id="btn-delete-selected" hidden title="Delete selected sessions" aria-label="Delete selected sessions">
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h10"/><path d="M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M6 7v5"/><path d="M10 7v5"/><path d="M4 4l.5 8a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1L12 4"/></svg>
+        <button id="selection-ticker" hidden type="button" class="ticker" aria-label="Selected sessions"></button>
+        <button id="btn-delete-selected" hidden aria-label="Delete item" class="delete-button" title="Delete selected sessions">
+          <svg class="trash-svg" viewBox="0 -10 64 74" xmlns="http://www.w3.org/2000/svg">
+            <g id="trash-can">
+              <rect x="16" y="24" width="32" height="30" rx="3" ry="3" fill="#e74c3c"></rect>
+              <g transform-origin="12 18" id="lid-group">
+                <rect x="12" y="12" width="40" height="6" rx="2" ry="2" fill="#c0392b"></rect>
+                <rect x="26" y="8" width="12" height="4" rx="2" ry="2" fill="#c0392b"></rect>
+              </g>
+            </g>
+          </svg>
         </button>
         <button id="btn-search-sessions" title="Search sessions" aria-label="Search sessions" aria-expanded="false">
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>

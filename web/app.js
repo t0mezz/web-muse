@@ -376,8 +376,8 @@ function syncSelectionUI() {
   const ticker = el("selection-ticker");
   const trash = el("btn-delete-selected");
   if (ticker) {
-    ticker.textContent = n === 0 ? "0 selected" : n === 1 ? "1 selected" : `${n} selected`;
-    ticker.disabled = n === 0;
+    ticker.textContent = n === 1 ? "1 selected" : `${n} selected`;
+    ticker.hidden = n === 0;
   }
   if (trash) trash.hidden = n === 0;
   document.querySelectorAll(".session-row").forEach((row) => {
