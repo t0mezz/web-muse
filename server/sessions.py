@@ -518,9 +518,12 @@ def pick_approve_once_choice(choices):
             return c["choiceId"]
     return cands[0]["choiceId"]
 
-# MSP ReasoningEffort closed tier vocabulary (schema $defs/ReasoningEffort).
-VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high",
-                           "xhigh", "max", "ultra"}
+# Offered reasoning-effort tiers: the middle six of the MSP ReasoningEffort
+# vocabulary (schema $defs/ReasoningEffort). The `none` and `ultra`
+# extremes are deliberately excluded — `none` silently degrades answer
+# quality and `ultra` burns budget with little return.
+VALID_REASONING_EFFORTS = {"minimal", "low", "medium", "high",
+                           "xhigh", "max"}
 
 # MSP view/page directions (schema $defs/ViewPageDirection).
 VALID_PAGE_DIRECTIONS = {"forward", "backward"}

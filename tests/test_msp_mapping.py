@@ -233,6 +233,12 @@ class TestRouterDispatch(unittest.IsolatedAsyncioTestCase):
                          "sessionId": SID, "reasoningEffort": "turbo"})
         self.assertFalse(f["ok"])
         self.assertIn("reasoning effort", f["error"]["message"])
+        # The `none`/`ultra` extremes are excluded from the offered tiers.
+        for bad in ("none", "ultra"):
+            f = await r.handle_client_message(
+                FakeConn(), {"id": 1, "type": "setEffort",
+                             "sessionId": SID, "reasoningEffort": bad})
+            self.assertFalse(f["ok"], bad)
         f = await r.handle_client_message(
             FakeConn(), {"id": 2, "type": "setEffort",
                          "sessionId": SID, "reasoningEffort": "max"})

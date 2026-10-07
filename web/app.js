@@ -2487,7 +2487,7 @@ function loadPickedModel() {
 // The effort pick survives reloads (localStorage) like the model pick:
 // changing it anywhere saves it, startup restores it, and the picker
 // shows it.
-const EFFORT_TIERS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const EFFORT_TIERS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 const PICKED_EFFORT_KEY = "webmuse.pickedEffort";
 function savePickedEffort() {
   try {
