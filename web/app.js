@@ -12,6 +12,10 @@ const state = {
   running: false, turnId: null, queuedTurnId: null,
   stick: true, history: [], hidx: -1,
   models: [], modelsMeta: null, slashSel: 0, slashList: [],
+  // Live skill selectors for the current session (skill/list rows):
+  // cached per sessionId so the / preview can merge static commands
+  // with typed-invocable skills. Refreshed on open + skill/changed.
+  skillsCache: [], skillsSession: null,
   // Last explicitly chosen model (picker or /model): applied to the
   // current session AND remembered as the default for created sessions.
   pickedModel: null,
@@ -705,6 +709,9 @@ async function openSession(sessionId) {
     reconcileRunningState();
     fetchPending();
     fetchOrders();
+    fetchSkills(sessionId).then(() => {
+      if (!el("slash-popup").hidden) updateSlashPopup();
+    }).catch(() => {});
     renderSessionList(state.sessionsCache);
     el("input").focus();
     scrollDown(true);
@@ -2195,6 +2202,15 @@ function onEvent(method, p) {
       // Same payload shape as usage/read's usage member; refresh the footer.
       refreshUsage().catch(() => {});
       break;
+    case "skill/changed":
+      // The session's user-invocable set changed: re-issue skill/list
+      // (advisory, may coalesce bursts — a cached miss just re-fetches).
+      if (!p.sessionId || p.sessionId === state.sessionId) {
+        fetchSkills(state.sessionId).then(() => {
+          if (!el("slash-popup").hidden) updateSlashPopup();
+        }).catch(() => {});
+      }
+      break;
     case "githubCloneProgress":
       onGithubProgress(p);
       break;
@@ -3208,18 +3224,51 @@ async function cmdMcp() {
   } catch (e) { sysLine("mcp failed: " + e.message, true); }
 }
 
+async function fetchSkills(sessionId) {
+  // Refresh the cached skill/list rows for one session. Never throws:
+  // an empty cache simply means the preview shows static commands only.
+  if (!sessionId) return [];
+  try {
+    const r = await send({ type: "skills", sessionId });
+    const rows = Array.isArray(r.skills) ? r.skills.filter((s) => s && s.selector) : [];
+    if (state.sessionId === sessionId) {
+      state.skillsCache = rows;
+      state.skillsSession = sessionId;
+    }
+    return rows;
+  } catch (_) { return state.sessionId === sessionId ? state.skillsCache : []; }
+}
+
+function findSkill(selector) {
+  const want = String(selector || "").toLowerCase();
+  return state.skillsCache.find((s) => String(s.selector || "").toLowerCase() === want) || null;
+}
+
 async function cmdSkills() {
   if (!state.sessionId) return sysLine("No session — open one first.", true);
   try {
-    const r = await send({ type: "skills", sessionId: state.sessionId });
-    const rows = r.skills || [];
+    const rows = await fetchSkills(state.sessionId);
     sysLine(rows.length
-      ? "Skills (invoke with /<selector> as a prompt skill part):\n" + rows.map((s) =>
+      ? "Skills (invoke with /<selector> [args]):\n" + rows.map((s) =>
         `  /${s.selector}${s.argumentHint ? " " + s.argumentHint : ""} — ${s.displayName || s.selector}` +
         (s.description ? `\n    ${s.description}` : "") +
         (s.source ? ` [${s.source}${s.pluginId ? ":" + s.pluginId : ""}]` : "")).join("\n")
       : "(no skills for this session)");
+    // Re-render the preview in case it is open — the cache just changed.
+    if (!el("slash-popup").hidden) updateSlashPopup();
   } catch (e) { sysLine("skills failed: " + e.message, true); }
+}
+
+async function cmdSkillInvoke(selector, args) {
+  // Route a /<selector> line to turn/start as a skill part. The host
+  // resolves the selector; an unknown one surfaces as skillNotFound.
+  // No local echo here: sendPromptText paints it from displayText (the
+  // shared optimistic-echo path, so reconcileLocalEcho still matches).
+  const raw = "/" + selector + (args ? " " + args : "");
+  await sendPromptText("", false, {
+    skills: [{ selector, arguments: args || "" }],
+    displayText: raw,
+  });
 }
 
 /* ---------- github repos (gh-only v1) ---------- */
@@ -3665,7 +3714,25 @@ async function dispatchSlash(text) {
   const name = (parts[0] || "").toLowerCase();
   const cmd = SLASH.find((c) => c.name === name);
   if (!cmd) {
-    sysLine(`Unknown command /${name} — /help lists commands.`, true);
+    // Static bridge commands win on name collisions; otherwise a cached
+    // skill selector routes to turn/start as a skill part. A cache miss
+    // re-fetches once so a just-added skill still resolves.
+    if (state.sessionId) {
+      let hit = findSkill(name);
+      if (!hit) {
+        await fetchSkills(state.sessionId).catch(() => {});
+        hit = findSkill(name);
+      }
+      if (hit) {
+        const spaceIdx = raw.indexOf(" ");
+        const args = spaceIdx === -1 ? "" : raw.slice(spaceIdx + 1).trim();
+        try { await cmdSkillInvoke(hit.selector, args); }
+        catch (e) { sysLine("/" + name + " failed: " + e.message, true); }
+        return;
+      }
+    }
+    sysLine(`Unknown command /${name} — /help lists commands` +
+      (state.sessionId ? ", /skills lists skills." : "."), true);
     return;
   }
   // Echo the command TUI-style, then run.
@@ -3681,7 +3748,31 @@ function updateSlashPopup() {
   const v = box.value;
   if (!v.startsWith("/") || v.includes("\n")) { pop.hidden = true; state.slashList = []; return; }
   const q = v.slice(1).split(/\s+/)[0].toLowerCase();
+  // Refresh the skill cache in the background when it belongs to another
+  // session (or was never fetched): the re-render after fetch picks up
+  // newly added skills without blocking typing.
+  if (state.sessionId && state.skillsSession !== state.sessionId) {
+    fetchSkills(state.sessionId).then(() => {
+      if (el("input").value === v && !el("slash-popup").hidden) updateSlashPopup();
+    }).catch(() => {});
+  }
+  const staticNames = new Set(SLASH.map((c) => c.name));
   const list = SLASH.filter((c) => c.name.startsWith(q));
+  // Merge live skill selectors after static commands. Static wins on a
+  // name collision, so a colliding skill row is hidden.
+  for (const s of state.skillsCache) {
+    const sel = String(s.selector || "");
+    if (!sel || !sel.toLowerCase().startsWith(q)) continue;
+    if (staticNames.has(sel.toLowerCase())) continue;
+    const usage = "/" + sel + (s.argumentHint ? " " + s.argumentHint : "");
+    const desc = (s.displayName || sel) +
+      (s.source ? ` [${s.source}${s.pluginId ? ":" + s.pluginId : ""}]` : "") +
+      (s.description ? ` — ${s.description}` : "");
+    list.push({
+      kind: "skill", name: sel, usage, desc,
+      run: (a) => cmdSkillInvoke(sel, (a || []).join(" ")),
+    });
+  }
   state.slashList = list;
   if (!list.length) { pop.hidden = true; return; }
   state.slashSel = Math.min(state.slashSel, list.length - 1);
@@ -3765,14 +3856,16 @@ async function submitComposer() {
   await sendPromptText(text);
 }
 
-async function sendPromptText(text, alreadyEchoed) {
+async function sendPromptText(text, alreadyEchoed, extra) {
   if (!alreadyEchoed) {
-    state.history.unshift(text); state.hidx = -1;
+    state.history.unshift(extra && extra.displayText ? extra.displayText : text); state.hidx = -1;
     // Optimistic user echo (reconciled when the server item arrives).
-    renderItem({ itemId: "local-" + Date.now(), kind: "userMessage", text }, false);
+    renderItem({ itemId: "local-" + Date.now(), kind: "userMessage", text: (extra && extra.displayText) || text }, false);
   }
   try {
     const req = { type: "prompt", sessionId: state.sessionId || undefined, text };
+    if (extra && extra.skills) req.skills = extra.skills;
+    if (extra && extra.displayText) req.displayText = extra.displayText;
     // Lazily created session: carry the remembered default model.
     if (!state.sessionId && state.pickedModel) {
       req.modelId = state.pickedModel.modelId;
@@ -3788,6 +3881,7 @@ async function sendPromptText(text, alreadyEchoed) {
       await send({ type: "subscribe", sessionId: r.sessionId }).catch(() => {});
       refreshSessions().catch(() => {});
       refreshModels().catch(() => {});
+      fetchSkills(r.sessionId).catch(() => {});
     }
     // The host queues follow-ups behind a running turn by default
     // (ifBusy omitted): say so, or the message looks lost until it

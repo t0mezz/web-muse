@@ -701,9 +701,31 @@ def default_session_name(text, limit=DEFAULT_SESSION_NAME_LEN):
     return collapsed[:limit]
 
 
-def build_turn_input(text, images=None):
-    """WS prompt payload -> MSP TurnInputPart list."""
+def build_turn_input(text, images=None, skills=None):
+    """WS prompt payload -> MSP TurnInputPart list.
+
+    skills: optional list of {selector, arguments?} dicts, each becoming
+    a {type: skill} part (selector required, arguments optional free
+    text — the wire twin of what the TUI accepts after the shortcut
+    token). Skill parts come first so "/selector args" reads as the
+    skill invocation with args, not as plain user text.
+    """
     parts = []
+    for sk in skills or []:
+        if not isinstance(sk, dict):
+            raise ValueError("skill entries must be {selector, arguments?}")
+        selector = sk.get("selector", "")
+        if not isinstance(selector, str) or not selector.strip():
+            raise ValueError("skill entries need a non-empty selector")
+        arguments = sk.get("arguments", "")
+        if arguments is None:
+            arguments = ""
+        if not isinstance(arguments, str):
+            raise ValueError("skill arguments must be text")
+        part = {"type": "skill", "selector": selector.strip()}
+        if arguments.strip():
+            part["arguments"] = arguments.strip()
+        parts.append(part)
     if text:
         parts.append({"type": "text", "text": text})
     for img in images or []:
@@ -713,7 +735,7 @@ def build_turn_input(text, images=None):
             "base64Data": img.get("base64Data", ""),
         })
     if not parts:
-        raise ValueError("prompt needs text or images")
+        raise ValueError("prompt needs text, images, or a skill")
     return parts
 
 
@@ -2029,7 +2051,9 @@ class SessionRouter:
             started = await self._do_new(conn, msg)
             session_id = started["session"]["sessionId"]
         p = {"sessionId": session_id,
-             "input": build_turn_input(msg.get("text", ""), msg.get("images"))}
+             "input": build_turn_input(msg.get("text", ""),
+                                       msg.get("images"),
+                                       msg.get("skills"))}
         if msg.get("ifBusy"):
             p["ifBusy"] = msg["ifBusy"]
         if msg.get("displayText"):

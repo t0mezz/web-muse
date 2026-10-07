@@ -67,6 +67,27 @@ class TestTurnInput(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_turn_input("")
 
+    def test_skill_part(self):
+        self.assertEqual(
+            build_turn_input("", None, [{"selector": "plan"}]),
+            [{"type": "skill", "selector": "plan"}])
+
+    def test_skill_arguments_and_order(self):
+        parts = build_turn_input(
+            "extra", None,
+            [{"selector": "grill-me", "arguments": "the plan"}])
+        self.assertEqual(parts, [
+            {"type": "skill", "selector": "grill-me",
+             "arguments": "the plan"},
+            {"type": "text", "text": "extra"},
+        ])
+
+    def test_skill_rejects_blank_selector(self):
+        for bad in ({}, {"selector": ""}, {"selector": "  "},
+                    {"selector": 42}, {"arguments": 42}, ["plan"]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                build_turn_input("", None, [bad])
+
 
 class TestRouting(unittest.TestCase):
     def test_session_scoped(self):
@@ -291,6 +312,29 @@ class TestRouterDispatch(unittest.IsolatedAsyncioTestCase):
         method, params = r._msp.calls[1]
         self.assertEqual(method, "item/readOutput")
         self.assertEqual(params["outputRef"], "o1")
+
+    async def test_prompt_forwards_skill_parts(self):
+        r = SessionRouter(FakeMsp())
+        f = await r.handle_client_message(
+            FakeConn(), {"id": 1, "type": "prompt", "sessionId": SID,
+                         "text": "", "displayText": "/plan depot",
+                         "skills": [{"selector": "plan",
+                                     "arguments": "depot"}]})
+        self.assertTrue(f["ok"], f)
+        method, params = r._msp.commands[0]
+        self.assertEqual(method, "turn/start")
+        self.assertEqual(params["input"], [
+            {"type": "skill", "selector": "plan", "arguments": "depot"}])
+        self.assertEqual(params["displayText"], "/plan depot")
+
+    async def test_prompt_rejects_bad_skill_shape(self):
+        r = SessionRouter(FakeMsp())
+        f = await r.handle_client_message(
+            FakeConn(), {"id": 1, "type": "prompt", "sessionId": SID,
+                         "text": "", "skills": [{"selector": ""}]})
+        self.assertFalse(f["ok"])
+        self.assertIn("selector", f["error"]["message"])
+        self.assertEqual(r._msp.commands, [])
 
     async def test_mcp_never_touches_msp(self):
         r = SessionRouter(FakeMsp())

@@ -68,7 +68,7 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 
 | type | MSP call |
 |---|---|
-| `prompt {sessionId?, text, images?, ifBusy?}` | `session/start?` then `turn/start` |
+| `prompt {sessionId?, text, images?, skills?[{selector, arguments?}], displayText?, ifBusy?}` | `session/start?` then `turn/start` (a `skills` entry becomes a `skill` turn part; `/`-preview selectors send `skills` + `displayText`) |
 | `new {…, mcpAttach?}` | `session/start` (+ bridge-side `config.mcpServers`) |
 | `list {cursor?, limit?}` | `session/list` |
 | `resume {sessionId}` | `session/resume` (+attach) |
