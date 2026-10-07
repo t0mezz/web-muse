@@ -68,6 +68,7 @@ class TestSkillDoc(unittest.TestCase):
     def test_protocol_markers(self):
         for marker in (".web-muse/orders.json", ".web-muse/orders.receipt.json",
                        "theme.apply", "theme.save", "allowedCommands.update",
+                       "bridge.restart",
                        "needsConfirm", "rejected", "Done when:"):
             self.assertIn(marker, SKILL_MD)
 
@@ -379,6 +380,212 @@ class TestOrdersEngine(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(bad["ok"])
 
 
+class TestRestartOrders(unittest.IsolatedAsyncioTestCase):
+    def _router(self, tmp, hook=None):
+        cfg = str(Path(tmp) / "allowed.json")
+        Path(cfg).write_text(json.dumps({"allow": ["^echo(\\s|$)"],
+                                         "deny": []}))
+        tdir = str(Path(tmp) / "themes")
+        r = SessionRouter(FakeMsp(), workspace_base=str(Path(tmp) / "ws"),
+                          allowed_commands_path=cfg, themes_dir=tdir,
+                          on_restart=hook)
+        for sid in ("sid-o1", "sid-o2"):
+            root = str(Path(tmp) / f"wsroot-{sid}")
+            Path(root).mkdir()
+            r._workspace_roots[sid] = root
+        return r
+
+    def _events(self, conn, method):
+        return [f["params"] for f in conn.frames
+                if f.get("method") == method]
+
+    def _receipt(self, tmp, sid):
+        return json.loads(
+            (Path(tmp) / f"wsroot-{sid}" / ".web-muse"
+             / "orders.receipt.json").read_text())["processed"]
+
+    async def test_bad_restart_params_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._router(tmp)
+            write_orders(Path(tmp) / "wsroot-sid-o1", {"orders": [
+                {"id": "r1", "action": "bridge.restart",
+                 "params": {"reason": 42}},
+                {"id": "r2", "action": "bridge.restart",
+                 "params": {"reason": "x" * 501}},
+                {"id": "r3", "action": "bridge.restart",
+                 "params": {"delaySeconds": -1}},
+                {"id": "r4", "action": "bridge.restart",
+                 "params": {"delaySeconds": 31}},
+                {"id": "r5", "action": "bridge.restart",
+                 "params": {"delaySeconds": "2"}},
+                {"id": "r6", "action": "bridge.restart",
+                 "params": {"delaySeconds": True}},
+                {"id": "r7", "action": "bridge.restart",
+                 "params": {}},
+            ]})
+            await r._check_orders("sid-o1")
+            proc = self._receipt(tmp, "sid-o1")
+            for oid in ("r1", "r2"):
+                self.assertEqual(proc[oid]["status"], "rejected")
+                self.assertIn("reason", proc[oid]["reason"])
+            for oid in ("r3", "r4", "r5", "r6"):
+                self.assertEqual(proc[oid]["status"], "rejected")
+                self.assertIn("delaySeconds", proc[oid]["reason"])
+            # Bare params are valid: staged, never applied directly.
+            self.assertEqual(proc["r7"]["status"], "needsConfirm")
+
+    async def test_restart_waits_for_human_and_broadcasts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+
+            async def hook(delay):
+                calls.append(delay)
+
+            r = self._router(tmp, hook=hook)
+            here, away = FakeConn(), FakeConn()
+            away.sessions.add("sid-elsewhere")
+            r._conns.update((here, away))
+            write_orders(Path(tmp) / "wsroot-sid-o1", {"orders": [
+                {"id": "r1", "action": "bridge.restart",
+                 "params": {"reason": "server code changed",
+                            "delaySeconds": 3}}]})
+            await r._check_orders("sid-o1")
+            self.assertEqual(calls, [])
+            self.assertEqual(self._receipt(tmp, "sid-o1")["r1"]["status"],
+                             "needsConfirm")
+            # A restart affects every browser tab, so the card fans out to
+            # all connections — including ones subscribed elsewhere.
+            for conn in (here, away):
+                pend = self._events(conn, "ordersPending")
+                self.assertEqual(len(pend), 1)
+                self.assertEqual(pend[0]["action"], "bridge.restart")
+                self.assertTrue(pend[0]["needsConfirm"])
+            self.assertEqual(self._events(here, "bridgeRestarting"), [])
+
+    async def test_approve_runs_hook_and_marks_approved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+
+            async def hook(delay):
+                calls.append(delay)
+
+            r = self._router(tmp, hook=hook)
+            conn = FakeConn()
+            r._conns.add(conn)
+            write_orders(Path(tmp) / "wsroot-sid-o1", {"orders": [
+                {"id": "r1", "action": "bridge.restart",
+                 "params": {"delaySeconds": 0}}]})
+            await r._check_orders("sid-o1")
+            reply = await r.handle_client_message(
+                conn, {"id": 1, "type": "ordersDecide",
+                       "sessionId": "sid-o1", "orderId": "r1",
+                       "approved": True})
+            self.assertTrue(reply["ok"], reply)
+            self.assertTrue(reply["result"]["approved"])
+            self.assertTrue(reply["result"]["restarting"])
+            self.assertEqual(self._receipt(tmp, "sid-o1")["r1"]["status"],
+                             "approved")
+            restarting = self._events(conn, "bridgeRestarting")
+            self.assertEqual(len(restarting), 1)
+            self.assertEqual(restarting[0]["orderId"], "r1")
+            await asyncio.sleep(0.2)
+            self.assertEqual(calls, [0])
+
+    async def test_deny_runs_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+
+            async def hook(delay):
+                calls.append(delay)
+
+            r = self._router(tmp, hook=hook)
+            conn = FakeConn()
+            r._conns.add(conn)
+            write_orders(Path(tmp) / "wsroot-sid-o1", {"orders": [
+                {"id": "r1", "action": "bridge.restart", "params": {}}]})
+            await r._check_orders("sid-o1")
+            reply = await r.handle_client_message(
+                conn, {"id": 1, "type": "ordersDecide",
+                       "sessionId": "sid-o1", "orderId": "r1",
+                       "approved": False})
+            self.assertTrue(reply["ok"], reply)
+            self.assertEqual(self._receipt(tmp, "sid-o1")["r1"]["status"],
+                             "denied")
+            self.assertEqual(calls, [])
+            self.assertEqual(self._events(conn, "bridgeRestarting"), [])
+            # Deciding twice fails: staged orders are one-shot.
+            again = await r.handle_client_message(
+                conn, {"id": 2, "type": "ordersDecide",
+                       "sessionId": "sid-o1", "orderId": "r1",
+                       "approved": True})
+            self.assertFalse(again["ok"])
+
+    def test_restart_environment_detector(self):
+        import os
+        from server.main import running_under_systemd
+        old = dict(os.environ)
+        try:
+            os.environ.pop("INVOCATION_ID", None)
+            os.environ.pop("JOURNAL_STREAM", None)
+            self.assertFalse(running_under_systemd())
+            os.environ["INVOCATION_ID"] = "abc123"
+            self.assertTrue(running_under_systemd())
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    async def test_approve_waits_out_grace_delay(self):
+        # The grace delay must defer the hook past the approval reply:
+        # approving must return while the restart is still pending, so
+        # the reply frame flushes before the process exits.
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+
+            async def hook(delay):
+                calls.append(delay)
+
+            r = self._router(tmp, hook=hook)
+            conn = FakeConn()
+            write_orders(Path(tmp) / "wsroot-sid-o1", {"orders": [
+                {"id": "r1", "action": "bridge.restart",
+                 "params": {"delaySeconds": 30}}]})
+            await r._check_orders("sid-o1")
+            reply = await r.handle_client_message(
+                conn, {"id": 1, "type": "ordersDecide",
+                       "sessionId": "sid-o1", "orderId": "r1",
+                       "approved": True})
+            self.assertTrue(reply["ok"], reply)
+            await asyncio.sleep(0.3)
+            self.assertEqual(calls, [])
+
+    async def test_orders_list_returns_staged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._router(tmp)
+            conn = FakeConn()
+            write_orders(Path(tmp) / "wsroot-sid-o1", {"orders": [
+                {"id": "r1", "action": "bridge.restart", "params": {}}]})
+            write_orders(Path(tmp) / "wsroot-sid-o2", {"orders": [
+                {"id": "p1", "action": "allowedCommands.update",
+                 "params": {"allow": ["^ls(\\s|$)"]}}]})
+            await r._check_orders("sid-o1")
+            await r._check_orders("sid-o2")
+            all_orders = await r.handle_client_message(
+                conn, {"id": 1, "type": "ordersList"})
+            self.assertTrue(all_orders["ok"], all_orders)
+            self.assertEqual(
+                {(o["sessionId"], o["orderId"]) for o in
+                 all_orders["result"]["orders"]},
+                {("sid-o1", "r1"), ("sid-o2", "p1")})
+            scoped = await r.handle_client_message(
+                conn, {"id": 2, "type": "ordersList",
+                       "sessionId": "sid-o1"})
+            self.assertTrue(scoped["ok"], scoped)
+            self.assertEqual(
+                [o["orderId"] for o in scoped["result"]["orders"]], ["r1"])
+            for o in scoped["result"]["orders"]:
+                self.assertTrue(o["needsConfirm"])
+
+
 class TestFrontendWiring(unittest.TestCase):
     def test_theme_apply_handler(self):
         self.assertIn('"themeApply"', APP_JS)
@@ -402,6 +609,14 @@ class TestFrontendWiring(unittest.TestCase):
     def test_orders_card_and_decide(self):
         self.assertIn('"ordersPending"', APP_JS)
         self.assertIn("ordersDecide", APP_JS)
+
+    def test_restart_and_resync_wiring(self):
+        # Restart progress event, staged-order resync, and the armed
+        # two-click restart confirm all have frontend handlers.
+        self.assertIn('"bridgeRestarting"', APP_JS)
+        self.assertIn('"ordersList"', APP_JS)
+        self.assertIn('"bridge.restart"', APP_JS)
+        self.assertIn("Confirm restart", APP_JS)
 
 
 if __name__ == "__main__":

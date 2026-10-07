@@ -94,6 +94,9 @@ function connect() {
       } else if (!state.everConnected) {
         sysLine("Connected to web-muse bridge.");
       }
+      // Staged agent orders survive reloads server-side; re-render
+      // them (a restart card affects every tab, not just one session).
+      fetchOrders();
       state.everConnected = true;
     } catch (e) { setStatus("init failed: " + e.message); }
   };
@@ -552,6 +555,7 @@ async function openSession(sessionId) {
     // never re-fires turn/started here: reconcile after replay settles.
     reconcileRunningState();
     fetchPending();
+    fetchOrders();
     renderSessionList(state.sessionsCache);
     el("input").focus();
     scrollDown(true);
@@ -2023,6 +2027,9 @@ function onEvent(method, p) {
     case "ordersPending":
       renderOrderCard(p);
       break;
+    case "bridgeRestarting":
+      onBridgeRestarting(p);
+      break;
     case "session/listChanged":
     case "session/started":
     case "session/closed":
@@ -2150,41 +2157,160 @@ async function cmdTheme(args) {
   sysLine(`Theme → ${hit} (${n} colors).`);
   toast(`theme → ${hit}`);
 }
-function renderOrderCard(p) {
-  // Staged policy order: the human approves or denies it here.
-  const aid = "order-" + (p.sessionId || "") + "-" + (p.orderId || "");
-  removeCard(aid);
-  const div = cardShell(aid);
-  const h = document.createElement("h4");
-  h.textContent = `Order: ${p.action || "policy update"} (${shortId(p.sessionId)})`;
-  div.append(h);
+function orderAid(p) { return "order-" + (p.sessionId || "") + "-" + (p.orderId || ""); }
+function orderParamsDetails(params) {
+  // Raw params stay one click away for every card (debugging + trust).
+  const det = document.createElement("details");
+  const sum = document.createElement("summary");
+  sum.textContent = "Raw order params";
+  det.append(sum);
   const pre = document.createElement("pre");
   try {
-    pre.textContent = JSON.stringify(p.params || {}, null, 2).slice(0, 2000);
+    pre.textContent = JSON.stringify(params || {}, null, 2).slice(0, 2000);
   } catch (_) { pre.textContent = "(unrenderable params)"; }
-  div.append(pre);
+  det.append(pre);
+  return det;
+}
+function orderPolicyLines(params) {
+  // Human-readable allow/deny diff instead of a JSON blob.
+  const box = document.createElement("div");
+  const rows = [];
+  for (const a of ((params && params.allow) || [])) rows.push("allow " + a);
+  for (const d of ((params && params.deny) || [])) {
+    const cmds = ((d && d.commands) || []).join(",");
+    rows.push(`deny${cmds ? " [" + cmds + "]" : ""} ` +
+      ((d && d.patterns) || []).join(" "));
+  }
+  const shown = rows.slice(0, 10);
+  const pre = document.createElement("pre");
+  pre.textContent = shown.join("\n") || "(no changes listed)";
+  box.append(pre);
+  if (rows.length > shown.length) {
+    const more = document.createElement("div");
+    more.className = "meta";
+    more.textContent = `…and ${rows.length - shown.length} more (see raw params).`;
+    box.append(more);
+  }
+  return box;
+}
+function orderThemeLines(params) {
+  // Theme name + swatches in the theme's own colors.
+  const box = document.createElement("div");
+  const colors = (params && params.colors) || {};
+  const keys = Object.keys(colors);
+  const line = document.createElement("div");
+  line.className = "q";
+  line.textContent = `Save as “${(params && params.name) || "?"}” ` +
+    `(${keys.length} color${keys.length === 1 ? "" : "s"}).`;
+  box.append(line);
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;";
+  for (const k of keys.slice(0, 29)) {
+    const s = document.createElement("span");
+    s.title = `${k}: ${colors[k]}`;
+    let bg = colors[k];
+    // The glow role is an "r, g, b" triplet, not a CSS color.
+    if (/^\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*$/.test(String(bg || ""))) bg = `rgb(${bg})`;
+    s.style.cssText = `width:18px;height:18px;border-radius:4px;border:1px solid var(--line);background:${bg};`;
+    row.append(s);
+  }
+  box.append(row);
+  return box;
+}
+function renderOrderCard(p) {
+  // Staged agent order awaiting a human: a per-action summary card in
+  // the inspector's Approvals tab (next to MSP approvals), raw params
+  // tucked into <details>. Re-render safe: the same aid replaces first,
+  // so resyncs never stack duplicates.
+  if (!p || !p.orderId) return;
+  const aid = orderAid(p);
+  removeCard(aid);
+  const div = cardShell(aid);
+  const action = p.action || "policy update";
+  const h = document.createElement("h4");
+  const body = document.createElement("div");
+  body.className = "q";
+  if (action === "bridge.restart") {
+    h.textContent = `Restart requested (${shortId(p.sessionId)})`;
+    const why = (p.params && p.params.reason) || "no reason given";
+    body.textContent = `“${why}” — approval restarts the backend: every ` +
+      `browser tab disconnects briefly and reconnects on its own; ` +
+      `running turns are interrupted; sessions are preserved.`;
+  } else if (action === "allowedCommands.update") {
+    h.textContent = `Policy update (${shortId(p.sessionId)})`;
+    body.textContent = "An agent proposes these command-policy changes:";
+    body.append(orderPolicyLines(p.params));
+  } else if (action === "theme.save") {
+    h.textContent = `Save theme (${shortId(p.sessionId)})`;
+    body.append(orderThemeLines(p.params));
+  } else {
+    h.textContent = `Order: ${action} (${shortId(p.sessionId)})`;
+    body.textContent = "An agent staged this order for your approval.";
+  }
+  div.append(h, body, orderParamsDetails(p.params));
   const row = document.createElement("div");
   row.className = "choices";
   const yes = document.createElement("button");
   yes.className = "allow"; yes.textContent = "Approve";
-  yes.onclick = () => decideOrder(p, true);
+  if (action === "bridge.restart") {
+    // Destructive and self-disconnecting: arm on first click so a
+    // stray tap cannot bounce the backend.
+    yes.onclick = () => {
+      if (!yes.dataset.armed) {
+        yes.dataset.armed = "1";
+        yes.textContent = "Confirm restart";
+        return;
+      }
+      decideOrder(p, true);
+    };
+  } else {
+    yes.onclick = () => decideOrder(p, true);
+  }
   const no = document.createElement("button");
   no.className = "deny"; no.textContent = "Deny";
   no.onclick = () => decideOrder(p, false);
   row.append(yes, no);
   div.append(row);
-  el("cards").append(div);
-  sysLine(`order staged: ${p.action || "?"} — approve or deny in the card above.`);
+  el("tab-approvals").append(div);
+  sysLine(`order staged: ${action} — approve or deny in the inspector (Approvals tab).`);
+  // A parked agent is worse than a moved panel: on desktop make sure
+  // the card is actually seen (same as MSP approvals).
+  if (window.innerWidth >= 900 && !el("inspector").classList.contains("open")) {
+    el("inspector").classList.add("open");
+    syncScrim();
+  }
+  openInspectorOnMobile("approvals");
 }
 function decideOrder(p, approved) {
   send({ type: "ordersDecide", sessionId: p.sessionId,
          orderId: p.orderId, approved })
     .then((r) => {
-      removeCard("order-" + (p.sessionId || "") + "-" + (p.orderId || ""));
-      sysLine(`order ${p.orderId} ` +
-        (r && r.approved ? "approved and applied." : "denied."));
+      removeCard(orderAid(p));
+      if (r && r.approved && r.restarting) {
+        sysLine(`order ${p.orderId} approved — backend restarting, reconnecting…`);
+        toast("backend restarting…");
+      } else {
+        sysLine(`order ${p.orderId} ` +
+          (r && r.approved ? "approved and applied." : "denied."));
+      }
     })
     .catch((e) => toast("ordersDecide failed: " + e.message, true));
+}
+function onBridgeRestarting(p) {
+  // The backend is going down right now (approved restart): say so
+  // plainly, since the socket drop that follows looks like a failure.
+  setStatus("restarting…");
+  sysLine(`backend restarting (order ${(p && p.orderId) || "?"} approved) — reconnecting…`);
+  toast("backend restarting…");
+}
+async function fetchOrders() {
+  // Re-render staged agent orders after reload/reconnect: the
+  // ordersPending fan-out only reaches attached clients. Unscoped on
+  // purpose — a restart affects every tab, so every tab must see it.
+  try {
+    const r = await send({ type: "ordersList" });
+    for (const o of ((r && r.orders) || [])) renderOrderCard(o);
+  } catch (_) { /* best effort */ }
 }
 
 function onApproval(a) {

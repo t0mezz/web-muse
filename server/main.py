@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -126,6 +127,18 @@ async def start_loopback_server(handle, port):
     return MultiLoopbackServer(servers)
 
 
+def running_under_systemd():
+    """True when this process runs as a systemd unit.
+
+    INVOCATION_ID is set by systemd for every unit process, so a
+    `systemctl --user restart web-muse` round-trips back to this same
+    unit. Anywhere else (a terminal dev run) the bridge restarts
+    itself by re-executing instead.
+    """
+    return bool(os.environ.get("INVOCATION_ID")
+                or os.environ.get("JOURNAL_STREAM"))
+
+
 def extra_allowed_hosts(args):
     """--allow-host flags + WEB_MUSE_ALLOWED_HOSTS env, normalized."""
     from server.ws import normalize_allowed_hosts
@@ -181,8 +194,52 @@ async def amain(args):
     ws_base = args.workspace_base or None
     if ws_base:
         LOG.info("session workspaces under %s", ws_base)
+    stop = asyncio.Event()
+
+    async def do_bridge_restart(_grace_delay):
+        """Run a human-approved bridge.restart order.
+
+        The router slept out the order's grace delay before calling, so
+        the approval reply and the bridgeRestarting event are already
+        flushed; only a short beat remains for stragglers. Teardown is
+        graceful (listeners closed, serve child stopped) before the
+        restart itself, so no orphaned `muse serve` survives. Under the
+        systemd unit the restart goes through systemctl and this
+        process exits via `stop` (letting amain's normal shutdown run);
+        anywhere else the process re-executes its own command line.
+        """
+        LOG.warning("bridge.restart approved: restarting the backend")
+        await asyncio.sleep(0.5)
+        server.close()
+        try:
+            # Same bound as the SIGTERM path below: stray open browser
+            # tabs must not wedge a restart the human just approved.
+            await asyncio.wait_for(server.wait_closed(), timeout=10)
+        except asyncio.TimeoutError:
+            LOG.warning("restart: connections still open; closing anyway")
+        await msp.stop()
+        if running_under_systemd():
+            try:
+                subprocess.Popen(
+                    ["systemctl", "--user", "restart", "web-muse"],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL)
+            except Exception:
+                LOG.exception("bridge restart: systemctl failed; "
+                              "stopping without restart")
+            stop.set()
+            return
+        LOG.warning("bridge.restart: re-executing (no systemd unit)")
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception:
+            LOG.exception("bridge restart: re-exec failed")
+            stop.set()
+
     router = SessionRouter(msp, workspace_base=ws_base,
-                           sessions_base=str(muse_sessions_base()))
+                           sessions_base=str(muse_sessions_base()),
+                           on_restart=do_bridge_restart)
     router_holder["router"] = router
 
     def hello():
@@ -205,7 +262,6 @@ async def amain(args):
     LOG.info("web-muse listening on %s (web=%s)", addrs, args.web_dir)
     print(f"web-muse up: http://{args.host}:{args.port}/", flush=True)
 
-    stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:

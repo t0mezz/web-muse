@@ -312,8 +312,9 @@ def shell_auto_allowed(subject, cfg=None):
 # server/orders_skill.md, seeded into every session workspace). The bridge
 # checks the file after each turn, validates every order, and acts:
 # `theme.apply` executes at once (fanned out as a themeApply event the
-# frontend applies); `allowedCommands.update` only stages — a human's
-# ordersDecide runs it, so agents never loosen their own policy alone.
+# frontend applies); `theme.save`, `allowedCommands.update` and
+# `bridge.restart` only stage — a human's ordersDecide runs them, so
+# agents never loosen their own policy or bounce the backend alone.
 # Everything else is rejected with a reason in the receipt file.
 ORDERS_DIRNAME = ".web-muse"
 ORDERS_FILENAME = "orders.json"
@@ -329,7 +330,17 @@ ORDERS_TEMPLATE = (
 DEFAULT_THEMES_DIR = (
     Path(__file__).resolve().parent.parent / "web" / "themes")
 
-ORDER_ACTIONS = ("theme.apply", "theme.save", "allowedCommands.update")
+ORDER_ACTIONS = ("theme.apply", "theme.save", "allowedCommands.update",
+                 "bridge.restart")
+
+# Agent-requested backend restarts (bridge.restart): an agent can only
+# *propose* one — a human's ordersDecide runs it, because restarting
+# drops every browser connection and interrupts running turns. Params
+# are optional: {"reason": "...", "delaySeconds": 2}.
+RESTART_REASON_MAX = 500
+RESTART_DELAY_DEFAULT = 2
+RESTART_DELAY_MIN = 0
+RESTART_DELAY_MAX = 30
 
 # Theme value formats, per key shape in web/theme.js (pinned by
 # tests/test_orders.py): hex roles take #rgb / #rrggbb / #rrggbbaa,
@@ -484,6 +495,38 @@ def _validate_allowed_update(raw):
     return out, None
 
 
+def _validate_restart(raw):
+    """Strict-validate a bridge.restart payload.
+
+    Both params are optional: `reason` (short human-readable why,
+    shown on the approval card) and `delaySeconds` (grace between the
+    human's approval reply and the actual restart, so the reply and the
+    bridgeRestarting event flush first). Returns (params, None) or
+    (None, reason).
+    """
+    if not isinstance(raw, dict):
+        return None, "params must be an object"
+    out = {}
+    reason = raw.get("reason", "")
+    if reason is None:
+        reason = ""
+    if not isinstance(reason, str):
+        return None, "'reason' must be a string"
+    if len(reason) > RESTART_REASON_MAX:
+        return None, (f"'reason' must be at most {RESTART_REASON_MAX} "
+                       f"chars")
+    out["reason"] = reason
+    delay = raw.get("delaySeconds", RESTART_DELAY_DEFAULT)
+    if isinstance(delay, bool) or not isinstance(delay, int):
+        return None, ("'delaySeconds' must be an integer "
+                      f"{RESTART_DELAY_MIN}-{RESTART_DELAY_MAX}")
+    if not RESTART_DELAY_MIN <= delay <= RESTART_DELAY_MAX:
+        return None, ("'delaySeconds' must be between "
+                      f"{RESTART_DELAY_MIN} and {RESTART_DELAY_MAX}")
+    out["delaySeconds"] = delay
+    return out, None
+
+
 def validate_orders(payload, seen_ids):
     """Split an orders payload into (valid, rejected).
 
@@ -556,6 +599,12 @@ def validate_orders(payload, seen_ids):
                 rejected[oid] = reason
                 continue
             valid.append((oid, action, update))
+        elif action == "bridge.restart":
+            restart, reason = _validate_restart(params)
+            if reason is not None:
+                rejected[oid] = reason
+                continue
+            valid.append((oid, action, restart))
     return valid, rejected
 
 
@@ -1001,7 +1050,7 @@ class SessionRouter:
 
     def __init__(self, msp, workspace_base=None, gh_bin="gh",
                  sessions_base=None, allowed_commands_path=None,
-                 themes_dir=None):
+                 themes_dir=None, on_restart=None):
         self._msp = msp
         # Base dir for per-session workspaces (None = send no workspaceRoot).
         self._workspace_base = str(workspace_base) if workspace_base else None
@@ -1038,10 +1087,14 @@ class SessionRouter:
             LOG.warning("%s", _w)
         # Agent orders channel: sessionId -> workspace root (for locating
         # `.web-muse/orders.json`) and staged orders awaiting a human's
-        # ordersDecide (policy updates + saved themes), keyed
-        # (sessionId, orderId).
+        # ordersDecide (policy updates, saved themes, backend restarts),
+        # keyed (sessionId, orderId).
         self._workspace_roots = {}
         self._pending_orders = {}
+        # Approved-restart executor: set by server/main.py to the real
+        # graceful-restart coroutine; None in tests unless injected, in
+        # which case an approved restart is recorded but not executed.
+        self._on_restart = on_restart
         # Destination for approved theme.save orders (None = the shipped
         # web/themes dir). Kept as a path: approved saves write one
         # <name>.json file there, which is what bare `/theme` lists.
@@ -1243,6 +1296,17 @@ class SessionRouter:
         for conn in targets:
             conn.queue_frame(frame)
 
+    def _broadcast_orders_event(self, method, params):
+        """Fan one orders event out to every connection.
+
+        Used for bridge restarts: the restart drops *all* browser tabs,
+        not just the ordering session's, so every client must see the
+        card and the bridgeRestarting notice.
+        """
+        frame = {"type": "event", "method": method, "params": params}
+        for conn in list(self._conns):
+            conn.queue_frame(frame)
+
     async def _check_orders(self, sid):
         """Validate one session's orders file and act (never raises)."""
         root = self._workspace_roots.get(sid)
@@ -1298,6 +1362,17 @@ class SessionRouter:
                 processed[oid] = {"status": "needsConfirm"}
                 LOG.info("orders: policy update staged for session %s "
                          "(awaiting human)", sid)
+            elif action == "bridge.restart":
+                self._pending_orders[(sid, oid)] = {
+                    "action": action, "params": params}
+                self._broadcast_orders_event(
+                    "ordersPending",
+                    {"sessionId": sid, "orderId": oid,
+                     "action": action, "params": params,
+                     "needsConfirm": True})
+                processed[oid] = {"status": "needsConfirm"}
+                LOG.info("orders: bridge restart staged for session %s "
+                         "(awaiting human)", sid)
         if processed:
             _write_receipt(odir, processed)
 
@@ -1328,9 +1403,74 @@ class SessionRouter:
             return {"orderId": oid, "approved": False}
         if rec.get("action") == "theme.save":
             self._apply_theme_save(sid, oid, rec["params"])
+        elif rec.get("action") == "bridge.restart":
+            # Receipt first: the restart kills this process, so the
+            # agent's receipt must already say approved when we go down.
+            self._mark_order(sid, oid, "approved")
+            self._broadcast_orders_event(
+                "bridgeRestarting",
+                {"sessionId": sid, "orderId": oid,
+                 "params": rec["params"]})
+            self._schedule_restart(rec["params"])
+            LOG.info("orders: bridge restart approved for session %s "
+                     "(restarting)", sid)
+            return {"orderId": oid, "approved": True, "restarting": True}
         else:
             self._apply_policy_update(sid, oid, rec["params"])
         return {"orderId": oid, "approved": True}
+
+    def _schedule_restart(self, params):
+        """Queue the approved restart after its grace delay (never raises).
+
+        The delay lets this approval's reply frame and the
+        bridgeRestarting event flush to browsers before the process
+        exits; without it the approver would see only a dropped socket.
+        """
+        delay = params.get("delaySeconds", RESTART_DELAY_DEFAULT) \
+            if isinstance(params, dict) else RESTART_DELAY_DEFAULT
+        try:
+            delay = int(delay)
+        except (TypeError, ValueError):
+            delay = RESTART_DELAY_DEFAULT
+        delay = min(max(delay, RESTART_DELAY_MIN), RESTART_DELAY_MAX)
+        try:
+            asyncio.create_task(self._run_restart_later(delay))
+        except RuntimeError:
+            LOG.warning("orders: no running loop; restart not scheduled")
+
+    async def _run_restart_later(self, delay):
+        """Sleep out the grace delay, then run the restart hook."""
+        try:
+            await asyncio.sleep(delay)
+            hook = self._on_restart
+            if hook is None:
+                LOG.error("orders: bridge restart approved but no "
+                          "restart hook is configured; staying up")
+                return
+            if asyncio.iscoroutinefunction(hook):
+                await hook(delay)
+            else:
+                hook(delay)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.exception("orders: bridge restart failed")
+
+    def _list_orders(self, sid):
+        """All staged (needsConfirm) orders, optionally session-scoped.
+
+        Lets fresh or reconnected clients re-render cards that were
+        fanned out as ordersPending events before they attached.
+        """
+        out = []
+        for (psid, oid), rec in self._pending_orders.items():
+            if sid and psid != sid:
+                continue
+            out.append({"sessionId": psid, "orderId": oid,
+                        "action": rec.get("action"),
+                        "params": rec.get("params", {}),
+                        "needsConfirm": True})
+        return {"orders": out}
 
     def _apply_theme_save(self, sid, oid, params):
         """Write an approved theme.save order to web/themes/<name>.json."""
@@ -1712,9 +1852,16 @@ class SessionRouter:
                 return reply(True, result=self._cancel_github_op(
                     conn, msg.get("opId")))
             if mtype == "ordersDecide":
-                # Human verdict on a staged policy order (allowlist-gated
-                # actions never run without this).
+                # Human verdict on a staged order (gated actions —
+                # policy updates, saved themes, backend restarts —
+                # never run without this).
                 return reply(True, result=await self._decide_order(msg))
+            if mtype == "ordersList":
+                # Staged orders awaiting a human (for clients that
+                # attached after the ordersPending fan-out, e.g. on
+                # reload or reconnect).
+                return reply(True, result=self._list_orders(
+                    msg.get("sessionId")))
             if mtype == "githubClean":
                 # Delete one session's clone leaf after confirm (the UI
                 # confirms; the bridge only enforces the leaf shape).

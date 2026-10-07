@@ -1,8 +1,9 @@
 # App orders: ask web-muse to change itself
 
 Some changes live outside this workspace, where you cannot write: the
-app theme and the bridge's own policy files. For those, write an order
-file here and the app carries it out after your turn.
+app theme, the bridge's own policy files, and the backend process
+itself. For those, write an order file here and the app carries it out
+after your turn.
 
 ## Steps
 
@@ -37,6 +38,15 @@ file here and the app carries it out after your turn.
 - `allowedCommands.update` — proposes an allow/deny policy change in the
   config file's `allow`/`deny` shape. Never applies directly: it waits
   for a human's approval in the app, reported as `needsConfirm`.
+- `bridge.restart` — asks a human to restart the backend, e.g. after
+  server code changed and needs a reload you cannot trigger yourself.
+  Params are optional: `{"reason": "why", "delaySeconds": 2}` (`reason`
+  is shown on the approval card, at most 500 chars; `delaySeconds`
+  0–30 is the grace between approval and restart so the reply flushes
+  first). Never restarts directly: it waits for a human's approval in
+  the app, reported as `needsConfirm`. Approval briefly disconnects
+  every browser tab (they reconnect on their own), interrupts running
+  turns, and preserves sessions; denial does nothing.
 
 ## Theme colors
 
