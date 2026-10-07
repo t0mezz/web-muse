@@ -67,12 +67,12 @@ COMMAND_METHODS = {
     "userInput/answer": "userInput/answer",
 }
 
-# Hardening: the bridge never selects the no-approval mode over the wire.
-# (The host default onRequest applies unless the user changes it in the TUI.)
-FORBIDDEN_APPROVAL_MODES = {"allowAll"}
-
-# MSP ApprovalMode closed enum (schema $defs/ApprovalMode); allowAll is
-# rejected above, the other three are selectable.
+# MSP ApprovalMode closed enum (schema $defs/ApprovalMode). All four are
+# selectable, including allowAll ("approve all" in the Session panel):
+# with it the host runs every command without prompting, so it carries
+# an explicit warning in the UI and should be used only in throwaway
+# sessions. (The host default onRequest applies unless changed here or
+# in the TUI.)
 VALID_APPROVAL_MODES = {"allowAll", "promptUnmatched", "onRequest",
                         "denyUnmatched"}
 
@@ -146,24 +146,165 @@ GH_GIT_DENY_RE = (
 )
 
 
-def shell_auto_allowed(subject):
+# Protected allowed-commands config: server/allowed_commands.json holds the
+# same allow/deny semantics as the GH_* matchers above, but as data the
+# bridge validates on load. Protection is threefold: the file lives under
+# server/ (never under the served web/ dir, so no WS route can reach it),
+# every value is type/shape/regex-checked with a builtin fallback, and a
+# corrupt file degrades to prompting (never to wider auto-approval).
+# Nothing here — rows aside — ever crosses the WS boundary to the browser.
+ALLOWED_COMMANDS_FILE = str(
+    Path(__file__).resolve().parent / "allowed_commands.json")
+MAX_ALLOWED_PATTERNS = 200
+MAX_PATTERN_LEN = 500
+SAFE_COMMAND_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+def _builtin_allowed_config():
+    """Compiled GH_* matchers as a config dict (fallback + parity base)."""
+    return {
+        "allow": list(GH_AUTO_ALLOW_RE) + list(GH_AUTO_ALLOW_TOOLS_RE),
+        "deny": [(("find",), list(GH_TOOL_DENY_RE)),
+                 (("git",), list(GH_GIT_DENY_RE))],
+    }
+
+
+def _compile_patterns(patterns, warnings, what):
+    """Compile a pattern list, dropping bad entries with a warning each."""
+    compiled = []
+    for pat in patterns or []:
+        if (not isinstance(pat, str) or not pat
+                or len(pat) > MAX_PATTERN_LEN):
+            warnings.append(f"allowed-commands: dropping invalid {what} "
+                            f"entry {pat!r}")
+            continue
+        if len(compiled) >= MAX_ALLOWED_PATTERNS:
+            warnings.append(f"allowed-commands: too many {what} entries; "
+                            "keeping the first "
+                            f"{MAX_ALLOWED_PATTERNS}")
+            break
+        try:
+            compiled.append(re.compile(pat))
+        except re.error as e:
+            warnings.append(f"allowed-commands: dropping bad {what} "
+                            f"regex {pat!r} ({e})")
+    return compiled
+
+
+def load_allowed_commands(path=None):
+    """Load and validate the allowed-commands config (never raises).
+
+    Returns (cfg, warnings): cfg is {"allow": [re], "deny":
+    [(commands, [re])]}. A missing/unparseable file, or an unusable side
+    of it, falls back to the builtin GH_* matchers with a warning — so a
+    corrupt file degrades to the audited default, never to silent
+    allow-everything. An explicit empty allow list is honored (nothing
+    auto-approved).
+    """
+    builtin = _builtin_allowed_config()
+    p = path if path is not None else ALLOWED_COMMANDS_FILE
+    try:
+        raw = json.loads(Path(p).read_text())
+    except FileNotFoundError:
+        return builtin, [f"allowed-commands: no file at {p}; "
+                         "using builtin matchers"]
+    except (OSError, ValueError) as e:
+        LOG.warning("allowed-commands: unreadable %s (%s); using builtin "
+                    "matchers", p, e)
+        return builtin, [f"allowed-commands: unreadable file ({e}); "
+                         "using builtin matchers"]
+    if not isinstance(raw, dict):
+        return builtin, ["allowed-commands: top level must be an object; "
+                         "using builtin matchers"]
+    warnings = []
+    cfg = {}
+    if "allow" not in raw:
+        cfg["allow"] = builtin["allow"]
+    elif not isinstance(raw["allow"], list):
+        warnings.append("allowed-commands: 'allow' must be a list; "
+                        "using builtin allow matchers")
+        cfg["allow"] = builtin["allow"]
+    else:
+        cfg["allow"] = _compile_patterns(raw["allow"], warnings, "allow")
+        if raw["allow"] and not cfg["allow"]:
+            warnings.append("allowed-commands: no usable 'allow' entries; "
+                            "using builtin allow matchers")
+            cfg["allow"] = builtin["allow"]
+    if "deny" not in raw:
+        cfg["deny"] = builtin["deny"]
+    elif not isinstance(raw["deny"], list):
+        warnings.append("allowed-commands: 'deny' must be a list; "
+                        "using builtin deny rules")
+        cfg["deny"] = builtin["deny"]
+    else:
+        rules = []
+        for entry in raw["deny"]:
+            if not isinstance(entry, dict) or not isinstance(
+                    entry.get("patterns"), list):
+                warnings.append("allowed-commands: dropping malformed "
+                                f"deny entry {entry!r}")
+                continue
+            commands = entry.get("commands") or []
+            if not isinstance(commands, list) or not all(
+                    isinstance(c, str) and SAFE_COMMAND_NAME.fullmatch(c)
+                    for c in commands):
+                warnings.append("allowed-commands: dropping deny entry "
+                                f"with bad 'commands' {entry!r}")
+                continue
+            patterns = _compile_patterns(entry["patterns"], warnings,
+                                         "deny")
+            if entry["patterns"] and not patterns:
+                warnings.append("allowed-commands: deny entry has no "
+                                f"usable patterns {entry!r}")
+                continue
+            rules.append((tuple(commands), patterns))
+        cfg["deny"] = rules
+    for w in warnings:
+        LOG.warning("%s", w)
+    return cfg, warnings
+
+
+_DEFAULT_ALLOWED = None
+
+
+def default_allowed_config():
+    """Process-wide allowed-commands config (shipped file or builtins)."""
+    global _DEFAULT_ALLOWED
+    if _DEFAULT_ALLOWED is None:
+        _DEFAULT_ALLOWED, _ = load_allowed_commands()
+    return _DEFAULT_ALLOWED
+
+
+def shell_allowed(command, cfg):
+    """True when a shell command string passes an allowed-commands config.
+
+    Pure: allow entries match from the command start; deny rules search
+    anywhere but only fire for their listed leading commands (an empty
+    command list scopes a rule to every allowed command).
+    """
+    cmd = command.strip() if isinstance(command, str) else ""
+    if not cmd:
+        return False
+    if not any(pat.match(cmd) for pat in cfg.get("allow", ())):
+        return False
+    first = cmd.split()[0]
+    for commands, patterns in cfg.get("deny", ()):
+        if commands and first not in commands:
+            continue
+        if any(pat.search(cmd) for pat in patterns):
+            return False
+    return True
+
+
+def shell_auto_allowed(subject, cfg=None):
     """True when a shell approval subject is auto-decided bridge-side."""
     if not isinstance(subject, dict) or subject.get("kind") != "shell":
         return False
     cmd = subject.get("command")
     if not isinstance(cmd, str):
         return False
-    cmd = cmd.strip()
-    if not (any(pat.match(cmd) for pat in GH_AUTO_ALLOW_RE)
-            or any(pat.match(cmd) for pat in GH_AUTO_ALLOW_TOOLS_RE)):
-        return False
-    if (cmd == "git" or cmd.startswith("git ")) and \
-            any(pat.search(cmd) for pat in GH_GIT_DENY_RE):
-        return False
-    if (cmd == "find" or cmd.startswith("find ")) and \
-            any(pat.search(cmd) for pat in GH_TOOL_DENY_RE):
-        return False
-    return True
+    return shell_allowed(
+        cmd, default_allowed_config() if cfg is None else cfg)
 
 
 def pick_approve_once_choice(choices):
@@ -604,7 +745,7 @@ class SessionRouter:
     """Tracks WS<->sessionId subscriptions and last-seen view cursors."""
 
     def __init__(self, msp, workspace_base=None, gh_bin="gh",
-                 sessions_base=None):
+                 sessions_base=None, allowed_commands_path=None):
         self._msp = msp
         # Base dir for per-session workspaces (None = send no workspaceRoot).
         self._workspace_base = str(workspace_base) if workspace_base else None
@@ -628,6 +769,13 @@ class SessionRouter:
             if self._sessions_base else None)
         self._load_bridge_sids()
         self._gh_bin = gh_bin or "gh"
+        # Shell auto-approve policy: validated server-side config
+        # (allowed_commands_path, defaulting to the shipped file), never
+        # client-supplied. Corrupt files fall back to builtins (logged).
+        self._allowed, _ac_warnings = load_allowed_commands(
+            allowed_commands_path)
+        for _w in _ac_warnings:
+            LOG.warning("%s", _w)
         # Known repos/branches: every listing still shells out to `gh`
         # for new entries, then merges them in — so repeat picker opens
         # keep working (stale) when `gh` hiccups and accumulate rows
@@ -764,7 +912,7 @@ class SessionRouter:
         if not sid or sid not in self._gh_auto_sids:
             return False
         subject = params.get("subject")
-        if not shell_auto_allowed(subject):
+        if not shell_auto_allowed(subject, self._allowed):
             return False
         choice_id = pick_approve_once_choice(params.get("availableChoices"))
         if choice_id is None:
@@ -1049,15 +1197,10 @@ class SessionRouter:
                     "session/setModel", p))
             if mtype == "setApprovalMode":
                 mode = msg.get("mode", "")
-                if mode in FORBIDDEN_APPROVAL_MODES:
-                    return reply(False, error={
-                        "message": f"approval mode {mode!r} is disabled "
-                                   "on this bridge"})
                 if mode not in VALID_APPROVAL_MODES:
                     return reply(False, error={
                         "message": f"unknown approval mode {mode!r}; "
-                                   f"want one of {sorted(VALID_APPROVAL_MODES)} "
-                                   "(allowAll is disabled on this bridge)"})
+                                   f"want one of {sorted(VALID_APPROVAL_MODES)}"})
                 return reply(True, result=await self._msp.command(
                     "session/setApprovalMode",
                     {"sessionId": msg["sessionId"], "mode": mode}))
@@ -1208,8 +1351,22 @@ class SessionRouter:
                   "workspaceRoot", "workspaceRoots", "config"):
             if msg.get(k) is not None:
                 p[k] = msg[k]
-        if p.get("approvalMode") in FORBIDDEN_APPROVAL_MODES:
-            raise ValueError("that approvalMode is disabled on this bridge")
+        # Remembered effort default (picker / /effort / /default-effort):
+        # validated up front so a bad tier fails before creating the
+        # session, applied after start via session/setReasoningEffort
+        # (session/start takes no effort field on MSP v1).
+        effort = msg.get("reasoningEffort")
+        if effort is not None:
+            if effort not in VALID_REASONING_EFFORTS:
+                raise ValueError(
+                    f"unknown reasoning effort {effort!r}; "
+                    f"want one of {sorted(VALID_REASONING_EFFORTS)}")
+        if (p.get("approvalMode") is not None
+                and p["approvalMode"] not in VALID_APPROVAL_MODES):
+            raise ValueError(
+                "unknown approvalMode "
+                f"{p['approvalMode']!r}; want one of "
+                f"{sorted(VALID_APPROVAL_MODES)}")
         # Client-supplied roots are validated (must exist; nothing is
         # created outside the base). Auto-created workspaces below skip
         # this — they are made by session_workspace_dir.
@@ -1247,6 +1404,16 @@ class SessionRouter:
                 p["config"]["mcpServers"] = merged
                 attached = sorted(merged)
         result = await self._msp.command("session/start", p)
+        if effort is not None:
+            try:
+                await self._msp.command(
+                    "session/setReasoningEffort",
+                    {"sessionId": result["session"]["sessionId"],
+                     "reasoningEffort": effort})
+            except Exception:
+                LOG.warning("default effort %r not applied to session %s",
+                            effort, result["session"]["sessionId"],
+                            exc_info=True)
         self._attach(conn, result["session"]["sessionId"])
         # A fresh session under a previously deleted id exists again.
         self._deleted_sids.discard(result["session"]["sessionId"])
@@ -1426,6 +1593,10 @@ class SessionRouter:
             if isinstance(model.get("providerId"), str) \
                     and model["providerId"].strip():
                 new_msg["providerId"] = model["providerId"].strip()
+        if isinstance(open_opts.get("reasoningEffort"), str) \
+                and open_opts["reasoningEffort"].strip():
+            new_msg["reasoningEffort"] = \
+                open_opts["reasoningEffort"].strip()
         result = await self._do_new(conn, new_msg)
         self._gh_auto_sids.add(session_id)
         name = open_opts.get("name")
@@ -1501,7 +1672,8 @@ class SessionRouter:
         return self._launch_clone(conn, full_name, dest, op_id, sid,
                                   {"mcpAttach": msg.get("mcpAttach"),
                                    "name": msg.get("name"),
-                                   "model": msg.get("model")},
+                                   "model": msg.get("model"),
+                                   "reasoningEffort": msg.get("reasoningEffort")},
                                   branch=branch)
 
     async def _prune_missing(self, msg):

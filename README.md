@@ -79,7 +79,7 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 | `subscribe {sessionId, after?}` / `unsubscribe` | `view/subscribe` / `view/unsubscribe` |
 | `page {sessionId, limit, cursor?, direction?}` | `view/page` |
 | `models {sessionId?}` / `setModel` | `model/list` / `session/setModel` |
-| `setApprovalMode` (allowAll rejected) | `session/setApprovalMode` |
+| `setApprovalMode` (allowAll permitted, warned in UI) | `session/setApprovalMode` |
 | `compact`, `usage`, `pending` | `session/compact`, `usage/read`, `approval/listPending` |
 | `setEffort {reasoningEffort}` | `session/setReasoningEffort` (tier validated) |
 | `skills` | `skill/list` |
@@ -128,7 +128,7 @@ nextCursor}`, live `item/delta` + `turn/completed` streaming. Two caveats:
 ## Slash commands (in the composer, `Tab`-completed)
 
 `/help /new /list /sessions /resume /open /rename /fork /delete /clear`
-`/models /model /effort /skills /mcp /output /compact /usage /pending`
+`/models /model /effort /default-effort /skills /mcp /output /compact /usage /pending`
 `/interrupt /stop /cancel /steer /unqueue /older`
 `/github list|clone|open|clean|cancel`
 
@@ -138,7 +138,12 @@ substring; ambiguous prefixes list the candidates instead of guessing.
 default marker, catalog source). The top-right picker and `/model` both
 remember the choice as the default for created chats (`/new`, first
 prompt, `/github open` carry it as the starting model); opening an
-existing session never re-models it.
+existing session never re-models it. The effort picker (left of the
+model picker), `/effort`, and `/default-effort` do the same for
+reasoning effort: the pick is remembered as the default for created
+chats and applied to the current session when one is open.
+`/effort <tier>` needs an open session;
+`/default-effort <tier|clear|show>` works with none open.
 
 Approval cards render only in the right-hand inspector (Approvals tab —
 it opens itself on desktop when one arrives); the transcript keeps just

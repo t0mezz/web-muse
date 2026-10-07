@@ -15,6 +15,7 @@
       <span id="conn-dot" class="dot off" title="connection"></span>
       <span id="session-title">web-muse</span>
     </div>
+    <select id="effort-picker" title="Reasoning effort (default for new chats)" aria-label="Reasoning effort"><option value="">effort…</option><option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option><option value="ultra">ultra</option></select>
     <select id="model-picker" title="Model" aria-label="Model"><option value="">model…</option></select>
     <button id="btn-inspector" title="Toggle inspector (Ctrl+.)" aria-label="Inspector">ⓘ</button>
     <a id="btn-progress" href="/progress.html" title="Live bridge status page" aria-label="Progress">⏱</a>
@@ -112,8 +113,16 @@
             <option value="onRequest">onRequest</option>
             <option value="promptUnmatched">promptUnmatched</option>
             <option value="denyUnmatched">denyUnmatched</option>
+            <option value="allowAll">allowAll</option>
           </select>
         </label>
+        <div id="approval-warn" class="approval-warn" hidden>
+          <p>Warning: allowAll runs every command without asking, including destructive ones. Use only in throwaway sessions.</p>
+          <div class="row-btns">
+            <button id="approval-confirm-yes" title="Enable allowAll for this session">Enable allowAll</button>
+            <button id="approval-confirm-no" title="Stay on the previous mode">Cancel</button>
+          </div>
+        </div>
         <div class="row-btns">
           <button id="btn-compact" title="Compact session (/compact)">Compact</button>
           <button id="btn-usage" title="Refresh usage (/usage)">Usage</button>

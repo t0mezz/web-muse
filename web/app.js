@@ -15,6 +15,13 @@ const state = {
   // Last explicitly chosen model (picker or /model): applied to the
   // current session AND remembered as the default for created sessions.
   pickedModel: null,
+  // Last explicitly chosen reasoning effort (picker, /effort or
+  // /default-effort): applied to the current session AND remembered as
+  // the default for created sessions (parity with pickedModel).
+  pickedEffort: null,
+  // Last explicitly chosen approval mode (Session panel): applied to the
+  // current session AND remembered as the default for created sessions.
+  pickedApprovalMode: null,
   reconnectDelay: 1000, everConnected: false,
   lastCumulative: null, lastContext: null, ctxLine: "", sessionMcp: [],
   githubCache: [], githubOp: null, githubPending: new Map(),
@@ -663,6 +670,7 @@ async function newSession(name, opts) {
         req.modelId = state.pickedModel.modelId;
         if (state.pickedModel.providerId) req.providerId = state.pickedModel.providerId;
       }
+      if (state.pickedEffort) req.reasoningEffort = state.pickedEffort;
       const r = await send(req);
       const sid = r.session && r.session.sessionId;
       if (sid) {
@@ -2410,6 +2418,62 @@ function loadPickedModel() {
     }
   } catch (_) { /* corrupt or unavailable: no default */ }
 }
+// The effort pick survives reloads (localStorage) like the model pick:
+// changing it anywhere saves it, startup restores it, and the picker
+// shows it.
+const EFFORT_TIERS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const PICKED_EFFORT_KEY = "webmuse.pickedEffort";
+function savePickedEffort() {
+  try {
+    if (state.pickedEffort) {
+      localStorage.setItem(PICKED_EFFORT_KEY, state.pickedEffort);
+    } else {
+      localStorage.removeItem(PICKED_EFFORT_KEY);
+    }
+  } catch (_) { /* storage unavailable: memory-only */ }
+}
+function loadPickedEffort() {
+  try {
+    const raw = localStorage.getItem(PICKED_EFFORT_KEY);
+    if (EFFORT_TIERS.includes(raw)) {
+      state.pickedEffort = raw;
+    }
+  } catch (_) { /* corrupt or unavailable: no default */ }
+}
+function syncEffortPicker() {
+  const sel = el("effort-picker");
+  if (!sel) return;
+  sel.value = state.pickedEffort || "";
+}
+// The approval-mode pick survives reloads (localStorage) like the model
+// and effort picks: changing it anywhere saves it, startup restores it
+// into the Session-panel select, and created sessions inherit it.
+const APPROVAL_MODES = ["onRequest", "promptUnmatched", "denyUnmatched", "allowAll"];
+const PICKED_APPROVAL_KEY = "webmuse.pickedApprovalMode";
+function savePickedApprovalMode() {
+  try {
+    if (state.pickedApprovalMode) {
+      localStorage.setItem(PICKED_APPROVAL_KEY, state.pickedApprovalMode);
+    } else {
+      localStorage.removeItem(PICKED_APPROVAL_KEY);
+    }
+  } catch (_) { /* storage unavailable: memory-only */ }
+}
+function loadPickedApprovalMode() {
+  try {
+    const raw = localStorage.getItem(PICKED_APPROVAL_KEY);
+    if (APPROVAL_MODES.includes(raw)) {
+      state.pickedApprovalMode = raw;
+    }
+  } catch (_) { /* corrupt or unavailable: no default */ }
+}
+function syncApprovalSelect() {
+  const sel = el("approval-mode");
+  if (!sel) return;
+  sel.value = state.pickedApprovalMode || "onRequest";
+  sel.dataset.prev = sel.value;
+  syncApprovalWarn();
+}
 async function refreshModels() {
   const r = await send({ type: "models", sessionId: state.sessionId || undefined });
   state.models = r.models || [];
@@ -2483,7 +2547,8 @@ const SLASH = [
   { name: "clear", usage: "/clear", desc: "Clear local transcript view", run: () => { clearTranscriptKeepSession(); } },
   { name: "models", usage: "/models", desc: "List models in transcript", run: () => cmdModels() },
   { name: "model", usage: "/model <id>", desc: "Set model for current session", run: (a) => cmdSetModel(a) },
-  { name: "effort", usage: "/effort <tier>", desc: "Set reasoning effort (none…ultra)", run: (a) => cmdSetEffort(a) },
+  { name: "effort", usage: "/effort <tier>", desc: "Set reasoning effort for current session (remembers default)", run: (a) => cmdSetEffort(a) },
+  { name: "default-effort", usage: "/default-effort <tier|clear|show>", desc: "Set default reasoning effort for new chats", run: (a) => cmdDefaultEffort(a) },
   { name: "skills", usage: "/skills", desc: "List session skills", run: () => cmdSkills() },
   { name: "mcp", usage: "/mcp", desc: "Show configured MCP servers", run: () => cmdMcp() },
   { name: "github", usage: "/github list|clone|open|clean|cancel …", desc: "GitHub repos via gh", run: (a) => cmdGithub(a) },
@@ -2765,6 +2830,7 @@ async function githubOpenRepo(fullName, opts) {
     const req = { type: "githubOpen", fullName, name: o.name, opId };
     if (o.branch) req.branch = o.branch;
     if (state.pickedModel) req.model = state.pickedModel;
+    if (state.pickedEffort) req.reasoningEffort = state.pickedEffort;
     await send(req);
     return opId;
   } catch (e) {
@@ -3013,7 +3079,7 @@ async function submitWithRepo(text) {
   updateRepoBar();
 }
 
-const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const EFFORTS = EFFORT_TIERS;
 
 async function cmdSetEffort(args) {
   if (!state.sessionId) return sysLine("No session — open one first.", true);
@@ -3023,7 +3089,44 @@ async function cmdSetEffort(args) {
   }
   try {
     await send({ type: "setEffort", sessionId: state.sessionId, reasoningEffort: want });
-    sysLine("Reasoning effort (session default) → " + want);
+    // Remembered as the default for created chats, not just this one
+    // (parity with /model).
+    state.pickedEffort = want;
+    savePickedEffort();
+    syncEffortPicker();
+    sysLine("Reasoning effort (session default) → " + want + " — remembered for new chats.");
+  } catch (e) { sysLine("setEffort failed: " + e.message, true); }
+}
+
+async function cmdDefaultEffort(args) {
+  const want = (args[0] || "").toLowerCase();
+  if (!want || want === "show") {
+    sysLine(state.pickedEffort
+      ? `Default reasoning effort: ${state.pickedEffort} (applies to new chats).`
+      : "No default reasoning effort — new chats use the host default. " +
+        "Set one: /default-effort <tier>  tiers: " + EFFORTS.join(" | "));
+    return;
+  }
+  if (want === "clear") {
+    state.pickedEffort = null;
+    savePickedEffort();
+    syncEffortPicker();
+    sysLine("Default reasoning effort cleared — new chats use the host default.");
+    return;
+  }
+  if (!EFFORTS.includes(want)) {
+    return sysLine("Usage: /default-effort <tier|clear|show>  tiers: " + EFFORTS.join(" | "), true);
+  }
+  state.pickedEffort = want;
+  savePickedEffort();
+  syncEffortPicker();
+  if (!state.sessionId) {
+    sysLine(`Default reasoning effort → ${want} (applies to new chats).`);
+    return;
+  }
+  try {
+    await send({ type: "setEffort", sessionId: state.sessionId, reasoningEffort: want });
+    sysLine(`Reasoning effort (session default) → ${want} — remembered for new chats.`);
   } catch (e) { sysLine("setEffort failed: " + e.message, true); }
 }
 
@@ -3180,6 +3283,7 @@ async function sendPromptText(text, alreadyEchoed) {
       req.modelId = state.pickedModel.modelId;
       if (state.pickedModel.providerId) req.providerId = state.pickedModel.providerId;
     }
+    if (!state.sessionId && state.pickedEffort) req.reasoningEffort = state.pickedEffort;
     const r = await send(req);
     if (r.sessionId && !state.sessionId) {
       state.sessionId = r.sessionId;
@@ -3493,6 +3597,28 @@ el("terminal").addEventListener("scroll", () => {
   state.stick = t.scrollHeight - t.scrollTop - t.clientHeight < 80;
   updateJumpBtn();
 });
+el("effort-picker").onchange = (ev) => {
+  const v = ev.target.value || "";
+  if (!v) {
+    // Placeholder (effort…): clear the remembered default.
+    state.pickedEffort = null;
+    savePickedEffort();
+    syncEffortPicker();
+    toast("default effort cleared (new chats use the host default)");
+    return;
+  }
+  // Remembered as the default for created chats, not just this one.
+  state.pickedEffort = v;
+  savePickedEffort();
+  syncEffortPicker();
+  if (!state.sessionId) {
+    toast("default effort → " + v + " (applies to new chats)");
+    return;
+  }
+  send({ type: "setEffort", sessionId: state.sessionId, reasoningEffort: v })
+    .then(() => toast("effort → " + v))
+    .catch((e) => toast("setEffort failed: " + e.message, true));
+};
 el("model-picker").onchange = (ev) => {
   const o = ev.target.selectedOptions[0];
   if (!o || !o.value) return;
@@ -3515,11 +3641,46 @@ document.querySelectorAll(".tab").forEach((t) => { t.onclick = () => selectTab(t
 el("btn-compact").onclick = () => cmdCompact();
 el("btn-usage").onclick = () => cmdUsage();
 el("btn-pending").onclick = () => fetchPending().then(() => toast("pending refreshed"));
+function syncApprovalWarn() {
+  // The confirm panel opens only for a not-yet-confirmed allowAll pick:
+  // once enabled (prev === allowAll) it stays closed until re-selected.
+  const sel = el("approval-mode");
+  el("approval-warn").hidden =
+    sel.value !== "allowAll" || sel.dataset.prev === "allowAll";
+}
 el("approval-mode").onchange = (ev) => {
-  if (!state.sessionId) { toast("no session", true); return; }
-  send({ type: "setApprovalMode", sessionId: state.sessionId, mode: ev.target.value })
-    .then(() => toast("approval mode → " + ev.target.value))
+  if (!state.sessionId) {
+    ev.target.value = ev.target.dataset.prev || "onRequest";
+    syncApprovalWarn();
+    toast("no session", true);
+    return;
+  }
+  const mode = ev.target.value;
+  syncApprovalWarn();
+  if (mode === "allowAll") return; // confirm panel below decides
+  send({ type: "setApprovalMode", sessionId: state.sessionId, mode })
+    .then(() => {
+      ev.target.dataset.prev = mode;
+      syncApprovalWarn();
+      toast("approval mode → " + mode);
+    })
     .catch((e) => toast("setApprovalMode failed: " + e.message, true));
+};
+el("approval-confirm-yes").onclick = () => {
+  if (!state.sessionId) { toast("no session", true); return; }
+  send({ type: "setApprovalMode", sessionId: state.sessionId,
+         mode: "allowAll" })
+    .then(() => {
+      el("approval-mode").dataset.prev = "allowAll";
+      syncApprovalWarn();
+      toast("approval mode → allowAll");
+    })
+    .catch((e) => toast("setApprovalMode failed: " + e.message, true));
+};
+el("approval-confirm-no").onclick = () => {
+  el("approval-mode").value =
+    el("approval-mode").dataset.prev || "onRequest";
+  syncApprovalWarn();
 };
 document.addEventListener("click", (ev) => {
   if (!el("slash-popup").hidden && !el("slash-popup").contains(ev.target) && ev.target !== el("input")) {
@@ -3598,12 +3759,16 @@ function startComposerHints() {
   setTimeout(step, START_MS);
 }
 
-// Stored UI prefs win; first run falls back to hidden bars, no model pick.
+// Stored UI prefs win; first run falls back to hidden bars, no model/effort pick.
 restorePanelState();
 updateWelcome();
 syncStarsToggle();
 updateRepoBar();
 loadPickedModel();
+loadPickedEffort();
+loadPickedApprovalMode();
+syncEffortPicker();
+syncApprovalSelect();
 updateRunChip();
 
 connect();

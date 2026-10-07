@@ -43,12 +43,13 @@ body {
 .dot.off { background: var(--err); }
 .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .dot.busy { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
-#model-picker {
+#model-picker, #effort-picker {
   max-width: 24vw; background: none; color: var(--dim);
   border: 1px solid transparent; border-radius: 999px; padding: 5px; font-size: 13px;
   flex: none;
 }
-#model-picker:hover { color: var(--fg); border-color: var(--line); }
+#model-picker:hover, #effort-picker:hover { color: var(--fg); border-color: var(--line); }
+#effort-picker { max-width: 18vw; }
 
 #layout { flex: 1; min-height: 0; display: flex; position: relative; }
 
@@ -604,6 +605,12 @@ body {
 .tool-row .s { color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: hidden; }
 #tab-session label { display: block; margin-bottom: 10px; font-size: 12px; color: var(--dim); }
 #approval-mode { display: block; width: 100%; margin-top: 4px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 999px; padding: 6px; }
+.approval-warn {
+  margin: 0 0 10px; padding: 7px 9px; border-radius: 10px; font-size: 12px;
+  background: var(--warnBg); border: 1px solid var(--warn); color: var(--warnFg);
+}
+.approval-warn p { margin: 0 0 8px; }
+.approval-warn .row-btns { margin-bottom: 0; }
 .row-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .row-btns button {
   flex: 1; padding: 6px 4px; border-radius: 999px; cursor: pointer; font-size: 12px;
@@ -712,7 +719,7 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
 /* mobile */
 @media (max-width: 899px) {
   /* 16px inputs: iOS Safari zooms on focus below this. */
-  #input, #session-filter, .card input[type="text"], #model-picker { font-size: 16px; }
+  #input, #session-filter, .card input[type="text"], #model-picker, #effort-picker { font-size: 16px; }
   .composer-btns button { width: 44px; height: 44px; }
   .row-opt { padding: 8px 14px; }
   #btn-older { padding: 6px 12px; font-size: 13px; }
@@ -731,6 +738,7 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
   }
   #btn-progress { display: none; }
   #model-picker { max-width: 26vw; }
+  #effort-picker { max-width: 22vw; }
   #sess-meta { display: none; }
   #cursor-chip { max-width: 30vw; }
 }
