@@ -2397,14 +2397,17 @@ function onApproval(a) {
   // never in the transcript. The sysLine below is the transcript's only
   // trace, so a parked agent is still noticeable there.
   el("tab-approvals").append(div);
-  sysLine(`approval requested: ${a.toolName || "tool"} — decide in the inspector (Approvals tab).`);
-  // A parked agent is worse than a moved panel: on desktop make sure the
-  // card is actually seen (mobile keeps its flash-open behavior below).
-  if (window.innerWidth >= 900 && !el("inspector").classList.contains("open")) {
-    el("inspector").classList.add("open");
-    syncScrim();
+  const _denyUnmatched = (el("approval-mode") && el("approval-mode").value === "denyUnmatched") || state.pickedApprovalMode === "denyUnmatched";
+  if (!_denyUnmatched) {
+    sysLine(`approval requested: ${a.toolName || "tool"} — decide in the inspector (Approvals tab).`);
+    // A parked agent is worse than a moved panel: on desktop make sure the
+    // card is actually seen (mobile keeps its flash-open behavior below).
+    if (window.innerWidth >= 900 && !el("inspector").classList.contains("open")) {
+      el("inspector").classList.add("open");
+      syncScrim();
+    }
+    openInspectorOnMobile("approvals");
   }
-  openInspectorOnMobile("approvals");
 }
 
 function decideApproval(a, req, choiceId, choice, feedback) {
