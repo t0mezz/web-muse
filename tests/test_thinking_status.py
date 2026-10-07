@@ -1,13 +1,17 @@
 """Thinking status: TUI-style turn footer in the transcript.
 
 A "Thinking… (Ns)" row stays pinned below each running turn's lines
-(tool logs stack above it) and is removed as soon as the model's answer
-fires — turn/completed and retraction clear it as a backstop. The timer
-interval is always cleared, including on transcript reset. A turn already
-active when the session opens (reload, late join) or started elsewhere
-(TUI, other client) never fires turn/started here, so opening a session
-and session/statusChanged reconcile the thinking status and running-state
-CSS from the session status instead.
+(tool logs stack above it) and is removed once the turn settles —
+turn/completed, retraction, and an idle status flip clear it.
+Intermediate agent messages land mid-turn and must NOT clear it; new
+lines re-pin (and restore) the row without resetting the turn clock.
+Sending a new task restarts the clock optimistically; a queued
+follow-up keeps the current turn's row. The timer interval is always
+cleared, including on transcript reset. A turn already active when the
+session opens (reload, late join) or started elsewhere (TUI, other
+client) never fires turn/started here, so opening a session and
+session/statusChanged reconcile the thinking status and running-state
+CSS from the session status instead, preserving the clock.
 
 No JS harness in this repo, so the contract is guarded at the source
 level, following tests/test_session_toggle.py.
@@ -37,7 +41,8 @@ def fn_body(name):
 
 class TestThinkingStatus(unittest.TestCase):
     def test_helpers_exist(self):
-        self.assertIn("function showThinking()", APP_JS)
+        self.assertIn("function showThinking(", APP_JS)
+        self.assertIn("function ensureThinking()", APP_JS)
         self.assertIn("function hideThinking()", APP_JS)
         self.assertIn('id = "thinking-row"', APP_JS)
 
@@ -83,19 +88,41 @@ class TestThinkingStatus(unittest.TestCase):
         self.assertIn("status", body)
         self.assertIn("state.running", body)
         self.assertIn("updateRunChip()", body)
-        # Starts the morph only when no row is playing already.
-        self.assertIn("thinking-row", body)
-        self.assertIn("showThinking();", body)
+        # Restores the row without restarting the turn clock.
+        self.assertIn("ensureThinking();", body)
+        self.assertNotIn('getElementById("thinking-row")', body)
 
     def test_status_changed_starts_verbs(self):
         body = case_body("session/statusChanged")
-        self.assertIn("showThinking();", body)
-        self.assertIn("thinking-row", body)
-
-    def test_answer_firing_clears_status(self):
-        body = case_body("item/completed")
+        self.assertIn("ensureThinking();", body)
+        # A flip back to idle drops a stale row (lost turn/completed).
         self.assertIn("hideThinking();", body)
+
+    def test_midturn_answer_keeps_status(self):
+        body = case_body("item/completed")
         self.assertIn('=== "agent"', body)
+        # Intermediate agent notes land mid-turn: the row survives them.
+        self.assertIn("!state.running", body)
+        self.assertIn("hideThinking();", body)
+
+    def test_send_restarts_clock(self):
+        body = fn_body("sendPromptText")
+        self.assertIn("showThinking();", body)
+        # A queued follow-up keeps the current turn's row and clock.
+        self.assertIn("queued", body)
+
+    def test_ensure_preserves_clock(self):
+        body = fn_body("ensureThinking")
+        self.assertIn("state.running", body)
+        self.assertIn("showThinking(false)", body)
+
+    def test_show_distinguishes_reset_from_restore(self):
+        body = fn_body("showThinking")
+        self.assertIn("reset", body)
+        self.assertIn("if (reset || !thinkingStartedAt)", body)
+
+    def test_pin_restores_missing_row(self):
+        self.assertIn("ensureThinking();", fn_body("pinThinking"))
 
     def test_new_lines_pin_status_below(self):
         self.assertIn("function pinThinking()", APP_JS)

@@ -534,7 +534,9 @@ body {
   background: var(--bg); color: var(--fg); padding: 14px 22px; font: inherit; font-size: 14px;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-height: 30vh; line-height: 1.45;
   transition: box-shadow .4s ease, border-color .4s ease;
+  overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none;
 }
+#input::-webkit-scrollbar { display: none; }
 #input:focus { outline: none; border-color: var(--accent); }
 /* Frozen at the single-line pill's curvature (~half its height) so
  * the corners stop growing into the text as the box gets taller. */
@@ -570,7 +572,8 @@ body {
 }
 #btn-send { background: var(--fg); color: var(--bg); font-weight: 700; }
 #btn-send:hover { background: var(--light); }
-#btn-stop { background: var(--fg); border-color: transparent; color: var(--bg); font-size: 13px; }
+#btn-stop { background: var(--fg); border-color: transparent; color: var(--bg); }
+#btn-stop svg { display: block; }
 #btn-stop:not(:disabled):hover { background: var(--light); }
 #btn-stop:disabled { opacity: .4; cursor: default; }
 #hintbar {
