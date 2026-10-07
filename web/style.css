@@ -243,8 +243,10 @@ body {
   background: none; border: none; padding: 0;
 }
 .tline.user .txt {
-  background: var(--panel2); border-radius: 999px;
-  padding: 10px 16px; max-width: 100%;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 14px;
+  border-top-right-radius: 4px;
+  padding: 8px 12px; max-width: 100%;
+  line-height: 1.5; overflow-wrap: break-word;
 }
 .tline.user .head { order: 2; margin-top: 3px; }
 .tline.agent { background: none; border: none; }

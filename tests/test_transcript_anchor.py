@@ -54,13 +54,14 @@ class TestChatAlignment(unittest.TestCase):
         self.assertIn("flex-direction: column;", body)
         self.assertIn("align-items: flex-end;", body)
 
-    def test_user_text_is_scaling_pill(self):
+    def test_user_text_is_rounded_bubble(self):
         m = re.search(r"\.tline\.user \.txt \{(.*?)\}", STYLE_CSS,
                       re.S)
         self.assertIsNotNone(m, ".tline.user .txt rule missing")
         body = m.group(1)
         self.assertIn("background: var(--panel2);", body)
-        self.assertIn("border-radius: 999px;", body)
+        self.assertIn("border-radius: 14px;", body)
+        self.assertNotIn("999px", body)
 
     def test_user_head_sits_below_pinned_right(self):
         # Caption renders after the pill (order) and docks right via
