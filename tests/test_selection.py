@@ -3,7 +3,7 @@
 - Ctrl/Cmd+click toggles selection (desktop), 500ms long-press on mobile
 - Click toggles when selection active
 - Shift+click selects range between anchor and target
-- Ticker reverted to old look in selection-bar below status, disabled when 0; trash on search/refresh height when active
+- Ticker old pill look but in top side-head row with search/refresh, disabled when 0; trash to its right
 """
 
 import unittest
@@ -55,16 +55,18 @@ class TestSelectionInteractions(unittest.TestCase):
 class TestSelectionUI(unittest.TestCase):
     def test_ticker_pinned_left_below_status(self):
         self.assertIn('id="selection-ticker"', INDEX_HTML)
-        self.assertIn('id="selection-bar"', INDEX_HTML)
-        # Old look: ticker in selection-bar below sess-count, disabled when 0
+        # Old look pill but moved up into top side-head row, disabled when 0
         self.assertIn(".ticker", STYLE_CSS)
         self.assertIn(".ticker:disabled", STYLE_CSS)
-        self.assertIn('id="selection-bar"', INDEX_HTML)
-        idx_bar = INDEX_HTML.index('id="selection-bar"')
         idx_ticker = INDEX_HTML.index('id="selection-ticker"')
-        idx_list = INDEX_HTML.index('id="session-list"')
-        self.assertLess(idx_bar, idx_ticker)
-        self.assertLess(idx_ticker, idx_list)
+        idx_trash = INDEX_HTML.index('id="btn-delete-selected"')
+        idx_search = INDEX_HTML.index('id="btn-search-sessions"')
+        # ticker in side-head, trash to its right, both before search/refresh
+        self.assertLess(idx_ticker, idx_trash)
+        self.assertLess(idx_trash, idx_search)
+        # ticker is inside side-head (not in selection-bar)
+        side_head = INDEX_HTML.split('id="sess-count"')[0]
+        self.assertIn('id="selection-ticker"', side_head)
 
     def test_trash_on_search_refresh_height(self):
         self.assertIn('id="btn-delete-selected"', INDEX_HTML)
