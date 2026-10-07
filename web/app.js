@@ -1982,6 +1982,12 @@ function onEvent(method, p) {
     case "githubAutoApproved":
       sysLine(`auto-approved (github policy): ${String(p.command || "gh command")}`);
       break;
+    case "themeApply":
+      applyThemeOrder(p);
+      break;
+    case "ordersPending":
+      renderOrderCard(p);
+      break;
     case "session/listChanged":
     case "session/started":
     case "session/closed":
@@ -2032,6 +2038,65 @@ function cardShell(aid) {
 function removeCard(aid) {
   if (!aid) return;
   document.querySelectorAll(`[data-aid="${CSS.escape(aid)}"]`).forEach((d) => d.remove());
+}
+function applyThemeOrder(p) {
+  // Agent order (validated bridge-side): re-validate, apply, persist.
+  const colors = p && p.colors;
+  const T = window.WebMuseTheme;
+  if (!T || !colors || typeof colors !== "object") return;
+  const clean = {};
+  for (const k of Object.keys(colors)) {
+    const v = colors[k];
+    if (typeof T.colors[k] === "string" && typeof v === "string"
+        && v && v.length <= 500) clean[k] = v;
+  }
+  const n = Object.keys(clean).length;
+  if (!n) return;
+  let merged = {};
+  try {
+    merged = JSON.parse(localStorage.getItem(T.storageKey) || "{}") || {};
+  } catch (_) { merged = {}; }
+  Object.assign(merged, clean);
+  try { localStorage.setItem(T.storageKey, JSON.stringify(merged)); } catch (_) {}
+  T.apply(merged);
+  sysLine(`theme updated by session ${shortId(p.sessionId)} (${n} colors, order ${p.orderId}).`);
+  toast(`theme updated (${n} colors)`);
+}
+function renderOrderCard(p) {
+  // Staged policy order: the human approves or denies it here.
+  const aid = "order-" + (p.sessionId || "") + "-" + (p.orderId || "");
+  removeCard(aid);
+  const div = cardShell(aid);
+  const h = document.createElement("h4");
+  h.textContent = `Order: ${p.action || "policy update"} (${shortId(p.sessionId)})`;
+  div.append(h);
+  const pre = document.createElement("pre");
+  try {
+    pre.textContent = JSON.stringify(p.params || {}, null, 2).slice(0, 2000);
+  } catch (_) { pre.textContent = "(unrenderable params)"; }
+  div.append(pre);
+  const row = document.createElement("div");
+  row.className = "choices";
+  const yes = document.createElement("button");
+  yes.className = "allow"; yes.textContent = "Approve";
+  yes.onclick = () => decideOrder(p, true);
+  const no = document.createElement("button");
+  no.className = "deny"; no.textContent = "Deny";
+  no.onclick = () => decideOrder(p, false);
+  row.append(yes, no);
+  div.append(row);
+  el("cards").append(div);
+  sysLine(`order staged: ${p.action || "?"} — approve or deny in the card above.`);
+}
+function decideOrder(p, approved) {
+  send({ type: "ordersDecide", sessionId: p.sessionId,
+         orderId: p.orderId, approved })
+    .then((r) => {
+      removeCard("order-" + (p.sessionId || "") + "-" + (p.orderId || ""));
+      sysLine(`order ${p.orderId} ` +
+        (r && r.approved ? "approved and applied." : "denied."));
+    })
+    .catch((e) => toast("ordersDecide failed: " + e.message, true));
 }
 
 function onApproval(a) {

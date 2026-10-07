@@ -91,6 +91,7 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 | `githubOpen {fullName, name?, mcpAttach?, opId?}` | admit a clone + `session/start` rooted at the clone |
 | `githubCancel {opId}` | cancel a running clone |
 | `githubClean {sessionId}` | delete one session's `repo/` leaf (session kept) |
+| `ordersDecide {sessionId, orderId, approved}` | human verdict on a staged agent policy order (executes `allowedCommands.update`) |
 
 Server→client: `{type:"hello"}`, `{type:"event", method, params}` (MSP
 notifications routed by sessionId), `{type:"approval"}`, `{type:"userInput"}`.
@@ -100,7 +101,10 @@ cancelled`; no sessionId, so every client renders it). The outcome follows
 as global `{type:"event", method:"githubCloneResult",
 params:{opId, ok, result|error}}` — clones are admitted instantly (like
 `compact`) so the connection stays responsive and `githubCancel` can
-preempt a hanging clone.
+preempt a hanging clone. Agent orders arrive the same way: `themeApply`
+(applies a validated theme at once) and `ordersPending` (a policy order
+staged for a human's `ordersDecide`); every session workspace carries
+the protocol in `.web-muse/ORDERS.md`, checked after each turn.
 
 Every MSP command gets a fresh UUIDv7 `commandId` minted by the bridge;
 client-supplied ids are never forwarded.

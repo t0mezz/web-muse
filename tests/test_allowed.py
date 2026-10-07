@@ -156,10 +156,16 @@ class TestRouterConfig(unittest.TestCase):
 class TestNoExposure(unittest.TestCase):
     def test_no_ws_route_serves_config(self):
         import re
-        self.assertNotIn("allowedCommands", SESSIONS_PY)
+        # No WS message type serves the policy file: the dispatch table
+        # carries no allow/policy/config route, and no reply embeds the
+        # config path. (The action name `allowedCommands.update` and its
+        # validator legitimately mention allowedCommands.)
         routes = re.findall(r'mtype == "([^"]+)"', SESSIONS_PY)
         self.assertTrue(routes)  # the dispatch table was found
-        self.assertEqual([r for r in routes if "allow" in r.lower()], [])
+        serving = [r for r in routes
+                   if "allow" in r.lower() or "policy" in r.lower()
+                   or "config" in r.lower()]
+        self.assertEqual(serving, [])
 
     def test_config_lives_outside_web_dir(self):
         cfg_path = Path(ALLOWED_COMMANDS_FILE).resolve()

@@ -307,6 +307,197 @@ def shell_auto_allowed(subject, cfg=None):
         cmd, default_allowed_config() if cfg is None else cfg)
 
 
+# Agent orders channel: agents cannot write outside their workspace, so
+# app customization arrives as `.web-muse/orders.json` files (protocol in
+# server/orders_skill.md, seeded into every session workspace). The bridge
+# checks the file after each turn, validates every order, and acts:
+# `theme.apply` executes at once (fanned out as a themeApply event the
+# frontend applies); `allowedCommands.update` only stages — a human's
+# ordersDecide runs it, so agents never loosen their own policy alone.
+# Everything else is rejected with a reason in the receipt file.
+ORDERS_DIRNAME = ".web-muse"
+ORDERS_FILENAME = "orders.json"
+ORDERS_RECEIPT = "orders.receipt.json"
+ORDERS_SKILL_FILE = "ORDERS.md"
+ORDERS_MAX_BYTES = 65536
+ORDERS_MAX_COUNT = 20
+ORDERS_RECEIPT_CAP = 200
+ORDERS_TEMPLATE = (
+    Path(__file__).resolve().parent / "orders_skill.md")
+
+ORDER_ACTIONS = ("theme.apply", "allowedCommands.update")
+
+# Theme color names the bridge accepts (must match web/theme.js COLORS;
+# tests/test_orders.py pins parity both ways).
+THEME_KEYS = frozenset({
+    "bg", "panel", "panel2", "line", "fg", "dim", "faint",
+    "accent", "ok", "warn", "err", "user", "agent",
+    "select", "warnBg", "warnFg", "errFg", "codeBg", "cardBg",
+    "pickedBg", "onOk", "onAccent", "chipInk", "light",
+    "glow", "scrim", "star", "starBg0", "starBg1",
+})
+
+
+def seed_orders_skill(root):
+    """Write the orders skill doc into one workspace (best-effort).
+
+    Every session workspace gets `.web-muse/ORDERS.md` once; an existing
+    file is never overwritten. Never raises: seeding must not fail a
+    session start. Returns (seeded, path).
+    """
+    if not root:
+        return False, ""
+    target = Path(root) / ORDERS_DIRNAME / ORDERS_SKILL_FILE
+    try:
+        if target.is_file():
+            return False, str(target)
+        text = ORDERS_TEMPLATE.read_text()
+    except OSError:
+        return False, str(target)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    except OSError:
+        LOG.warning("orders skill unwritable at %s", target)
+        return False, str(target)
+    return True, str(target)
+
+
+def _read_receipt(odir):
+    """Processed-id map from the receipt file; {} when absent/broken."""
+    try:
+        raw = json.loads((Path(odir) / ORDERS_RECEIPT).read_text())
+    except (OSError, ValueError):
+        return {}
+    processed = raw.get("processed") if isinstance(raw, dict) else None
+    if not isinstance(processed, dict):
+        return {}
+    return {k: v for k, v in processed.items()
+            if isinstance(k, str) and isinstance(v, dict)}
+
+
+def _write_receipt(odir, processed):
+    """Merge new statuses into the receipt file (best-effort, capped)."""
+    merged = dict(_read_receipt(odir))
+    merged.update(processed)
+    while len(merged) > ORDERS_RECEIPT_CAP:
+        merged.pop(next(iter(merged)))
+    try:
+        Path(odir).mkdir(parents=True, exist_ok=True)
+        (Path(odir) / ORDERS_RECEIPT).write_text(
+            json.dumps({"processed": merged}, indent=2))
+    except OSError:
+        LOG.warning("orders receipt unwritable in %s", odir)
+
+
+def _validate_allowed_update(raw):
+    """Strict-validate an allowedCommands.update payload.
+
+    Same shapes as the config file, but any invalid entry rejects the
+    whole order (file loading instead drops entries with warnings).
+    Returns ({"allow": [...], "deny": [...]}, None) or (None, reason).
+    """
+    if not isinstance(raw, dict):
+        return None, "params must be an object with allow and/or deny"
+    if "allow" not in raw and "deny" not in raw:
+        return None, "params needs allow and/or deny"
+    out = {}
+    if "allow" in raw:
+        if not isinstance(raw["allow"], list):
+            return None, "'allow' must be a list of regex strings"
+        w = []
+        compiled = _compile_patterns(raw["allow"], w, "allow")
+        if raw["allow"] and (w or not compiled):
+            return None, f"unusable 'allow' entries: {'; '.join(w)}"
+        out["allow"] = [p for p in raw["allow"]
+                        if isinstance(p, str) and p
+                        and len(p) <= MAX_PATTERN_LEN]
+    if "deny" not in raw:
+        return out, None
+    if not isinstance(raw["deny"], list):
+        return None, "'deny' must be a list of {commands, patterns}"
+    rules = []
+    for entry in raw["deny"]:
+        if not isinstance(entry, dict) \
+                or not isinstance(entry.get("patterns"), list):
+            return None, f"malformed deny entry {entry!r}"
+        commands = entry.get("commands") or []
+        if not isinstance(commands, list) or not all(
+                isinstance(c, str) and SAFE_COMMAND_NAME.fullmatch(c)
+                for c in commands):
+            return None, f"bad 'commands' in deny entry {entry!r}"
+        w = []
+        compiled = _compile_patterns(entry["patterns"], w, "deny")
+        if entry["patterns"] and (w or not compiled):
+            return None, (f"unusable patterns in deny entry {entry!r}: "
+                           f"{'; '.join(w)}")
+        rules.append({"commands": list(commands),
+                      "patterns": [p for p in entry["patterns"]
+                                   if isinstance(p, str) and p
+                                   and len(p) <= MAX_PATTERN_LEN]})
+    out["deny"] = rules
+    return out, None
+
+
+def validate_orders(payload, seen_ids):
+    """Split an orders payload into (valid, rejected).
+
+    valid: [(id, action, params)]; rejected: {id: reason}. Unknown
+    actions, bad shapes, duplicate ids (in-file or already receipted),
+    and invalid action params are all rejected, never raised.
+    """
+    valid, rejected = [], {}
+    if not isinstance(payload, dict) or not isinstance(
+            payload.get("orders"), list):
+        return valid, rejected
+    seen = set(seen_ids or ())
+    for entry in payload["orders"]:
+        if not isinstance(entry, dict):
+            continue
+        oid = entry.get("id")
+        if not isinstance(oid, str) or not oid or len(oid) > 128:
+            continue
+        if oid in seen:
+            rejected[oid] = "duplicate order id (already processed)"
+            continue
+        seen.add(oid)
+        action = entry.get("action")
+        params = entry.get("params") or {}
+        if action not in ORDER_ACTIONS:
+            rejected[oid] = (f"unknown action {action!r}; want one of "
+                             f"{sorted(ORDER_ACTIONS)}")
+            continue
+        if not isinstance(params, dict):
+            rejected[oid] = "params must be an object"
+            continue
+        if action == "theme.apply":
+            colors = params.get("colors")
+            if not isinstance(colors, dict) or not colors:
+                rejected[oid] = "'colors' must be a non-empty object"
+                continue
+            bad_keys = [k for k in colors if k not in THEME_KEYS]
+            if bad_keys:
+                rejected[oid] = (f"unknown color names {sorted(bad_keys)}; "
+                                 f"want: {sorted(THEME_KEYS)}")
+                continue
+            bad_vals = [k for k, v in colors.items()
+                        if not isinstance(v, str) or not v
+                        or len(v) > MAX_PATTERN_LEN]
+            if bad_vals:
+                rejected[oid] = (f"bad color values for {sorted(bad_vals)}: "
+                                 "non-empty strings, max "
+                                 f"{MAX_PATTERN_LEN} chars")
+                continue
+            valid.append((oid, action, {"colors": dict(colors)}))
+        elif action == "allowedCommands.update":
+            update, reason = _validate_allowed_update(params)
+            if reason is not None:
+                rejected[oid] = reason
+                continue
+            valid.append((oid, action, update))
+    return valid, rejected
+
+
 def pick_approve_once_choice(choices):
     """ChoiceId of the narrowest approve choice, or None.
 
@@ -772,10 +963,19 @@ class SessionRouter:
         # Shell auto-approve policy: validated server-side config
         # (allowed_commands_path, defaulting to the shipped file), never
         # client-supplied. Corrupt files fall back to builtins (logged).
+        # The path is kept: approved policy orders rewrite this file and
+        # reload it, so no restart is needed for order-driven updates.
+        self._allowed_path = (allowed_commands_path
+                              or ALLOWED_COMMANDS_FILE)
         self._allowed, _ac_warnings = load_allowed_commands(
-            allowed_commands_path)
+            self._allowed_path)
         for _w in _ac_warnings:
             LOG.warning("%s", _w)
+        # Agent orders channel: sessionId -> workspace root (for locating
+        # `.web-muse/orders.json`) and staged policy orders awaiting a
+        # human's ordersDecide, keyed (sessionId, orderId).
+        self._workspace_roots = {}
+        self._pending_orders = {}
         # Known repos/branches: every listing still shells out to `gh`
         # for new entries, then merges them in — so repeat picker opens
         # keep working (stale) when `gh` hiccups and accumulate rows
@@ -878,6 +1078,15 @@ class SessionRouter:
             elif method == "turn/completed":
                 if self._turns.get(params["sessionId"]) == params.get("turnId"):
                     self._turns.pop(params["sessionId"], None)
+                # Agent orders are checked after each turn, in the
+                # background: the agent's file lands during the turn, so
+                # completion is the earliest moment it can be complete.
+                if params["sessionId"] in self._workspace_roots:
+                    try:
+                        asyncio.create_task(
+                            self._check_orders(params["sessionId"]))
+                    except RuntimeError:
+                        pass  # no running loop (tests): caller checks directly
         frame = map_notification_to_ws(method, params)
         sid = notification_session_id(method, params)
         targets = self._targets_for(sid)
@@ -950,6 +1159,131 @@ class SessionRouter:
         else:
             LOG.info("gh auto-approved in session %s: %s",
                      decide.get("sessionId"), command)
+
+    # -- Agent orders ------------------------------------------------------
+    def _emit_orders_event(self, sid, method, params):
+        """Fan one orders event out (session targets, else broadcast)."""
+        frame = {"type": "event", "method": method, "params": params}
+        targets = self._targets_for(sid)
+        if not targets:
+            targets = list(self._conns)
+        for conn in targets:
+            conn.queue_frame(frame)
+
+    async def _check_orders(self, sid):
+        """Validate one session's orders file and act (never raises)."""
+        root = self._workspace_roots.get(sid)
+        if not root:
+            return
+        odir = Path(root) / ORDERS_DIRNAME
+        ofile = odir / ORDERS_FILENAME
+        try:
+            if not ofile.is_file() \
+                    or ofile.stat().st_size > ORDERS_MAX_BYTES:
+                return
+            payload = json.loads(ofile.read_text())
+        except (OSError, ValueError) as e:
+            LOG.warning("orders: unreadable file for session %s (%s)",
+                        sid, e)
+            return
+        if isinstance(payload, dict) \
+                and isinstance(payload.get("orders"), list) \
+                and len(payload["orders"]) > ORDERS_MAX_COUNT:
+            LOG.warning("orders: too many orders for session %s (%d)",
+                        sid, len(payload["orders"]))
+            return
+        receipt = _read_receipt(odir)
+        valid, rejected = validate_orders(payload, receipt)
+        processed = {oid: {"status": "rejected", "reason": reason}
+                     for oid, reason in rejected.items()}
+        for oid, action, params in valid:
+            if action == "theme.apply":
+                colors = params["colors"]
+                self._emit_orders_event(sid, "themeApply",
+                                        {"sessionId": sid, "orderId": oid,
+                                         "colors": colors})
+                processed[oid] = {"status": "applied"}
+                LOG.info("orders: theme.apply from session %s (%d "
+                         "colors)", sid, len(colors))
+            elif action == "allowedCommands.update":
+                self._pending_orders[(sid, oid)] = {
+                    "action": action, "params": params}
+                self._emit_orders_event(sid, "ordersPending",
+                                        {"sessionId": sid, "orderId": oid,
+                                         "action": action, "params": params,
+                                         "needsConfirm": True})
+                processed[oid] = {"status": "needsConfirm"}
+                LOG.info("orders: policy update staged for session %s "
+                         "(awaiting human)", sid)
+        if processed:
+            _write_receipt(odir, processed)
+
+    def _mark_order(self, sid, oid, status, reason=""):
+        """Record one order's terminal status in its session receipt."""
+        root = self._workspace_roots.get(sid)
+        if not root:
+            return
+        entry = {"status": status}
+        if reason:
+            entry["reason"] = reason
+        _write_receipt(Path(root) / ORDERS_DIRNAME, {oid: entry})
+
+    async def _decide_order(self, msg):
+        """Run a human's ordersDecide on a staged policy order."""
+        sid = msg.get("sessionId")
+        oid = msg.get("orderId")
+        approved = msg.get("approved")
+        if not isinstance(approved, bool):
+            raise ValueError("approved must be true or false")
+        rec = self._pending_orders.pop((sid, oid), None)
+        if rec is None:
+            raise ValueError(f"unknown order {oid!r} for session {sid!r}")
+        if not approved:
+            self._mark_order(sid, oid, "denied")
+            LOG.info("orders: policy update denied for session %s", sid)
+            return {"orderId": oid, "approved": False}
+        self._apply_policy_update(sid, oid, rec["params"])
+        return {"orderId": oid, "approved": True}
+
+    def _apply_policy_update(self, sid, oid, update):
+        """Rewrite the allowed-commands file from an approved order."""
+        try:
+            base = json.loads(Path(self._allowed_path).read_text())
+            if not isinstance(base, dict):
+                base = {}
+        except (OSError, ValueError):
+            base = {}
+        merged = dict(base)
+        merged["_comment"] = (
+            "Updated by approved agent order "
+            f"{oid} (session {sid}); previous version kept in "
+            f"{Path(self._allowed_path).name}.bak")
+        if "allow" in update:
+            merged["allow"] = update["allow"]
+        if "deny" in update:
+            merged["deny"] = update["deny"]
+        if "allow" not in merged or "deny" not in merged:
+            raise ValueError("current policy has no allow/deny to merge "
+                             "into; refusing partial update")
+        tmp = Path(self._allowed_path).with_suffix(".tmp")
+        try:
+            tmp.write_text(json.dumps(merged, indent=2))
+            try:
+                bak = Path(str(self._allowed_path) + ".bak")
+                bak.write_bytes(Path(self._allowed_path).read_bytes())
+            except OSError:
+                pass  # backup best-effort; the tmp file is authoritative
+            os.replace(tmp, self._allowed_path)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        self._allowed, warnings = load_allowed_commands(self._allowed_path)
+        for w in warnings:
+            LOG.warning("%s", w)
+        self._mark_order(sid, oid, "approved")
+        LOG.info("orders: policy update applied for session %s", sid)
 
     def _targets_for(self, session_id):
         if session_id:
@@ -1268,6 +1602,10 @@ class SessionRouter:
             if mtype == "githubCancel":
                 return reply(True, result=self._cancel_github_op(
                     conn, msg.get("opId")))
+            if mtype == "ordersDecide":
+                # Human verdict on a staged policy order (allowlist-gated
+                # actions never run without this).
+                return reply(True, result=await self._decide_order(msg))
             if mtype == "githubClean":
                 # Delete one session's clone leaf after confirm (the UI
                 # confirms; the bridge only enforces the leaf shape).
@@ -1430,6 +1768,11 @@ class SessionRouter:
             result["mcpAttached"] = attached
         if p.get("workspaceRoot"):
             result["workspaceRoot"] = p["workspaceRoot"]
+            # Every workspace-backed session learns the orders protocol
+            # (best-effort skill seed) and is checked for orders after
+            # each turn. Manual roots included: one hidden doc file.
+            self._workspace_roots[sid] = p["workspaceRoot"]
+            seed_orders_skill(p["workspaceRoot"])
         if p.get("workspaceRoot") and has_seeded_instructions(
                 p.get("workspaceRoot")):
             # Rooted at a seeded clone (githubOpen now, or a later
