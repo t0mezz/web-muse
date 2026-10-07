@@ -59,6 +59,7 @@ passes through untouched. No API keys are accepted or stored here.
 - `server/sessions.py` — WS↔sessionId routing, cursor store, frame mapping
 - `server/ws.py` — stdlib HTTP static server + minimal RFC 6455 WebSocket
 - `web/` — static UI (`index.html`, `app.js`, `style.css`, `progress.html`)
+- `web/themes/` — saved theme palettes (`<name>.json`); see `web/themes/README.md`
 - `tests/` — frame-mapping tests with recorded fixtures + full-stack smoke test
 
 ## WS protocol (`/ws`, JSON text frames)
@@ -135,6 +136,7 @@ nextCursor}`, live `item/delta` + `turn/completed` streaming. Two caveats:
 `/models /model /effort /default-effort /skills /mcp /output /compact /usage /pending`
 `/interrupt /stop /cancel /steer /unqueue /older`
 `/github list|clone|open|clean|cancel`
+`/theme [name]`
 
 `/model <id>` refreshes the catalog first, then matches exact → prefix →
 substring; ambiguous prefixes list the candidates instead of guessing.
@@ -158,6 +160,10 @@ default and now says so (`queued behind the running turn …`);
 `/usage` prints the subscription block plus the session cumulative tokens /
 cost and the context-window line. The footer keeps two separate lines:
 session tokens (`#sess-usage`) and subscription (`#usage`).
+
+`/theme` with no argument lists the saved palettes in `web/themes/`
+(drop a `<name>.json` file there to add one); `/theme <name>` applies
+it, replacing the stored override so no colors leak across switches.
 
 `/mcp` lists the `mcpServers` entries from `~/.config/muse/settings.json`
 (the same file `muse mcp login` uses) — MSP v1, stable and experimental,

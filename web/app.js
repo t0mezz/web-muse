@@ -2063,6 +2063,51 @@ function applyThemeOrder(p) {
   sysLine(`theme updated by session ${shortId(p.sessionId)} (${n} colors, order ${p.orderId}).`);
   toast(`theme updated (${n} colors)`);
 }
+async function cmdTheme(args) {
+  // Named themes from web/themes/*.json (bridge lists them at /themes).
+  // Bare /theme lists what is saved; /theme <name> applies one,
+  // replacing the stored override so no colors leak across switches.
+  const T = window.WebMuseTheme;
+  if (!T) return sysLine("theme support missing (theme.js not loaded).", true);
+  let names = [];
+  try {
+    const r = await fetch("themes");
+    if (!r.ok) throw new Error("themes " + r.status);
+    const j = await r.json();
+    if (j && Array.isArray(j.themes)) names = j.themes.map(String);
+  } catch (e) { return sysLine("theme list failed: " + e.message, true); }
+  const want = ((args[0] || "").replace(/\.json$/i, ""));
+  if (!want) {
+    sysLine(names.length
+      ? "Themes:\n" + names.map((n) => "  " + n).join("\n") + "\nApply: /theme <name>"
+      : "(no themes saved yet — add one as web/themes/<name>.json)");
+    return;
+  }
+  const hit = names.find((n) => n.toLowerCase() === want.toLowerCase());
+  if (!hit) {
+    return sysLine(`Unknown theme "${want}" — available: ${names.join(", ") || "(none)"}`, true);
+  }
+  let colors;
+  try {
+    const r = await fetch("themes/" + encodeURIComponent(hit) + ".json");
+    if (!r.ok) throw new Error("theme " + r.status);
+    colors = await r.json();
+  } catch (e) { return sysLine("theme load failed: " + e.message, true); }
+  if (!colors || typeof colors !== "object") {
+    return sysLine(`Theme ${hit} is not a JSON object.`, true);
+  }
+  const clean = {};
+  for (const k of Object.keys(colors)) {
+    if (typeof T.colors[k] === "string" && typeof colors[k] === "string"
+        && colors[k]) clean[k] = colors[k];
+  }
+  const n = Object.keys(clean).length;
+  if (!n) return sysLine(`Theme ${hit} has no known color keys.`, true);
+  try { localStorage.setItem(T.storageKey, JSON.stringify(clean)); } catch (_) {}
+  T.apply(clean);
+  sysLine(`Theme → ${hit} (${n} colors).`);
+  toast(`theme → ${hit}`);
+}
 function renderOrderCard(p) {
   // Staged policy order: the human approves or denies it here.
   const aid = "order-" + (p.sessionId || "") + "-" + (p.orderId || "");
@@ -2622,6 +2667,7 @@ const SLASH = [
   { name: "output", usage: "/output <itemId>", desc: "Fetch full truncated output", run: (a) => cmdOutput(a) },
   { name: "compact", usage: "/compact", desc: "Compact current session", run: () => cmdCompact() },
   { name: "usage", usage: "/usage", desc: "Show subscription usage", run: () => cmdUsage() },
+  { name: "theme", usage: "/theme [name]", desc: "List saved themes or apply one", run: (a) => cmdTheme(a) },
   { name: "pending", usage: "/pending", desc: "Show pending approvals", run: () => fetchPending().then(() => toast("pending refreshed")) },
   { name: "interrupt", usage: "/interrupt", desc: "Interrupt running turn", run: () => cmdInterrupt() },
   { name: "stop", usage: "/stop", desc: "Alias for /interrupt", run: () => cmdInterrupt() },

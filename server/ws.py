@@ -71,6 +71,25 @@ OP_CLOSE = 0x8
 OP_PING = 0x9
 OP_PONG = 0xA
 
+THEMES_SUBDIR = "themes"
+
+
+def list_themes(web_dir):
+    """Sorted saved-theme names (`<web_dir>/themes/*.json` stems).
+
+    Dropping a `<name>.json` file into the themes dir is what makes it
+    appear under bare `/theme`. Never raises: a missing or unreadable
+    dir reads as no themes.
+    """
+    try:
+        tdir = Path(web_dir) / THEMES_SUBDIR
+        if not tdir.is_dir():
+            return []
+        return sorted(p.stem for p in tdir.iterdir()
+                      if p.is_file() and p.suffix.lower() == ".json")
+    except OSError:
+        return []
+
 
 def ws_accept_key(client_key: str) -> str:
     h = hashlib.sha1((client_key.strip() + WS_GUID).encode())
@@ -283,6 +302,9 @@ class HttpWsServer:
             body = json.dumps(self._health()).encode()
             await self._respond(writer, 200, body, "application/json")
             return
+        if path == "/themes":
+            await self._serve_themes(writer)
+            return
         rel = path.lstrip("/") or "index.html"
         if ".." in rel or rel.startswith("/"):
             await self._respond(writer, 400, b"bad path\n", "text/plain")
@@ -308,6 +330,11 @@ class HttpWsServer:
             await self._respond(writer, 404, b"not found\n", "text/plain")
             return
         await self._respond(writer, 200, data, ctype or "application/octet-stream")
+
+    async def _serve_themes(self, writer):
+        """Saved-theme names as JSON (bare `/theme` lists these)."""
+        body = json.dumps({"themes": list_themes(self.web_dir)}).encode()
+        await self._respond(writer, 200, body, "application/json")
 
     def _health(self):
         msp = getattr(self.router, "_msp", None)
