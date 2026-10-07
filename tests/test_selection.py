@@ -3,7 +3,7 @@
 - Ctrl/Cmd+click toggles selection (desktop), 500ms long-press on mobile
 - Click toggles when selection active
 - Shift+click selects range between anchor and target
-- Ticker appears below status, pinned left; trash appears on search/refresh height when active
+- Ticker + trash on same height as search/refresh, ticker pinned left, trash to its right, only visible when selection active
 """
 
 import unittest
@@ -54,20 +54,27 @@ class TestSelectionInteractions(unittest.TestCase):
 
 class TestSelectionUI(unittest.TestCase):
     def test_ticker_pinned_left_below_status(self):
-        self.assertIn('id="selection-bar"', INDEX_HTML)
         self.assertIn('id="selection-ticker"', INDEX_HTML)
-        # ticker hidden until selection active, appears below checker count
-        self.assertIn("#selection-bar", STYLE_CSS)
+        # ticker and trash share the side-head height with search/refresh
         self.assertIn(".ticker", STYLE_CSS)
+        # ticker is in side-head (search/refresh height), trash immediately to its right
+        self.assertIn('selection-ticker', INDEX_HTML)
+        self.assertIn('btn-delete-selected', INDEX_HTML)
+        idx_ticker = INDEX_HTML.index('id="selection-ticker"')
+        idx_trash = INDEX_HTML.index('id="btn-delete-selected"')
+        idx_search = INDEX_HTML.index('id="btn-search-sessions"')
+        self.assertLess(idx_ticker, idx_trash)
+        self.assertLess(idx_trash, idx_search)
 
     def test_trash_on_search_refresh_height(self):
         self.assertIn('id="btn-delete-selected"', INDEX_HTML)
         # hidden by default, only shown when selection active via syncSelectionUI
         self.assertIn("#btn-delete-selected", STYLE_CSS)
         self.assertIn("trash.hidden", APP_JS)
+        self.assertIn(".side-head", STYLE_CSS)
 
     def test_sync_visibility(self):
-        self.assertIn('bar.hidden = n === 0', APP_JS)
+        self.assertIn('ticker.hidden = n === 0', APP_JS)
         self.assertIn('trash.hidden = n === 0', APP_JS)
 
     def test_selected_row_styled(self):

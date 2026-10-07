@@ -373,15 +373,13 @@ function getVisibleSessionIds() {
 
 function syncSelectionUI() {
   const n = state.selectedIds.size;
-  const bar = el("selection-bar");
   const ticker = el("selection-ticker");
   const trash = el("btn-delete-selected");
-  if (bar) bar.hidden = n === 0;
-  if (trash) trash.hidden = n === 0;
   if (ticker) {
     ticker.textContent = n === 1 ? "1 selected" : `${n} selected`;
-    ticker.hidden = false;
+    ticker.hidden = n === 0;
   }
+  if (trash) trash.hidden = n === 0;
   document.querySelectorAll(".session-row").forEach((row) => {
     const sid = row.dataset.sid;
     row.classList.toggle("selected", state.selectedIds.has(sid));
