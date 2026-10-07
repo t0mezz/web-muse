@@ -9,7 +9,8 @@ so the user's existing subscription login (muse login) passes through
 untouched. No API keys are accepted or stored by this wrapper.
 
 Security: binds loopback only (127.0.0.1). Approval default stays onRequest;
-the allowAll approval mode is rejected at the bridge.
+the allowAll approval mode is selectable in the Session panel (with an
+explicit warning) and runs every command without prompting.
 """
 
 from __future__ import annotations

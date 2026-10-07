@@ -671,6 +671,7 @@ async function newSession(name, opts) {
         if (state.pickedModel.providerId) req.providerId = state.pickedModel.providerId;
       }
       if (state.pickedEffort) req.reasoningEffort = state.pickedEffort;
+      if (state.pickedApprovalMode) req.approvalMode = state.pickedApprovalMode;
       const r = await send(req);
       const sid = r.session && r.session.sessionId;
       if (sid) {
@@ -2831,6 +2832,7 @@ async function githubOpenRepo(fullName, opts) {
     if (o.branch) req.branch = o.branch;
     if (state.pickedModel) req.model = state.pickedModel;
     if (state.pickedEffort) req.reasoningEffort = state.pickedEffort;
+    if (state.pickedApprovalMode) req.approvalMode = state.pickedApprovalMode;
     await send(req);
     return opId;
   } catch (e) {
@@ -3284,6 +3286,7 @@ async function sendPromptText(text, alreadyEchoed) {
       if (state.pickedModel.providerId) req.providerId = state.pickedModel.providerId;
     }
     if (!state.sessionId && state.pickedEffort) req.reasoningEffort = state.pickedEffort;
+    if (!state.sessionId && state.pickedApprovalMode) req.approvalMode = state.pickedApprovalMode;
     const r = await send(req);
     if (r.sessionId && !state.sessionId) {
       state.sessionId = r.sessionId;
@@ -3648,30 +3651,46 @@ function syncApprovalWarn() {
   el("approval-warn").hidden =
     sel.value !== "allowAll" || sel.dataset.prev === "allowAll";
 }
+function setApprovalDefault(mode) {
+  // Remember the pick for created sessions (parity with pickedModel).
+  state.pickedApprovalMode = mode;
+  savePickedApprovalMode();
+  el("approval-mode").dataset.prev = mode;
+}
 el("approval-mode").onchange = (ev) => {
+  const mode = ev.target.value;
   if (!state.sessionId) {
-    ev.target.value = ev.target.dataset.prev || "onRequest";
+    // No session loaded: the pick becomes the default for new sessions
+    // (allowAll still confirms first via the panel below).
+    if (mode !== "allowAll") {
+      setApprovalDefault(mode);
+      toast("default approval mode → " + mode + " (new sessions)");
+    }
     syncApprovalWarn();
-    toast("no session", true);
     return;
   }
-  const mode = ev.target.value;
   syncApprovalWarn();
   if (mode === "allowAll") return; // confirm panel below decides
   send({ type: "setApprovalMode", sessionId: state.sessionId, mode })
     .then(() => {
-      ev.target.dataset.prev = mode;
+      setApprovalDefault(mode);
       syncApprovalWarn();
       toast("approval mode → " + mode);
     })
     .catch((e) => toast("setApprovalMode failed: " + e.message, true));
 };
 el("approval-confirm-yes").onclick = () => {
-  if (!state.sessionId) { toast("no session", true); return; }
+  if (!state.sessionId) {
+    // No session loaded: confirm the default, send nothing.
+    setApprovalDefault("allowAll");
+    syncApprovalWarn();
+    toast("default approval mode → allowAll (new sessions)");
+    return;
+  }
   send({ type: "setApprovalMode", sessionId: state.sessionId,
          mode: "allowAll" })
     .then(() => {
-      el("approval-mode").dataset.prev = "allowAll";
+      setApprovalDefault("allowAll");
       syncApprovalWarn();
       toast("approval mode → allowAll");
     })

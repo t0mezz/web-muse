@@ -1,0 +1,30 @@
+{
+  "_comment": "Allowed shell commands for bridge-side approval auto-decide (GitHub-opened sessions). SERVER-SIDE ONLY: this file is read by the bridge process, schema-validated on load, and never sent to the browser over WS. Edit with care: every `allow` entry lets matching agent commands run without a human prompt.",
+  "_semantics": "allow: regexes matched from the command start (re.match). A command auto-passes when ANY allow entry matches AND NO deny rule matches. deny: entries scope regexes (re.search) to leading command names; an entry without `commands` applies to every allowed command.",
+  "allow": [
+    "^gh(\\s|$)",
+    "^git(\\s|$)",
+    "^(ls|cat|head|tail|less|find|grep|rg|tree|wc|file|stat|diff|jq|pwd|echo|printf)(\\s|$)",
+    "^(node|npm|npx|python3|pip|pip3|pytest|uv|uvx|cargo|rustc|go|make|tsc)(\\s|$)"
+  ],
+  "deny": [
+    {
+      "commands": ["find"],
+      "comment": "find stays inspection-only: -delete/-exec would smuggle writes past the allowlist.",
+      "patterns": ["\\bfind\\b.*\\s(-delete|-exec|-execdir)(\\s|$)"]
+    },
+    {
+      "commands": ["git"],
+      "comment": "Destructive git forms keep prompting a human: discarded work is unrecoverable.",
+      "patterns": [
+        "(^|\\s)--force(\\s|$)",
+        "(^|\\s)--hard(\\s|$)",
+        "(^|\\s)-f(\\s|$)",
+        "\\bclean\\s+-[a-zA-Z]*f",
+        "\\bpush\\b.*\\s--delete(\\s|$)",
+        "\\bbranch\\s+-[a-zA-Z]*D\\b",
+        "\\bstash\\s+(drop|clear)\\b"
+      ]
+    }
+  ]
+}

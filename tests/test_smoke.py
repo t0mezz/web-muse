@@ -363,12 +363,13 @@ class SmokeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(r["ok"])
         self.assertTrue(r["error"]["message"], r)
 
-        # --- guards: unknown type + allowAll + bad approval mode
+        # --- guards: unknown type + bad approval mode; allowAll is a
+        # selectable mode (warned in the Session panel), not a rejection.
         r = await call({"type": "nope"})
         self.assertFalse(r["ok"])
         r = await call({"type": "setApprovalMode",
                         "sessionId": session_id, "mode": "allowAll"})
-        self.assertFalse(r["ok"])
+        self.assertTrue(r["ok"], r)
         r = await call({"type": "setApprovalMode",
                         "sessionId": session_id, "mode": "never"})
         self.assertFalse(r["ok"])

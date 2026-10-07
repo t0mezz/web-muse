@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from server.msp import uuid7  # noqa: E402
 from server.sessions import (  # noqa: E402
-    FORBIDDEN_APPROVAL_MODES,
+    VALID_APPROVAL_MODES,
     SessionRouter,
     build_session_mcp_config,
     build_turn_input,
@@ -100,8 +100,12 @@ class TestRouting(unittest.TestCase):
                                      {"sessionId": SID, "userInputId": "u1"})
         self.assertEqual(f["type"], "userInput")
 
-    def test_allowall_forbidden(self):
-        self.assertIn("allowAll", FORBIDDEN_APPROVAL_MODES)
+    def test_allowall_permitted(self):
+        # allowAll ("approve all" in the Session panel) is a selectable
+        # mode: the bridge forwards it, with the warning living in the UI.
+        self.assertIn("allowAll", VALID_APPROVAL_MODES)
+
+
 
 
 class TestWsBits(unittest.TestCase):
@@ -248,6 +252,16 @@ class TestRouterDispatch(unittest.IsolatedAsyncioTestCase):
             FakeConn(), {"id": 2, "type": "setApprovalMode",
                          "sessionId": SID, "mode": "denyUnmatched"})
         self.assertTrue(f["ok"], f)
+
+    async def test_allowall_dispatch(self):
+        r = SessionRouter(FakeMsp())
+        f = await r.handle_client_message(
+            FakeConn(), {"id": 1, "type": "setApprovalMode",
+                         "sessionId": SID, "mode": "allowAll"})
+        self.assertTrue(f["ok"], f)
+        self.assertEqual(r._msp.commands[0],
+                         ("session/setApprovalMode",
+                          {"sessionId": SID, "mode": "allowAll"}))
 
     async def test_page_direction_validation(self):
         r = SessionRouter(FakeMsp())

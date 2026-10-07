@@ -607,10 +607,15 @@ body {
 #approval-mode { display: block; width: 100%; margin-top: 4px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 999px; padding: 6px; }
 .approval-warn {
   margin: 0 0 10px; padding: 7px 9px; border-radius: 10px; font-size: 12px;
-  background: var(--warnBg); border: 1px solid var(--warn); color: var(--warnFg);
+  background: var(--panel); border: 1px solid var(--line); color: var(--fg);
 }
-.approval-warn p { margin: 0 0 8px; }
+.approval-warn p { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 8px; }
+.approval-warn svg { flex: none; color: var(--warn); margin-top: 1px; }
 .approval-warn .row-btns { margin-bottom: 0; }
+#approval-confirm-yes {
+  background: none; color: var(--err); border-color: var(--err);
+  font-weight: 700;
+}
 .row-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .row-btns button {
   flex: 1; padding: 6px 4px; border-radius: 999px; cursor: pointer; font-size: 12px;

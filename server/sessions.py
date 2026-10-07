@@ -1597,6 +1597,9 @@ class SessionRouter:
                 and open_opts["reasoningEffort"].strip():
             new_msg["reasoningEffort"] = \
                 open_opts["reasoningEffort"].strip()
+        if isinstance(open_opts.get("approvalMode"), str) \
+                and open_opts["approvalMode"].strip():
+            new_msg["approvalMode"] = open_opts["approvalMode"].strip()
         result = await self._do_new(conn, new_msg)
         self._gh_auto_sids.add(session_id)
         name = open_opts.get("name")
@@ -1673,7 +1676,8 @@ class SessionRouter:
                                   {"mcpAttach": msg.get("mcpAttach"),
                                    "name": msg.get("name"),
                                    "model": msg.get("model"),
-                                   "reasoningEffort": msg.get("reasoningEffort")},
+                                   "reasoningEffort": msg.get("reasoningEffort"),
+                                   "approvalMode": msg.get("approvalMode")},
                                   branch=branch)
 
     async def _prune_missing(self, msg):
