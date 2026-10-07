@@ -38,7 +38,8 @@ class TestModelDefault(unittest.TestCase):
 
     def test_picker_records_without_session(self):
         self.assertIn("default model →", APP_JS)
-        self.assertIn("(applies to new chats)", APP_JS)
+        self.assertIn('toast("default model → " + o.value)', APP_JS)
+        self.assertNotIn('toast("default model → " + o.value + " (applies to new chats)")', APP_JS)
 
     def test_creation_paths_carry_model(self):
         self.assertIn("req.modelId = state.pickedModel.modelId", APP_JS)

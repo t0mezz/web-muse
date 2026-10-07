@@ -3982,7 +3982,7 @@ el("model-picker").onchange = (ev) => {
     providerId: o.dataset.provider || undefined };
   savePickedModel();
   if (!state.sessionId) {
-    toast("default model → " + o.value + " (applies to new chats)");
+    toast("default model → " + o.value);
     return;
   }
   send({ type: "setModel", sessionId: state.sessionId,
