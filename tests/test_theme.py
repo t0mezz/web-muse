@@ -132,6 +132,21 @@ class TestThemeConfig(unittest.TestCase):
             "if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }",
             APP_JS)
 
+    def test_picker_backgrounds_match_theme(self):
+        """Topbar selects sit on the theme panel, not transparent, and
+        their dropdown rows carry theme colors where the browser honors
+        page CSS (desktop; mobile native pickers ignore it)."""
+        m = re.search(r"#model-picker, #effort-picker \{(.*?)\}",
+                      STYLE_CSS, re.S)
+        self.assertIsNotNone(m, "picker rule missing")
+        self.assertIn("background: var(--panel)", m.group(1))
+        self.assertNotIn("background: none", m.group(1))
+        m = re.search(r"#model-picker option, #effort-picker option, "
+                      r"#approval-mode option \{(.*?)\}", STYLE_CSS, re.S)
+        self.assertIsNotNone(m, "picker option rule missing")
+        self.assertIn("background: var(--panel)", m.group(1))
+        self.assertIn("color: var(--fg)", m.group(1))
+
     def test_style_root_matches_theme(self):
         """style.css :root fallback mirrors theme.js (legacy var names
         mapped), so the pre-script first paint already shows the active
