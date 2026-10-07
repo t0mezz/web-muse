@@ -41,6 +41,10 @@ const state = {
   // the old name): sessionId -> {name, at}. Re-applied over every
   // refresh until the host catches up or 30s pass.
   pendingNames: new Map(),
+  // Multi-select for session list: Ctrl/Cmd+click (desktop) or 500ms long-press (mobile).
+  // Shift+click extends from anchor. Ticker + trash appear only while active.
+  selectedIds: new Set(),
+  selectionAnchor: null,
 };
 
 /* ---------- tiny helpers ---------- */
@@ -349,13 +353,89 @@ function renderSessionList(sessions) {
     box.append(n);
   }
   if (!focusScrolled) box.scrollTop = qChanged ? 0 : Math.min(prevScroll, box.scrollHeight);
+  syncSelectionUI();
+}
+
+function getVisibleSessionIds() {
+  const q = (el("session-filter").value || "").trim().toLowerCase();
+  const rows = state.sessionsCache.filter((s) =>
+    !q || sessionDisplayName(s).toLowerCase().includes(q)
+    || (s.sessionId || "").toLowerCase().includes(q)
+    || sessPreview(s).toLowerCase().includes(q));
+  const byTime = (a, b) => (Date.parse(b.updatedAt || "") || 0) - (Date.parse(a.updatedAt || "") || 0);
+  const web = rows.filter((s) => s.bridgeCreated).sort(byTime);
+  const other = rows.filter((s) => !s.bridgeCreated).sort(byTime);
+  const out = [];
+  if (web.length) out.push(...web);
+  if (other.length) out.push(...other);
+  return out.map((s) => s.sessionId);
+}
+
+function syncSelectionUI() {
+  const n = state.selectedIds.size;
+  const bar = el("selection-bar");
+  const ticker = el("selection-ticker");
+  const trash = el("btn-delete-selected");
+  if (bar) bar.hidden = n === 0;
+  if (trash) trash.hidden = n === 0;
+  if (ticker) {
+    ticker.textContent = n === 1 ? "1 selected" : `${n} selected`;
+    ticker.hidden = false;
+  }
+  document.querySelectorAll(".session-row").forEach((row) => {
+    const sid = row.dataset.sid;
+    row.classList.toggle("selected", state.selectedIds.has(sid));
+    row.setAttribute("aria-selected", state.selectedIds.has(sid) ? "true" : "false");
+  });
+}
+
+function toggleSelection(sid) {
+  if (state.selectedIds.has(sid)) state.selectedIds.delete(sid);
+  else state.selectedIds.add(sid);
+  state.selectionAnchor = sid;
+  if (state.selectedIds.size === 0) state.selectionAnchor = null;
+  syncSelectionUI();
+}
+
+function selectRange(targetSid) {
+  const ids = getVisibleSessionIds();
+  const anchor = state.selectionAnchor;
+  if (!anchor || !ids.includes(anchor) || !ids.includes(targetSid)) {
+    toggleSelection(targetSid);
+    return;
+  }
+  const a = ids.indexOf(anchor), b = ids.indexOf(targetSid);
+  const lo = Math.min(a, b), hi = Math.max(a, b);
+  for (let i = lo; i <= hi; i++) state.selectedIds.add(ids[i]);
+  syncSelectionUI();
+}
+
+function clearSelection() {
+  state.selectedIds.clear();
+  state.selectionAnchor = null;
+  syncSelectionUI();
+}
+
+async function deleteSelected() {
+  const ids = [...state.selectedIds];
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} session${ids.length === 1 ? "" : "s"}?`)) return;
+  let ok = 0;
+  for (const sid of ids) {
+    try { await send({ type: "delete", sessionId: sid }); ok++; } catch (_) {}
+  }
+  toast(`deleted ${ok}/${ids.length}`);
+  clearSelection();
+  if (ids.includes(state.sessionId)) newSession();
+  refreshSessions().catch(() => {});
 }
 
 function appendSessionRow(box, s) {
   const row = document.createElement("div");
-  row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "");
+  row.className = "session-row" + (s.sessionId === state.sessionId ? " active" : "") + (state.selectedIds.has(s.sessionId) ? " selected" : "");
   row.setAttribute("role", "listitem");
   row.dataset.sid = s.sessionId;
+  row.setAttribute("aria-selected", state.selectedIds.has(s.sessionId) ? "true" : "false");
   const icon = document.createElement("span");
   const running = sessStatusLabel(s) === "Working";
   icon.className = "sess-icon" + (running ? " running" : "");
@@ -369,7 +449,31 @@ function appendSessionRow(box, s) {
     : `${sessionDisplayName(s)} — ${sessPreview(s)}`;
   open.setAttribute("aria-label", openSpoken);
   if (s.sessionId === state.sessionId) open.setAttribute("aria-current", "true");
-  open.onclick = (e) => { e.stopPropagation(); openSession(s.sessionId); };
+  const handleSelectClick = (e) => {
+    const isCtrl = e.ctrlKey || e.metaKey;
+    const isShift = e.shiftKey;
+    const selecting = state.selectedIds.size > 0;
+    if (isShift && selecting && state.selectionAnchor) {
+      e.preventDefault(); e.stopPropagation();
+      selectRange(s.sessionId);
+      return true;
+    }
+    if (isCtrl || selecting) {
+      e.preventDefault(); e.stopPropagation();
+      toggleSelection(s.sessionId);
+      return true;
+    }
+    return false;
+  };
+  open.onclick = (e) => {
+    if (handleSelectClick(e)) return;
+    e.stopPropagation();
+    openSession(s.sessionId);
+  };
+  row.addEventListener("click", (e) => {
+    if (e.target.closest(".config-btn") || e.target.closest(".row-menu") || e.target.closest(".sess-open")) return;
+    if (handleSelectClick(e)) return;
+  });
   const top = document.createElement("span");
   top.className = "top sess-line";
   const nm = document.createElement("span");
@@ -474,6 +578,21 @@ function appendSessionRow(box, s) {
       }
     }
   };
+  // Mobile long-press (500ms) starts/toggles selection
+  let pressTimer = null;
+  const clearPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
+  row.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) return;
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      try { if (navigator.vibrate) navigator.vibrate(20); } catch (_) {}
+      toggleSelection(s.sessionId);
+    }, 500);
+  }, { passive: true });
+  row.addEventListener("touchend", clearPress);
+  row.addEventListener("touchmove", clearPress);
+  row.addEventListener("touchcancel", clearPress);
+
   row.append(open, cfg, menu);
   box.append(row);
 }
@@ -3945,6 +4064,14 @@ el("session-list").addEventListener("keydown", (e) => {
   else n = btns.length - 1;
   e.preventDefault();
   btns[n].focus();
+});
+el("selection-ticker").onclick = clearSelection;
+el("btn-delete-selected").onclick = deleteSelected;
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.selectedIds.size) {
+    clearSelection();
+    e.preventDefault();
+  }
 });
 el("repo-pill").onclick = (e) => { e.stopPropagation(); if (!state.repoBusy) toggleRepoMenu(); };
 el("branch-pill").onclick = (e) => { e.stopPropagation(); if (!state.repoBusy) toggleBranchMenu(); };
