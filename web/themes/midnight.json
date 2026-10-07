@@ -7,6 +7,7 @@
   "dim": "#A9B2C3",
   "faint": "#8B95A8",
   "accent": "#6EA8FE",
+  "focus": "#6EA8FE",
   "ok": "#8FBF8F",
   "warn": "#F2C46A",
   "err": "#E07A5F",

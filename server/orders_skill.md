@@ -50,7 +50,7 @@ after your turn.
 
 ## Theme colors
 
-29 color names in 9 roles. Send only the roles you are changing;
+30 color names in 9 roles. Send only the roles you are changing;
 omitted roles keep their current values.
 
 Value shapes (wrong shapes are rejected, never silently applied):
@@ -63,8 +63,10 @@ color (e.g. `"rgba(241, 230, 209, 0.4)"`).
   cards, borders.
 - Text: `fg`, `dim`, `faint` — body, secondary, faintest, read on the
   surfaces above.
-- Accent: `accent`, `onAccent`, `glow` — highlights, text sitting on the
-  accent, the accent's RGB triplet reused for glows.
+- Accent: `accent`, `focus`, `onAccent`, `glow` — highlights, the
+  keyboard focus ring (a darker accent that holds 3:1 on every
+  surface), text sitting on the accent, the accent's RGB triplet
+  reused for glows.
 - Status: `ok`, `onOk`, `warn`, `warnBg`, `warnFg`, `err`, `errFg` —
   success, warning, error, each background paired with its text.
 - Messages: `user`, `agent`, `select` — user bubbles, agent bubbles,
@@ -75,8 +77,8 @@ color (e.g. `"rgba(241, 230, 209, 0.4)"`).
 - Sky: `star`, `starBg0`, `starBg1` — starfield dots and gradient.
 - Veil: `scrim` — modal overlay.
 
-Change paired roles together, never alone: `accent` with `onAccent`
-and `glow`; `bg` with `fg`, `dim`, `faint`; `warnBg` with `warnFg`;
+Change paired roles together, never alone: `accent` with `focus`,
+`onAccent`, and `glow`; `bg` with `fg`, `dim`, `faint`; `warnBg` with `warnFg`;
 `ok` with `onOk`; the `star` trio together. A lone accent or surface
 recolor strands its old partners and usually lowers contrast.
 
@@ -93,14 +95,15 @@ Current defaults (copy, edit, send back the roles you change):
 ```json
 {"bg": "#FCF0DA", "panel": "#F1E6D1", "panel2": "#E9DDC9",
 "line": "#D5CAB8", "fg": "#4C4541", "dim": "#736B63",
-"faint": "#81786F", "accent": "#AEAC78", "ok": "#78735A",
-"warn": "#F2C46A", "err": "#8B7551", "user": "#F6D89C",
-"agent": "#E9DDC9", "select": "#F6D89C", "warnBg": "#F4CC7E",
-"warnFg": "#71614A", "errFg": "#77664C", "codeBg": "#EEE2CE",
-"cardBg": "#F8DEAD", "pickedBg": "#F6D697", "onOk": "#FCF0DA",
-"onAccent": "#4C4541", "chipInk": "#4C4541", "light": "#fff",
-"glow": "174, 172, 120", "scrim": "rgba(241, 230, 209, 0.4)",
-"star": "#4C4541", "starBg0": "#F7DAA2", "starBg1": "#FCF0DA"}
+"faint": "#81786F", "accent": "#AEAC78", "focus": "#6D6753",
+"ok": "#78735A", "warn": "#F2C46A", "err": "#8B7551",
+"user": "#F6D89C", "agent": "#E9DDC9", "select": "#F6D89C",
+"warnBg": "#F4CC7E", "warnFg": "#71614A", "errFg": "#77664C",
+"codeBg": "#EEE2CE", "cardBg": "#F8DEAD", "pickedBg": "#F6D697",
+"onOk": "#FCF0DA", "onAccent": "#4C4541", "chipInk": "#4C4541",
+"light": "#fff", "glow": "174, 172, 120",
+"scrim": "rgba(241, 230, 209, 0.4)", "star": "#4C4541",
+"starBg0": "#F7DAA2", "starBg1": "#FCF0DA"}
 ```
 
 ## Limits
