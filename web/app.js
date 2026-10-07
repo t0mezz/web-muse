@@ -574,13 +574,13 @@ async function openSession(sessionId) {
 /* Late-join/reconnect reconcile: the thinking status and the running-state
  * CSS (run chip, idle glow, stop button) must reflect an already-active
  * turn even though its turn/started fired before this client subscribed.
- * Strictly additive: never hides the row (lifecycle events own that) and
- * never restarts a status row already showing. */
+ * Strictly additive: never hides the row (lifecycle events own that),
+ * and a restored row keeps the turn clock instead of restarting it. */
 function reconcileRunningState() {
   const st = String((state.session && state.session.status) || "").toLowerCase().trim();
   state.running = st === "running" || state.running;
   updateRunChip();
-  if (state.running && !document.getElementById("thinking-row")) showThinking();
+  ensureThinking();
 }
 
 function handleSubscribeResult(r) {
@@ -967,11 +967,13 @@ function toggleStarsFx() {
 }
 
 /* TUI-style thinking status: heads the turn's block while it runs (tool
-   logs and the answer print below it), replaced by the final answer —
-   i.e. removed — as soon as generation finishes. */
+   logs and the answer print below it), removed once the turn settles.
+   showThinking() starts a fresh clock (new turn / newly sent task);
+   ensureThinking() re-shows mid-turn without resetting the clock. */
 let thinkingTimer = null;
 let thinkingStartedAt = 0;
-function showThinking() {
+function showThinking(reset = true) {
+  if (!reset && document.getElementById("thinking-row")) return;
   hideThinking();
   const line = document.createElement("div");
   line.className = "tline thinking";
@@ -1001,7 +1003,7 @@ function showThinking() {
   status.append(clock);
   line.append(status);
   turnContainer().append(line);
-  thinkingStartedAt = Date.now();
+  if (reset || !thinkingStartedAt) thinkingStartedAt = Date.now();
   const tick = () => {
     const s = Math.max(0, Math.round((Date.now() - thinkingStartedAt) / 1000));
     clock.textContent = `(${s}s)`;
@@ -1015,11 +1017,20 @@ function hideThinking() {
   const line = document.getElementById("thinking-row");
   if (line) line.remove();
 }
+/* Re-show the status mid-turn without touching the clock: an
+   intermediate model message must never stop the turn timer. */
+function ensureThinking() {
+  if (!state.running) return;
+  if (document.getElementById("thinking-row")) return;
+  showThinking(false);
+}
 /* Keep the thinking row pinned below new lines: tool logs stack above
-   it while it stays fixed at the end of the turn's block. */
+   it while it stays fixed at the end of the turn's block. A row missing
+   mid-turn is restored here (clock preserved). */
 function pinThinking() {
   const think = document.getElementById("thinking-row");
-  if (think) turnContainer().append(think);
+  if (think) { turnContainer().append(think); return; }
+  ensureThinking();
 }
 
 function scrollDown(force) {
@@ -1869,9 +1880,10 @@ function onEvent(method, p) {
     }
     case "item/completed":
     case "item/updated":
-      // The model's answer fired: drop the thinking status now instead
-      // of waiting for turn/completed (which can lag behind).
-      if (p.item && itemKind(p.item) === "agent") hideThinking();
+      // Intermediate agent messages land mid-turn (a note before the next
+      // tool call): only a completion arriving while idle clears a stale
+      // row — the running turn's status lives until turn/completed.
+      if (p.item && itemKind(p.item) === "agent" && !state.running) hideThinking();
       renderItem(p.item || { itemId: p.itemId, kind: p.kind, text: p.text }, false);
       break;
     case "turn/started":
@@ -1937,8 +1949,10 @@ function onEvent(method, p) {
       state.running = String(p.status || "").toLowerCase().trim() === "running";
       updateRunChip();
       // A turn started elsewhere (TUI, other client, reconnect) never fires
-      // turn/started here: start the verbs off the status flip instead.
-      if (state.running && !document.getElementById("thinking-row")) showThinking();
+      // turn/started here: start the verbs off the status flip instead
+      // (clock preserved); a flip back to idle drops a stale row.
+      if (state.running) ensureThinking();
+      else hideThinking();
       if (state.session) { state.session.status = p.status; updateSessionDetail(); }
       break;
     case "session/tokenUsage":
@@ -3369,6 +3383,9 @@ async function sendPromptText(text, alreadyEchoed) {
       state.queuedTurnId = null;
     }
     state.running = true; updateRunChip();
+    // Optimistic status: the new turn's clock restarts on send, not when
+    // turn/started lands. A queued follow-up keeps the current turn's row.
+    if (r.disposition !== "queued") showThinking();
   } catch (e) {
     sysLine("send failed: " + e.message, true);
     setStatus("send failed: " + e.message);
