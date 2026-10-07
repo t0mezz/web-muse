@@ -51,6 +51,14 @@ class TestSelectionInteractions(unittest.TestCase):
         self.assertIn("state.selectedIds.has(sid)", APP_JS)
         self.assertIn("state.selectedIds.delete", APP_JS)
 
+    def test_checkbox_single_toggle(self):
+        # label click must not manually toggle (single input change source) and row must ignore checkbox
+        self.assertIn('closest(".checkbox")', APP_JS)
+        # redundant for= attribute removed (contained input only) to avoid double activation
+        self.assertNotIn('setAttribute("for", `cb-', APP_JS)
+        # input change is the single toggle path for checkbox clicks
+        self.assertIn('addEventListener("change"', APP_JS)
+
 
 class TestSelectionUI(unittest.TestCase):
     def test_ticker_pinned_left_below_status(self):
@@ -84,10 +92,12 @@ class TestSelectionUI(unittest.TestCase):
         self.assertIn('trash.hidden = n === 0', APP_JS)
 
     def test_selected_row_styled(self):
-        self.assertIn(".sess-check", STYLE_CSS)
-        self.assertIn(".sess-check.checked", STYLE_CSS)
+        self.assertIn(".checkbox", STYLE_CSS)
+        self.assertIn(".checkbox .inner", STYLE_CSS)
+        self.assertIn(".icon-check", STYLE_CSS)
+        self.assertIn(".icon-cross", STYLE_CSS)
         self.assertIn(".sess-icon-col", STYLE_CSS)
-        self.assertIn('sess-check', APP_JS)
+        self.assertIn('"checkbox"', APP_JS)
         self.assertIn('classList.toggle("checked"', APP_JS)
         self.assertNotIn('row.classList.toggle("selected"', APP_JS)
 

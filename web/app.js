@@ -383,8 +383,12 @@ function syncSelectionUI() {
   document.querySelectorAll(".session-row").forEach((row) => {
     const sid = row.dataset.sid;
     row.setAttribute("aria-selected", state.selectedIds.has(sid) ? "true" : "false");
-    const cb = row.querySelector(".sess-check");
-    if (cb) cb.classList.toggle("checked", state.selectedIds.has(sid));
+    const cb = row.querySelector(".checkbox");
+    if (cb) {
+      cb.classList.toggle("checked", state.selectedIds.has(sid));
+      const inp = cb.querySelector('input[type="checkbox"]');
+      if (inp) inp.checked = state.selectedIds.has(sid);
+    }
   });
 }
 
@@ -441,12 +445,31 @@ function appendSessionRow(box, s) {
   icon.className = "sess-icon" + (running ? " running" : "");
   icon.setAttribute("aria-hidden", "true");
   icon.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.4 8.2l1.8 1.8 3.4-3.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  const check = document.createElement("button");
-  check.type = "button";
-  check.className = "sess-check" + (state.selectedIds.has(s.sessionId) ? " checked" : "");
+  const check = document.createElement("label");
+  check.className = "checkbox" + (state.selectedIds.has(s.sessionId) ? " checked" : "");
   check.setAttribute("aria-label", state.selectedIds.has(s.sessionId) ? "Deselect session" : "Select session");
-  check.setAttribute("aria-pressed", state.selectedIds.has(s.sessionId) ? "true" : "false");
-  check.onclick = (e) => { e.stopPropagation(); toggleSelection(s.sessionId); };
+  const cbInput = document.createElement("input");
+  cbInput.type = "checkbox";
+  cbInput.name = "checkbox";
+  cbInput.checked = state.selectedIds.has(s.sessionId);
+  cbInput.setAttribute("aria-hidden", "true");
+  cbInput.tabIndex = -1;
+  cbInput.addEventListener("click", (e) => { e.stopPropagation(); });
+  cbInput.addEventListener("change", (e) => { e.stopPropagation(); toggleSelection(s.sessionId); });
+  const inner = document.createElement("span");
+  inner.className = "inner";
+  const svgCheck = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svgCheck.setAttribute("class", "icon-check");
+  svgCheck.setAttribute("viewBox", "-3.2 -3.2 38.40 38.40");
+  svgCheck.setAttribute("aria-hidden", "true");
+  svgCheck.innerHTML = '<g><path d="M5 16.577l2.194-2.195 5.486 5.484L24.804 7.743 27 9.937l-14.32 14.32z"></path></g>';
+  const svgCross = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svgCross.setAttribute("class", "icon-cross");
+  svgCross.setAttribute("viewBox", "0 0 1024 1024");
+  svgCross.setAttribute("aria-hidden", "true");
+  svgCross.innerHTML = '<g><path d="M697.4 759.2l61.8-61.8L573.8 512l185.4-185.4-61.8-61.8L512 450.2 326.6 264.8l-61.8 61.8L450.2 512 264.8 697.4l61.8 61.8L512 573.8z"></path></g>';
+  check.append(cbInput, inner, svgCheck, svgCross);
+  check.addEventListener("click", (e) => { e.stopPropagation(); });
   iconCol.append(icon, check);
   const open = document.createElement("button");
   open.type = "button";
@@ -478,7 +501,7 @@ function appendSessionRow(box, s) {
     openSession(s.sessionId);
   };
   row.addEventListener("click", (e) => {
-    if (e.target.closest(".config-btn") || e.target.closest(".row-menu") || e.target.closest(".sess-open")) return;
+    if (e.target.closest(".config-btn") || e.target.closest(".row-menu") || e.target.closest(".sess-open") || e.target.closest(".checkbox")) return;
     if (handleSelectClick(e)) return;
   });
   const top = document.createElement("span");
