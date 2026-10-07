@@ -112,6 +112,7 @@ body {
   background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
   border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12px; line-height: 1.2; cursor: pointer;
 }
+#selection-ticker[hidden] { display: none; }
 #selection-ticker:hover:not(:disabled) { border-color: var(--accent); }
 #selection-ticker:disabled { opacity: 0.45; cursor: default; }
 /* keep class selectors for backwards compat (tests + old bar) */
