@@ -39,7 +39,7 @@
   }
 
   function generateStars(count, starColor) {
-    if (starColor === undefined) starColor = themeColor('star', '#fff');
+    if (starColor === undefined) starColor = themeColor('star', '#4C4541');
     const shadows = [];
     for (let i = 0; i < count; i++) {
       const x = Math.floor(Math.random() * 4000) - 2000;
@@ -71,7 +71,7 @@
     const count = options.count !== undefined ? options.count : 1000;
     const size = options.size !== undefined ? options.size : 1;
     const duration = options.duration !== undefined ? options.duration : 50;
-    const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#fff');
+    const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#4C4541');
 
     const layer = document.createElement('div');
     layer.setAttribute('data-slot', 'star-layer');
@@ -120,19 +120,16 @@
   }
 
   // Default per-layer star counts (far 1px -> near 3px) and backdrop
-  // paint. ADAPT: gradient matched to the web-muse theme (#0c0e12 base;
-  // the original was #262626 -> #000). The fallback literal below is
-  // the current look; theme.js re-sources the hues when it loaded first.
+  // paint. ADAPT: gradient matched to the app theme (starBg0 -> starBg1).
+  // The fallback literals below are the current theme.js defaults; the
+  // live theme values are read at each call (never cached at load), so a
+  // later theme.apply is picked up by the next field created.
   const DEFAULT_COUNTS = [1000, 400, 200];
-  const DEFAULT_BACKGROUND_FALLBACK =
-    'radial-gradient(ellipse at bottom, #1a2334 0%, #0c0e12 100%)';
-  const DEFAULT_BACKGROUND =
-    themeColor('starBg0', '#1a2334') === '#1a2334' &&
-    themeColor('starBg1', '#0c0e12') === '#0c0e12'
-      ? DEFAULT_BACKGROUND_FALLBACK
-      : 'radial-gradient(ellipse at bottom, ' +
-        themeColor('starBg0', '#1a2334') + ' 0%, ' +
-        themeColor('starBg1', '#0c0e12') + ' 100%)';
+  function defaultBackground() {
+    return 'radial-gradient(ellipse at bottom, ' +
+      themeColor('starBg0', '#F7DAA2') + ' 0%, ' +
+      themeColor('starBg1', '#FCF0DA') + ' 100%)';
+  }
 
   /**
    * Turn `container` into the full starfield backdrop.
@@ -148,7 +145,7 @@
    *   speed (50)        base layer loop duration in seconds (others x2, x3)
    *   stiffness (50)    spring stiffness, as in useSpring({stiffness, damping})
    *   damping (20)      spring damping
-   *   starColor (theme star / '#fff')
+   *   starColor (theme star / '#4C4541')
    *   counts ([1000, 400, 200])  per-layer star counts, far -> near
    *   opacity (1)       field transparency, applied to the parallax wrapper
    *   background (theme gradient)  container backdrop paint
@@ -163,11 +160,11 @@
     const speed = options.speed !== undefined ? options.speed : 50;
     const stiffness = options.stiffness !== undefined ? options.stiffness : 50;
     const damping = options.damping !== undefined ? options.damping : 20;
-    const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#fff');
+    const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#4C4541');
     const counts = options.counts !== undefined ? options.counts : DEFAULT_COUNTS;
     const opacity = options.opacity !== undefined ? options.opacity : 1;
     const background =
-      options.background !== undefined ? options.background : DEFAULT_BACKGROUND;
+      options.background !== undefined ? options.background : defaultBackground();
     const pointerEvents = options.pointerEvents !== undefined ? options.pointerEvents : true;
 
     const previous = {

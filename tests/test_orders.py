@@ -74,13 +74,12 @@ class TestSkillDoc(unittest.TestCase):
 
     def test_theme_quality_guidance(self):
         # Palette docs, value shapes, pair rules, contrast advice and
-        # replace semantics are what lift agent themes above one-key
+        # merge semantics are what lift agent themes above one-key
         # recolors; the doc must keep teaching them.
         for marker in ("glow", "scrim", "rgba(", "#rrggbb",
                        "Change paired roles together",
                        "Contrast (advisory",
-                       "Replaces the whole theme",
-                       "/theme default"):
+                       "keep their current values"):
             self.assertIn(marker, SKILL_MD)
 
     def test_embedded_defaults_match_theme_js(self):
@@ -91,6 +90,23 @@ class TestSkillDoc(unittest.TestCase):
         self.assertEqual(json.loads(m.group(1)),
                          dict(re.findall(r"^\s*([A-Za-z0-9]+):\s*'([^']+)'",
                                          cm.group(1), re.M)))
+
+    def test_skill_doc_names_every_theme_key(self):
+        # An agent can only set what the doc names: every bridge key
+        # (including the starfield sky trio) must be listed.
+        for key in theme_keys():
+            self.assertIn(f"`{key}`", SKILL_MD, f"skill doc omits {key}")
+
+    def test_skill_doc_states_merge_semantics(self):
+        # theme.apply merges: omitted keys keep their values, so a
+        # star-only recolor is a complete order on its own.
+        self.assertIn("keep their current values", SKILL_MD)
+
+    def test_skill_doc_documents_staged_actions(self):
+        # Merge keeps both lines: staged actions (save/restart) are
+        # documented alongside merge semantics.
+        for marker in ("theme.save", "bridge.restart", "needsConfirm"):
+            self.assertIn(marker, SKILL_MD)
 
     def test_seed_writes_every_workspace(self):
         async def body():
@@ -126,6 +142,55 @@ class TestThemeKeys(unittest.TestCase):
         self.assertIsNotNone(m, "THEME_KEYS missing from sessions.py")
         bridge_keys = set(re.findall(r'"([A-Za-z0-9]+)"', m.group(1)))
         self.assertEqual(bridge_keys, theme_keys())
+
+
+class TestThemeShapes(unittest.TestCase):
+    def _check(self, colors):
+        from server.sessions import validate_orders
+        valid, rejected = validate_orders(
+            {"orders": [{"id": "s1", "action": "theme.apply",
+                         "params": {"colors": colors}}]}, {})
+        return valid, rejected
+
+    def test_full_palette_shape_accepted(self):
+        # Every documented shape passes, including the sky trio that
+        # drives the starfield and the non-hex roles.
+        colors = {"accent": "#AEAC78", "light": "#fff",
+                  "onAccent": "#4C4541", "cardBg": "#F8DEADaa",
+                  "glow": "174, 172, 120",
+                  "scrim": "rgba(241, 230, 209, 0.4)",
+                  "star": "#4C4541", "starBg0": "#F7DAA2",
+                  "starBg1": "#FCF0DA"}
+        valid, rejected = self._check(colors)
+        self.assertEqual(rejected, {})
+        self.assertEqual(len(valid), 1)
+
+    def test_sky_only_recolor_accepted(self):
+        # A star-effect-only order is complete on its own (merge
+        # semantics): no full palette required.
+        valid, rejected = self._check({"star": "#000000",
+                                       "starBg0": "#111111",
+                                       "starBg1": "#222222"})
+        self.assertEqual(rejected, {})
+        self.assertEqual(len(valid), 1)
+
+    def test_bad_shapes_rejected_with_reason(self):
+        for colors in ({"accent": "red"},
+                       {"accent": "#ab"},
+                       {"accent": "#abcd"},
+                       {"accent": "#gggggg"},
+                       {"accent": ""},
+                       {"glow": "#AEAC78"},
+                       {"glow": "300, 0, 0"},
+                       {"glow": "174, 172"},
+                       {"scrim": "#FCF0DA"},
+                       {"scrim": "red"},
+                       {"scrim": "rgba(1, 2, 3, 2)"},
+                       {"star": "white"}):
+            valid, rejected = self._check(colors)
+            self.assertEqual(valid, [], colors)
+            self.assertIn("s1", rejected, colors)
+            self.assertIn("hex", rejected["s1"], colors)
 
 
 class TestOrdersEngine(unittest.IsolatedAsyncioTestCase):
@@ -591,14 +656,16 @@ class TestFrontendWiring(unittest.TestCase):
         self.assertIn('"themeApply"', APP_JS)
         self.assertIn("WebMuseTheme", APP_JS)
 
-    def test_theme_apply_replaces_not_merges(self):
-        # Wholesale replace (same as /theme <name>): the stored override
-        # becomes exactly the order's colors, so no earlier-order colors
-        # leak across switches. Revert path is advertised in the line.
-        self.assertIn("localStorage.setItem(T.storageKey, "
-                      "JSON.stringify(clean))", APP_JS)
-        self.assertNotIn("Object.assign(merged, clean)", APP_JS)
-        self.assertIn("/theme default", APP_JS)
+    def test_theme_apply_merges_and_rebuilds(self):
+        # Merge semantics: omitted keys keep their values; a running
+        # starfield rebuilds so the new sky takes effect at once.
+        # Frontend still re-validates shapes before applying.
+        self.assertIn("Object.assign(merged, clean)", APP_JS)
+        self.assertIn("JSON.stringify(merged)", APP_JS)
+        self.assertIn("themeValueOk", APP_JS)
+        self.assertIn(
+            "if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }",
+            APP_JS)
 
     def test_theme_value_shapes_checked(self):
         # Frontend twin of the bridge's theme_color_error: hex roles,

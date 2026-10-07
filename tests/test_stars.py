@@ -51,10 +51,22 @@ class TestStarsWelcome(unittest.TestCase):
         self.assertIn("prefers-reduced-motion", APP_JS)
 
     def test_theme_matched_backdrop(self):
+        # Sky hues come from the live theme star / starBg0 / starBg1
+        # roles with the current palette as fallback; the gradient is
+        # composed per call, never baked at load (or a theme.apply
+        # could never move a sky the field already shows).
+        for key, fallback in (("star", "#4C4541"),
+                              ("starBg0", "#F7DAA2"),
+                              ("starBg1", "#FCF0DA")):
+            self.assertIn(f"themeColor('{key}', '{fallback}')", STARS_JS)
+        self.assertIn("function defaultBackground()", STARS_JS)
+        self.assertNotIn("DEFAULT_BACKGROUND", STARS_JS)
+        # The app passes no explicit hue: stars.js resolves the theme.
+        self.assertNotIn("starColor", APP_JS)
+        # …but a running field still rebuilds when a theme order lands.
         self.assertIn(
-            "radial-gradient(ellipse at bottom, #1a2334 0%, #0c0e12 100%)",
-            STARS_JS)
-        self.assertIn('starColor: "#e6e9ef"', APP_JS)
+            "if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }",
+            APP_JS)
 
 
 class TestStarsTuning(unittest.TestCase):

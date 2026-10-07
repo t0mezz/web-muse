@@ -2,9 +2,10 @@
 
 Every fresh clone gets the bridge-owned instruction file
 (`server/github_instructions.md` rendered with the repo name) as
-`AGENTS.md` — unless the repo ships its own, which is never overwritten.
-The host loads it via `--trust-workspace` (now default-on). Sessions
-rooted at a seeded leaf join the gh/git auto-approve set.
+`WEB-MUSE.md` — deliberately not `AGENTS.md`, so a repo's own rules
+file can never collide and both coexist. The host loads it via
+`--trust-workspace` (now default-on). Sessions rooted at a seeded
+leaf join the gh/git auto-approve set.
 
 Run: python3 -m unittest tests.test_github_instructions -v (from repo root)
 """
@@ -90,18 +91,32 @@ class TestSeed(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             seeded, path = seed_github_instructions(tmp, "octo/hello")
             self.assertTrue(seeded)
-            self.assertEqual(path, str(Path(tmp) / "AGENTS.md"))
+            self.assertEqual(
+                path, str(Path(tmp) / GITHUB_INSTRUCTIONS_FILENAME))
             body = Path(path).read_text()
             self.assertIn("octo/hello", body)
             self.assertTrue(body.startswith(GITHUB_INSTRUCTIONS_MARKER))
 
-    def test_seed_never_overwrites_repo_file(self):
+    def test_seed_coexists_with_repo_rules(self):
+        # A repo's own AGENTS.md no longer blocks the seed: the
+        # bridge-owned name lands beside it, both files intact.
         with tempfile.TemporaryDirectory() as tmp:
             own = Path(tmp) / "AGENTS.md"
             own.write_text("# repo's own rules\n")
             seeded, path = seed_github_instructions(tmp, "octo/hello")
+            self.assertTrue(seeded)
+            self.assertEqual(
+                path, str(Path(tmp) / GITHUB_INSTRUCTIONS_FILENAME))
+            self.assertEqual(own.read_text(), "# repo's own rules\n")
+            self.assertIn("octo/hello", Path(path).read_text())
+
+    def test_seed_never_overwrites_bridge_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / GITHUB_INSTRUCTIONS_FILENAME
+            target.write_text("# earlier seed\n")
+            seeded, path = seed_github_instructions(tmp, "octo/hello")
             self.assertFalse(seeded)
-            self.assertEqual(Path(path).read_text(), "# repo's own rules\n")
+            self.assertEqual(Path(path).read_text(), "# earlier seed\n")
 
     def test_has_seeded_instructions(self):
         with tempfile.TemporaryDirectory() as tmp:

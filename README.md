@@ -215,9 +215,9 @@ not delete its clone. Failures carry a machine-readable `code`
 
 Every fresh clone also gets the bridge's instruction file
 (`server/github_instructions.md` rendered with the repo name) as
-`AGENTS.md` — unless the repo ships its own, which is never overwritten
-— covering branch/PR conventions with `gh` and how to avoid approval
-prompts. The host loads it via `--trust-workspace` (default on; opt out
+`WEB-MUSE.md` — deliberately not `AGENTS.md`, so a repo's own rules
+file can never collide and both coexist — covering branch/PR
+conventions with `gh` and how to avoid approval prompts. The host loads it via `--trust-workspace` (default on; opt out
 with `--no-trust-workspace`). Sessions rooted at a seeded clone
 (`githubOpen` now, or a later `/new --path` at the same leaf) also get a
 narrow auto-approve policy: all `gh`, everyday `git`, read-only shell

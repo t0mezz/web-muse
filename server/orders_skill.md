@@ -23,11 +23,11 @@ after your turn.
 
 ## Actions
 
-- `theme.apply` — recolors the app immediately. `params.colors` maps a
-  theme color name to a new value. Replaces the whole theme: keys you
-  omit fall back to the defaults below, so send the FULL palette you
-  want (copy the defaults and edit them). Revert: the human runs
-  `/theme default`. Unknown names and wrongly shaped values are
+- `theme.apply` — recolors the app immediately, including a running
+  starfield (it rebuilds on the new sky). `params.colors` maps a
+  theme color name to a new value. Partial sends are fine: keys you
+  omit keep their current values. To revert a recolor, re-apply the
+  defaults below. Unknown names and wrongly shaped values are
   rejected and the receipt lists them with the expected shape.
 - `theme.save` — proposes a reusable named theme:
   `params: {"name": "harbor-dusk", "colors": {...full palette...}}`.
@@ -50,10 +50,8 @@ after your turn.
 
 ## Theme colors
 
-29 color names in 9 roles. Copy the defaults as your base and edit
-them; `default.json` under the app's saved themes is this same palette,
-with `midnight` (dark blue) and `sorbet` (rose) as further examples of
-complete, coherent palettes.
+29 color names in 9 roles. Send only the roles you are changing;
+omitted roles keep their current values.
 
 Value shapes (wrong shapes are rejected, never silently applied):
 every role takes `#rgb`, `#rrggbb` or `#rrggbbaa` (e.g. `"#AEAC78"`),
@@ -90,7 +88,7 @@ the palette on one side of the light/dark line: light surfaces need
 dark text, dark surfaces need light text. When unsure, keep the
 default text roles and only move the surfaces and accent.
 
-Current defaults (copy, edit, send back whole):
+Current defaults (copy, edit, send back the roles you change):
 
 ```json
 {"bg": "#FCF0DA", "panel": "#F1E6D1", "panel2": "#E9DDC9",
