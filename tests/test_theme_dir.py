@@ -84,8 +84,9 @@ class TestThemeCommand(unittest.TestCase):
         self.assertIn("cmdTheme", APP_JS)
 
     def test_bare_lists_and_named_applies(self):
-        # Empty argument lists what the bridge reports ...
-        self.assertIn('fetch("themes")', APP_JS)
+        # Empty argument lists what the bridge reports (uncached, so an
+        # edited themes dir lists fresh) ...
+        self.assertIn('fetch("themes", { cache: "no-store" })', APP_JS)
         self.assertIn("Apply: /theme <name>", APP_JS)
         # ... a name is fetched, validated against theme.js keys,
         # applied, and persisted like agent theme orders.
@@ -93,6 +94,28 @@ class TestThemeCommand(unittest.TestCase):
         self.assertIn("T.apply(clean)", APP_JS)
         self.assertIn("localStorage.setItem(T.storageKey", APP_JS)
         self.assertIn("Unknown theme", APP_JS)
+
+
+class TestThemeReload(unittest.TestCase):
+    """One-step theme iteration: editing web/themes/<name>.json takes
+    effect via the composer alone — no bridge restart, no switching
+    away and back."""
+
+    def test_fetches_bypass_http_cache(self):
+        # An edited theme file must come back fresh on re-run, even in
+        # browsers that otherwise serve a cached copy of the same URL.
+        self.assertIn('fetch("themes", { cache: "no-store" })', APP_JS)
+        self.assertIn(
+            'fetch("themes/" + encodeURIComponent(hit) + ".json", '
+            '{ cache: "no-store" })', APP_JS)
+
+    def test_reload_reapplies_active_theme(self):
+        # /theme reload re-fetches the active saved theme and applies
+        # it; the active name is recorded on every /theme <name>.
+        self.assertIn("cmdThemeReload", APP_JS)
+        self.assertIn("web-muse:theme-name", APP_JS)
+        self.assertIn("localStorage.setItem(THEME_NAME_KEY", APP_JS)
+        self.assertIn("Reload active: /theme reload", APP_JS)
 
 
 class TestThemesEndpoint(unittest.TestCase):
@@ -119,6 +142,40 @@ class TestThemesEndpoint(unittest.TestCase):
             names = json.loads(payload)["themes"]
             self.assertIn("default", names)
             self.assertEqual(names, sorted(names))
+        asyncio.run(body())
+
+    def test_edited_theme_served_without_restart(self):
+        """Rewriting web/themes/<name>.json changes the next GET.
+
+        The bridge reads theme files per request and marks them
+        no-store, so iterating on a theme never needs a restart —
+        the composer just re-fetches."""
+        async def get(srv, path):
+            writer = FakeWriter()
+            await srv._serve_http(writer, path)
+            head, payload = bytes(writer.data).split(b"\r\n\r\n", 1)
+            self.assertIn(b"200 OK", head)
+            self.assertIn(b"no-store", head)
+            return payload
+
+        async def body():
+            with tempfile.TemporaryDirectory() as tmp:
+                web = Path(tmp)
+                (web / "themes").mkdir()
+                (web / "index.html").write_text("x")
+                (web / "themes" / "wip.json").write_text(
+                    '{"accent": "#111111"}')
+                srv = HttpWsServer(router=None, web_dir=str(web))
+                first = await get(srv, "/themes/wip.json")
+                self.assertIn(b"#111111", first)
+                (web / "themes" / "wip.json").write_text(
+                    '{"accent": "#222222"}')
+                second = await get(srv, "/themes/wip.json")
+                self.assertIn(b"#222222", second)
+                (web / "themes" / "fresh.json").write_text("{}")
+                names = json.loads(
+                    await get(srv, "/themes"))["themes"]
+                self.assertEqual(names, ["fresh", "wip"])
         asyncio.run(body())
 
 

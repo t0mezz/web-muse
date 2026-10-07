@@ -23,6 +23,13 @@ themes never leaks colors from the previous one. Agent `theme.apply`
 orders replace the same way; an approved agent `theme.save` order lands
 here as a new `<name>.json` file.
 
+## Iterating
+
+Editing a file here takes effect in one step — no bridge restart, no
+switching away and back. The composer fetches theme files uncached, so
+just re-apply: `/theme <name>` for any saved theme, or `/theme reload`
+for the active one (bare `/theme` marks it with `*`).
+
 ## Colors
 
 What each key in `../theme.js` (`WebMuseTheme.colors`) is used for.
