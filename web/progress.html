@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>web-muse · bridge progress</title>
 <style>
+/* Palette fallback = web/theme.js defaults (applied live when theme.js
+ * loads below); edit colors there. */
 :root { --bg: #0c0e12; --panel: #0e1116; --line: #262b36; --fg: #e6e9ef;
   --dim: #9aa3b2; --ok: #3fb950; --warn: #d29922; --err: #f85149; --accent: #6ea8fe;
+  --faint: #6b7280; --codeBg: #0a0c10;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
@@ -28,11 +31,11 @@ a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
 .tile .v.good { color: var(--ok); }
 .tile .v.bad { color: var(--err); }
 h2 { font-size: 13px; color: var(--dim); margin: 18px 0 6px; font-weight: 600; }
-#log { background: #0a0c10; border: 1px solid var(--line); border-radius: 12px;
+#log { background: var(--codeBg); border: 1px solid var(--line); border-radius: 12px;
   font-family: var(--mono); font-size: 12px; padding: 10px 12px; max-height: 46vh;
   overflow-y: auto; display: flex; flex-direction: column; gap: 2px; text-align: left; }
 #log[hidden] { display: none; }
-#log .ts { color: #6b7280; margin-right: 8px; }
+#log .ts { color: var(--faint); margin-right: 8px; }
 #log .ev-ok { color: var(--ok); }
 #log .ev-err { color: var(--err); }
 #log .ev-info { color: var(--dim); }
@@ -71,6 +74,7 @@ button:hover { border-color: var(--accent); }
   <h2 id="log-h">Event log</h2>
   <div id="log" aria-live="off"></div>
 </main>
+<script src="/theme.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);

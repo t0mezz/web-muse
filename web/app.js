@@ -895,13 +895,19 @@ function updateWelcome() {
  * Opening a session leaves it running: the bottom-right switch owns it,
  * and the choice persists per browser. */
 const STARS_KEY = "web-muse:stars";
-// Locked-in look: dimmed, thinned-out, gentle parallax.
+// Locked-in look: dimmed, thinned-out, gentle parallax. The star hue is
+// the theme fg; the literal below is the same color as fallback.
 const STARS_OPTIONS = {
   starColor: "#e6e9ef",
   counts: [650, 260, 130],
   opacity: 0.7,
   factor: 0.0125,
 };
+// theme.js (loaded first) re-sources the hue from the color config;
+// without it the literal above stands as the fallback.
+if (window.WebMuseTheme) {
+  STARS_OPTIONS.starColor = window.WebMuseTheme.get("fg", "#e6e9ef");
+}
 let stopStarsFx = null;
 // Explicit toggle choice wins; otherwise follow prefers-reduced-motion.
 function starsWanted() {
