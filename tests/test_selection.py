@@ -3,7 +3,7 @@
 - Ctrl/Cmd+click toggles selection (desktop), 500ms long-press on mobile
 - Click toggles when selection active
 - Shift+click selects range between anchor and target
-- Ticker old pill look but in top side-head row with search/refresh, disabled when 0; trash to its right
+- Ticker pill in top side-head row with search/refresh, fully hidden when 0; trash to its right
 """
 
 import unittest
@@ -55,9 +55,9 @@ class TestSelectionInteractions(unittest.TestCase):
 class TestSelectionUI(unittest.TestCase):
     def test_ticker_pinned_left_below_status(self):
         self.assertIn('id="selection-ticker"', INDEX_HTML)
-        # Old look pill but moved up into top side-head row, disabled when 0
+        # Pill in top side-head row, fully hidden when 0
         self.assertIn(".ticker", STYLE_CSS)
-        self.assertIn(".ticker:disabled", STYLE_CSS)
+        self.assertIn("#selection-ticker", STYLE_CSS)
         idx_ticker = INDEX_HTML.index('id="selection-ticker"')
         idx_trash = INDEX_HTML.index('id="btn-delete-selected"')
         idx_search = INDEX_HTML.index('id="btn-search-sessions"')
@@ -80,7 +80,7 @@ class TestSelectionUI(unittest.TestCase):
         self.assertLess(idx_trash, idx_search)
 
     def test_sync_visibility(self):
-        self.assertIn('ticker.disabled = n === 0', APP_JS)
+        self.assertIn('ticker.hidden = n === 0', APP_JS)
         self.assertIn('trash.hidden = n === 0', APP_JS)
 
     def test_selected_row_styled(self):
