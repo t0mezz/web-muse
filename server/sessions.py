@@ -14,7 +14,7 @@ import re
 import shutil
 from pathlib import Path
 
-from server.github import GithubError, filter_repos, merge_branch_names, merge_repo_rows, run_gh_branches, run_gh_clone, run_gh_list, validate_branch, validate_fullname
+from server.github import GithubError, filter_repos, is_safe_leaf_name, merge_branch_names, merge_repo_rows, repo_dir_name, run_gh_branches, run_gh_clone, run_gh_list, validate_branch, validate_fullname
 from server.msp import MspError, uuid7
 
 LOG = logging.getLogger("web_muse.sessions")
@@ -915,13 +915,24 @@ def flag_missing_workspaces(result):
     return result
 
 
-# -- Seeded instructions for GitHub clones (Track 1) ------------------------
-GITHUB_INSTRUCTIONS_FILENAME = "WEB-MUSE.md"
+# -- Seeded instructions (AGENTS.md) --------------------------------------
+# Every bridge-owned session workspace gets an AGENTS.md at its root:
+# plain sessions get a short orientation + orders pointer, repo sessions
+# get the same plus "work in ./<leaf>/". The clone leaf itself gets the
+# GitHub instructions below as its own AGENTS.md — but only when the repo
+# ships none of its own (the seed never overwrites, so a repo's rules
+# always win and both files coexist via the session root).
+GITHUB_INSTRUCTIONS_FILENAME = "AGENTS.md"
+# Pre-rename name: recognized (never written) so sessions cloned before
+# the rename keep their gh auto-approve and instruction detection.
+LEGACY_GITHUB_INSTRUCTIONS_FILENAME = "WEB-MUSE.md"
 GITHUB_INSTRUCTIONS_MARKER = (
     "# web-muse: instructions for GitHub-cloned sessions "
     "(do not commit this file)")
 GITHUB_INSTRUCTIONS_TEMPLATE = (
     Path(__file__).resolve().parent / "github_instructions.md")
+SESSION_AGENTS_MARKER = (
+    "# web-muse: session workspace (bridge-owned)")
 
 
 def github_preapproved_section():
@@ -959,14 +970,63 @@ def render_github_instructions(full_name, template=None):
     return text.rstrip() + "\n\n" + github_preapproved_section()
 
 
-def seed_github_instructions(dest, full_name):
-    """Write the bridge-owned instruction file into a fresh clone.
+def render_session_agents(repo_leaf=None, full_name=None):
+    """Render the session-root AGENTS.md (pure).
 
-    The name is deliberately NOT AGENTS.md, so a repo's own rules file
-    can never collide: both files coexist. An existing bridge file is
-    never overwritten. Returns (seeded, path). Raises OSError on write
-    failure (the caller logs and continues — seeding must never fail
-    the open).
+    Plain sessions get orientation + orders pointer; repo sessions also
+    name their clone leaf so the agent works in ./<leaf>/ and never at
+    the session root. Starts with SESSION_AGENTS_MARKER.
+    """
+    lines = [SESSION_AGENTS_MARKER, ""]
+    if repo_leaf:
+        where = (f"This directory is your session workspace. The repo "
+                 f"{full_name or repo_leaf} lives in `./{repo_leaf}/` — "
+                 f"do all repo work (git, gh, edits, builds, tests) there, "
+                 f"never at the session root.")
+    else:
+        where = ("This directory is your session workspace. Do all work "
+                 "here.")
+    lines += [where, "",
+              "App orders: to change the app itself (theme, bridge policy), "
+              "read `.web-muse/ORDERS.md` and send an order file — "
+              "that doc is the full protocol.",
+              "Skills load from this workspace root; a repo clone's own "
+              "AGENTS.md governs inside the clone when one exists."]
+    return "\n".join(lines) + "\n"
+
+
+def seed_session_agents(root, repo_leaf=None, full_name=None):
+    """Write the session-root AGENTS.md into one workspace (best-effort).
+
+    An existing file is never overwritten (a repo checkout or an older
+    seed always wins). Never raises: seeding must not fail a session
+    start. Returns (seeded, path).
+    """
+    if not root:
+        return False, ""
+    target = Path(root) / GITHUB_INSTRUCTIONS_FILENAME
+    try:
+        if target.is_file():
+            return False, str(target)
+    except OSError:
+        return False, str(target)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(render_session_agents(repo_leaf, full_name))
+    except OSError:
+        LOG.warning("session agents file unwritable at %s", target)
+        return False, str(target)
+    return True, str(target)
+
+
+def seed_github_instructions(dest, full_name):
+    """Write the bridge-owned instruction file into a fresh clone leaf.
+
+    The file is AGENTS.md, seeded only when the repo ships none of its
+    own: an existing file (repo rules or an earlier seed) is never
+    overwritten, so repo-authored rules always win. Returns (seeded,
+    path). Raises OSError on write failure (the caller logs and
+    continues — seeding must never fail the open).
     """
     target = Path(dest) / GITHUB_INSTRUCTIONS_FILENAME
     if target.exists():
@@ -975,15 +1035,37 @@ def seed_github_instructions(dest, full_name):
     return True, str(target)
 
 
-def has_seeded_instructions(root):
-    """True when root holds the bridge-seeded file (marker first line)."""
+def _read_marker_first_line(path):
+    """First line of a file, or "" when unreadable (never raises)."""
     try:
-        if not root:
-            return False
-        text = (Path(root) / GITHUB_INSTRUCTIONS_FILENAME).read_text()
+        with open(path, "r", errors="replace") as f:
+            return f.readline().rstrip("\n")
+    except (OSError, ValueError):
+        return ""
+
+
+def has_seeded_instructions(root):
+    """True when root holds a bridge-seeded instruction file.
+
+    Recognizes the session-root AGENTS.md (SESSION_AGENTS_MARKER), the
+    clone-leaf AGENTS.md (GITHUB_INSTRUCTIONS_MARKER), and the pre-rename
+    WEB-MUSE.md leaf file — so sessions from before the rename keep
+    their gh auto-approve. A repo's own AGENTS.md never matches (no
+    marker), so it is never mistaken for a seed.
+    """
+    if not root:
+        return False
+    try:
+        first = _read_marker_first_line(
+            Path(root) / GITHUB_INSTRUCTIONS_FILENAME)
     except (OSError, ValueError):
         return False
-    return text.startswith(GITHUB_INSTRUCTIONS_MARKER)
+    if first.startswith((SESSION_AGENTS_MARKER,
+                         GITHUB_INSTRUCTIONS_MARKER)):
+        return True
+    legacy = _read_marker_first_line(
+        Path(root) / LEGACY_GITHUB_INSTRUCTIONS_FILENAME)
+    return legacy.startswith(GITHUB_INSTRUCTIONS_MARKER)
 
 
 class SessionRouter:
@@ -1645,7 +1727,7 @@ class SessionRouter:
                     result["stale"] = True
                 return reply(True, result=result)
             if mtype == "githubClone":
-                # Shallow-clone into workspaces/<sessionId>/repo/, admitted
+                # Shallow-clone into workspaces/<sessionId>/<repo>/, admitted
                 # async: the reply is instant ({accepted, opId, ...}) and
                 # the outcome streams back as a githubCloneResult event, so
                 # the connection stays responsive and githubCancel can
@@ -1770,12 +1852,14 @@ class SessionRouter:
         # Default workspace: every new session gets its own directory under
         # the base, unless the client named its own root(s). A client-made
         # sessionId is minted here when absent so the dir exists pre-start.
+        auto_ws = False
         if self._workspace_base and p.get("workspaceRoot") is None \
                 and p.get("workspaceRoots") is None:
             sid = p.get("sessionId") or uuid7()
             wsdir = session_workspace_dir(self._workspace_base, sid)
             p["sessionId"] = sid
             p["workspaceRoot"] = wsdir
+            auto_ws = True
         # mcpAttach: resolve settings.json server names bridge-side (secrets
         # never cross the browser boundary); explicit config.mcpServers wins.
         attach = msg.get("mcpAttach")
@@ -1827,20 +1911,30 @@ class SessionRouter:
             # each turn. Manual roots included: one hidden doc file.
             self._workspace_roots[sid] = p["workspaceRoot"]
             seed_orders_skill(p["workspaceRoot"])
+            if auto_ws:
+                # Bridge-owned session dir: plain AGENTS.md at the root.
+                # Manual roots are the user's own dirs — no root-level
+                # file is seeded there. (Repo sessions seed theirs in
+                # _open_cloned, which routes through here too — but with
+                # an explicit workspaceRoot, so auto_ws is False there.)
+                seed_session_agents(p["workspaceRoot"])
         if p.get("workspaceRoot") and has_seeded_instructions(
                 p.get("workspaceRoot")):
-            # Rooted at a seeded clone (githubOpen now, or a later
-            # `new --path` at the same leaf): gh/git approvals
+            # Rooted at a seeded workspace (githubOpen session dir, a
+            # later `new --path` at the session dir or its clone leaf, or
+            # a pre-rename WEB-MUSE.md leaf): gh/git approvals
             # auto-decide and the instruction file is already on disk.
             self._gh_auto_sids.add(sid)
         return result
 
     # -- GitHub clones (gh-only v1) -----------------------------------------
-    def _clone_leaf(self, session_id):
-        """`workspaces/<sid>/repo` leaf for a clone: contained and reusable.
+    def _clone_leaf(self, session_id, full_name=None):
+        """`workspaces/<sid>/<repo>` leaf for a clone: contained and reusable.
 
-        The leaf is created only by cloning, so a non-git residue is always
-        a previous attempt's leftover: remove it so retries start clean.
+        The leaf name is the repo slug (legacy sessions used "repo", kept
+        as the fallback when no fullname is given). The leaf is created
+        only by cloning, so a non-git residue is always a previous
+        attempt's leftover: remove it so retries start clean.
         Raises ValueError (bad id / no workspace base) or GithubError
         (dest_exists when this session already holds a clone).
         """
@@ -1848,7 +1942,8 @@ class SessionRouter:
             raise ValueError("github clone needs a workspace base "
                              "(bridge started with --workspace-base \"\")")
         wsdir = session_workspace_dir(self._workspace_base, session_id or "")
-        leaf = Path(wsdir) / "repo"
+        leaf = Path(wsdir) / (repo_dir_name(full_name)
+                              if full_name is not None else "repo")
         if leaf.is_dir() and (leaf / ".git").is_dir():
             raise GithubError(
                 "dest_exists",
@@ -1856,6 +1951,37 @@ class SessionRouter:
         if leaf.exists() or leaf.is_symlink():
             shutil.rmtree(leaf, ignore_errors=True)
         return str(leaf)
+
+    def _find_clone_leaf(self, session_id):
+        """Locate one session's clone leaf, whatever its name (pure-ish).
+
+        Returns the leaf Path (a direct child of the session dir holding
+        `.git`), or None. Legacy "repo" leaves match the same way. Raises
+        ValueError on a bad id or missing workspace base. Never raises on
+        a missing session dir (None — nothing to clean).
+        """
+        sid = session_id or ""
+        if not SAFE_SESSION_ID.fullmatch(sid) or sid.startswith(".") \
+                or sid in (".", ".."):
+            raise ValueError(f"unsafe sessionId for github clean: {sid!r}")
+        if not self._workspace_base:
+            raise ValueError("github clean needs a workspace base")
+        root = Path(self._workspace_base).resolve()
+        wsdir = (root / sid).resolve()
+        if wsdir.parent != root:
+            raise ValueError(f"refusing to clean outside workspace: {sid!r}")
+        if not wsdir.is_dir():
+            return None
+        try:
+            children = sorted(p for p in wsdir.iterdir()
+                              if p.is_dir() and not p.is_symlink()
+                              and is_safe_leaf_name(p.name))
+        except OSError:
+            return None
+        for child in children:
+            if (child / ".git").is_dir():
+                return child
+        return None
 
     def _emit_clone_progress(self, conn, op_id, full_name, phase, line=None):
         """Push one githubCloneProgress event (global: no sessionId)."""
@@ -1914,10 +2040,10 @@ class SessionRouter:
                 on_line=lambda line: self._emit_clone_progress(
                     conn, op_id, full_name, "progress", line))
             self._emit_clone_progress(conn, op_id, full_name, "completed")
-            # Track 1: seed the instruction file into the fresh clone
-            # (both paths — opened now or rooted later via `new --path`).
-            # Seeding never fails the clone: on error we log and report
-            # seededInstructions False.
+            # Seed the leaf AGENTS.md into the fresh clone (both paths —
+            # opened now or rooted later via `new --path`); skipped when
+            # the repo ships its own. Seeding never fails the clone: on
+            # error we log and report seededInstructions False.
             try:
                 seeded, _ = seed_github_instructions(dest, full_name)
             except OSError:
@@ -1979,8 +2105,15 @@ class SessionRouter:
 
     async def _open_cloned(self, conn, full_name, dest, session_id, op_id,
                            open_opts):
-        """session/start rooted at a fresh clone (open half of githubOpen)."""
-        new_msg = {"workspaceRoot": dest, "sessionId": session_id}
+        """session/start rooted at the session dir (open half of githubOpen).
+
+        The agent works in ./<leaf>/ (named in the session AGENTS.md);
+        the session root holds the bridge files (AGENTS.md, .web-muse/).
+        The leaf AGENTS.md was seeded by _clone_task before this runs.
+        """
+        session_root = str(Path(dest).parent)
+        leaf = Path(dest).name
+        new_msg = {"workspaceRoot": session_root, "sessionId": session_id}
         if open_opts.get("mcpAttach") is not None:
             new_msg["mcpAttach"] = open_opts.get("mcpAttach")
         model = open_opts.get("model")
@@ -1998,6 +2131,9 @@ class SessionRouter:
                 and open_opts["approvalMode"].strip():
             new_msg["approvalMode"] = open_opts["approvalMode"].strip()
         result = await self._do_new(conn, new_msg)
+        # Session-root AGENTS.md naming the clone leaf (best-effort,
+        # never overwrites — _do_new seeds only auto-created roots).
+        seed_session_agents(session_root, leaf, full_name)
         self._gh_auto_sids.add(session_id)
         name = open_opts.get("name")
         if isinstance(name, str) and name.strip():
@@ -2045,15 +2181,16 @@ class SessionRouter:
         return {"cancelled": True, "opId": op_id}
 
     def _do_github_clone(self, conn, msg):
-        """Admit a clone into `workspaces/<sid>/repo/` (no MSP session).
+        """Admit a clone into `workspaces/<sid>/<repo>/` (no MSP session).
 
-        The caller then roots a session at `dest` via `new` (which runs the
-        usual first-use confirm) or uses `githubOpen` for the combined step.
+        The caller then roots a session at the session dir via `new`
+        (which runs the usual first-use confirm) or uses `githubOpen`
+        for the combined step.
         """
         full_name = validate_fullname(msg.get("fullName"))
         sid = msg.get("sessionId") or uuid7()
         op_id = self._check_op_id(msg.get("opId") or uuid7())
-        dest = self._clone_leaf(sid)
+        dest = self._clone_leaf(sid, full_name)
         branch = msg.get("branch")
         if branch is not None:
             branch = validate_branch(branch)
@@ -2061,11 +2198,11 @@ class SessionRouter:
                                   branch=branch)
 
     def _do_github_open(self, conn, msg):
-        """Admit a clone + `session/start` rooted at the clone."""
+        """Admit a clone + `session/start` rooted at the session dir."""
         full_name = validate_fullname(msg.get("fullName"))
         sid = uuid7()
         op_id = self._check_op_id(msg.get("opId") or uuid7())
-        dest = self._clone_leaf(sid)
+        dest = self._clone_leaf(sid, full_name)
         branch = msg.get("branch")
         if branch is not None:
             branch = validate_branch(branch)
@@ -2143,20 +2280,24 @@ class SessionRouter:
                 "confirmed": True}
 
     def _clean_github_clone(self, session_id):
-        """Delete one session's `repo/` leaf (raises outside the leaf)."""
+        """Delete one session's clone leaf (raises outside the leaf).
+
+        The leaf is found by `.git` presence, so named leaves and legacy
+        "repo" leaves clean the same way. Only the clone leaf goes —
+        the session dir (AGENTS.md, .web-muse/) is kept unless it ends
+        up empty.
+        """
+        leaf = self._find_clone_leaf(session_id)
         sid = session_id or ""
-        if not SAFE_SESSION_ID.fullmatch(sid) or sid.startswith(".") \
-                or sid in (".", ".."):
-            raise ValueError(f"unsafe sessionId for github clean: {sid!r}")
-        if not self._workspace_base:
-            raise ValueError("github clean needs a workspace base")
-        root = Path(self._workspace_base).resolve()
-        leaf = (root / sid / "repo").resolve()
-        if leaf.name != "repo" or leaf.parent.name != sid \
-                or root not in leaf.parents:
-            raise ValueError(f"refusing to clean outside clone leaf: {sid!r}")
-        if not leaf.is_dir():
-            return {"removed": False, "dest": str(leaf)}
+        if leaf is None:
+            if not self._workspace_base:
+                raise ValueError("github clean needs a workspace base")
+            return {"removed": False,
+                    "dest": str(Path(self._workspace_base).resolve()
+                                / sid)}
+        if not is_safe_leaf_name(leaf.name):
+            raise ValueError(
+                f"refusing to clean outside clone leaf: {sid!r}")
         shutil.rmtree(leaf)
         try:  # drop the session dir too when the clone was all it held
             leaf.parent.rmdir()

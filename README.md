@@ -87,10 +87,10 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 | `mcp` | local `settings.json` inventory (MSP v1 has no mcp/* methods) |
 | `browse {path?}` | list one server-side directory for the `+` explorer (empty → `$HOME`) |
 | `githubRepos {search?, limit?}` | `gh repo list` rows `{name, fullName, private, defaultBranch, updatedAt}` (known rows cached, `gh` still checked for new ones every call; `stale: true` when `gh` fails and cached rows are served) |
-| `githubClone {fullName, sessionId?, opId?}` | admit a shallow `gh repo clone` into `workspaces/<sessionId>/repo/` (cancellable) |
-| `githubOpen {fullName, name?, mcpAttach?, opId?}` | admit a clone + `session/start` rooted at the clone |
+| `githubClone {fullName, sessionId?, opId?}` | admit a shallow `gh repo clone` into `workspaces/<sessionId>/<repo>/` (cancellable) |
+| `githubOpen {fullName, name?, mcpAttach?, opId?}` | admit a clone + `session/start` rooted at the session dir |
 | `githubCancel {opId}` | cancel a running clone |
-| `githubClean {sessionId}` | delete one session's `repo/` leaf (session kept) |
+| `githubClean {sessionId}` | delete one session's clone leaf (session kept) |
 | `ordersDecide {sessionId, orderId, approved}` | human verdict on a staged agent policy order (executes `allowedCommands.update`) |
 
 Server→client: `{type:"hello"}`, `{type:"event", method, params}` (MSP
@@ -196,8 +196,11 @@ outside its workspace base.
 your repos via the `gh` CLI — install it and run `gh auth login` in a
 terminal first; the bridge never holds a token. `Open` (or
 `/github open <owner/repo> [name]`) shallow-clones (`--depth 1`, default
-branch only) into `workspaces/<sessionId>/repo/` and roots a session
-there in one step; `Clone` (or `/github clone`) clones without opening.
+branch only) into `workspaces/<sessionId>/<repo>/` (named after the
+repo) and roots a session at the session directory in one step — the
+agent works inside `./<repo>/`, while the session root holds the
+bridge files (`AGENTS.md`, `.web-muse/`); `Clone` (or `/github clone`)
+clones without opening.
 Picking a repo to open is the consent, recorded in the browser's
 directory allow-list like a manual-root confirm. One session per clone:
 reopening a session reattaches to its dir, opening the same repo again
@@ -207,13 +210,17 @@ not delete its clone. Failures carry a machine-readable `code`
 (`gh_missing`, `gh_unauth`, `invalid_repo`, …) and the UI prints the
 `gh:` stderr tail verbatim.
 
-Every fresh clone also gets the bridge's instruction file
-(`server/github_instructions.md` rendered with the repo name) as
-`WEB-MUSE.md` — deliberately not `AGENTS.md`, so a repo's own rules
-file can never collide and both coexist — covering branch/PR
-conventions with `gh` and how to avoid approval prompts. The host loads it via `--trust-workspace` (default on; opt out
-with `--no-trust-workspace`). Sessions rooted at a seeded clone
-(`githubOpen` now, or a later `/new --path` at the same leaf) also get a
+Every session workspace root gets a bridge-owned `AGENTS.md`
+(orientation plus the app-orders pointer); repo sessions name their
+clone leaf there so the agent works in `./<repo>/`. The clone leaf
+itself gets the bridge's GitHub instructions
+(`server/github_instructions.md` rendered with the repo name) as its
+own `AGENTS.md` — but only when the repo ships none, so a repo's own
+rules file always wins — covering branch/PR
+conventions with `gh` and how to avoid approval prompts. The host loads them via `--trust-workspace` (default on; opt out
+with `--no-trust-workspace`). Sessions rooted at a seeded workspace
+(`githubOpen` now, or a later `/new --path` at the session dir or its
+clone leaf) also get a
 narrow auto-approve policy: all `gh`, everyday `git`, read-only shell
 inspection (`ls`, `cat`, `grep`, `find`, …) and common build/test
 runners (`npm`, `pytest`, `cargo`, `go`, `make`, …) run without
