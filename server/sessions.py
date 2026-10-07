@@ -1021,24 +1021,16 @@ def delete_session_files(session_id, base=None):
     return sorted(removed)
 
 
-def flag_missing_workspaces(result):
-    """Flag `session/list` rows whose workspaceRoot is gone from disk.
-
-    Sessions are host-owned: a removed directory only hides the row (the
-    UI filters on `workspaceMissing`) — the session itself is never deleted
-    here, so a transiently missing mount reappears with history intact
-    instead of losing everything. Rows without a root are left alone.
-    """
-    sessions = result.get("sessions") if isinstance(result, dict) else None
-    if not isinstance(sessions, list):
-        return result
-    for s in sessions:
-        if not isinstance(s, dict):
-            continue
-        root = s.get("workspaceRoot")
-        if isinstance(root, str) and root and not os.path.isdir(root):
-            s["workspaceMissing"] = True
-    return result
+def _workspace_under_base(workspace_root, base):
+    """True when workspace_root is contained under base (both resolved)."""
+    if not base or not isinstance(workspace_root, str) or not workspace_root:
+        return False
+    try:
+        resolved_base = Path(base).resolve()
+        resolved_root = Path(workspace_root).resolve()
+        return resolved_base in resolved_root.parents or resolved_root == resolved_base
+    except (OSError, ValueError):
+        return False
 
 
 # -- Seeded instructions (AGENTS.md) --------------------------------------
@@ -1765,7 +1757,29 @@ class SessionRouter:
                 if msg.get("filter") is not None:
                     p["filter"] = msg["filter"]
                 result = await self._msp.call("session/list", p)
-                result = flag_missing_workspaces(result)
+                # Auto-sync: workspace dir gone => delete the session (scoped to base).
+                if isinstance(result, dict) and isinstance(result.get("sessions"), list):
+                    for s in list(result["sessions"]):
+                        if not isinstance(s, dict):
+                            continue
+                        root = s.get("workspaceRoot")
+                        sid = s.get("sessionId")
+                        if not sid or not isinstance(root, str) or not root:
+                            continue
+                        if os.path.isdir(root):
+                            continue
+                        if not _workspace_under_base(root, self._workspace_base):
+                            continue
+                        try:
+                            delete_session_files(sid, base=self._sessions_base)
+                        except Exception:
+                            LOG.warning("auto-delete missing workspace failed for %s", sid, exc_info=True)
+                            continue
+                        try:
+                            self._drop_routing(sid)
+                        except Exception:
+                            pass
+                        self._deleted_sids.add(sid)
                 # Mark bridge-started rows for first-group sorting in the
                 # UI. Presence-only (no False key) so untouched rows stay
                 # byte-identical to the host's.
@@ -2016,10 +2030,6 @@ class SessionRouter:
                 # confirms; the bridge only enforces the leaf shape).
                 return reply(True, result=self._clean_github_clone(
                     msg.get("sessionId")))
-            if mtype == "pruneMissing":
-                # Delete host sessions whose workspace dir is gone (the UI
-                # previews with dryRun, then confirms before executing).
-                return reply(True, result=await self._prune_missing(msg))
             if mtype == "githubOpen":
                 # Clone + session/start rooted at the clone, admitted async
                 # like githubClone (same events; the result carries the
@@ -2484,71 +2494,6 @@ class SessionRouter:
                                    "reasoningEffort": msg.get("reasoningEffort"),
                                    "approvalMode": msg.get("approvalMode")},
                                   branch=branch)
-
-    async def _prune_missing(self, msg):
-        """Remove session files whose workspace dir is gone (scoped, safe).
-
-        Only sessions rooted under this bridge's workspace base are
-        candidates: external manual roots may be transiently missing (an
-        unmounted drive is not a deletion), and removing those sessions
-        would destroy their transcripts. dryRun previews without deleting.
-        Removal is file-based (see delete_session_files), never the host's
-        deletion registry, so there is nothing to retry or confirm by
-        re-listing: gone from disk means deleted. "pending" stays empty
-        for reply-shape compatibility.
-        """
-        dry = bool(msg.get("dryRun"))
-        try:
-            limit = max(1, min(1000, int(msg.get("limit", 100))))
-        except (TypeError, ValueError):
-            limit = 100
-        listed = await self._msp.call("session/list", {"limit": limit})
-        sessions = listed.get("sessions") if isinstance(listed, dict) else None
-        if not isinstance(sessions, list):
-            sessions = []
-        flag_missing_workspaces({"sessions": sessions})
-        base = Path(self._workspace_base).resolve() \
-            if self._workspace_base else None
-        candidates, outside = [], 0
-        for s in sessions:
-            if not isinstance(s, dict) or not s.get("workspaceMissing"):
-                continue
-            try:
-                contained = base is not None and \
-                    base in Path(s.get("workspaceRoot") or "").resolve().parents
-            except (OSError, ValueError):
-                contained = False
-            if contained:
-                candidates.append(s)
-            else:
-                outside += 1
-        brief = lambda s: {"sessionId": s.get("sessionId"),
-                           "name": s.get("name"),
-                           "workspaceRoot": s.get("workspaceRoot")}
-        if dry:
-            return {"dryRun": True,
-                    "candidates": [brief(s) for s in candidates],
-                    "outsideBase": outside}
-        deleted, failed = [], []
-        for s in candidates:
-            sid = s.get("sessionId")
-            try:
-                removed = delete_session_files(
-                    sid, base=self._sessions_base)
-            except Exception as e:
-                err = {"sessionId": sid, "message": str(e)}
-                if getattr(e, "code", None) is not None:
-                    err["code"] = e.code
-                failed.append(err)
-                continue
-            self._drop_routing(sid)
-            self._deleted_sids.add(sid)
-            entry = brief(s)
-            entry["removed"] = removed
-            deleted.append(entry)
-        return {"dryRun": False, "deleted": deleted, "pending": [],
-                "failed": failed, "outsideBase": outside,
-                "confirmed": True}
 
     def _clean_github_clone(self, session_id):
         """Delete one session's clone leaf (raises outside the leaf).

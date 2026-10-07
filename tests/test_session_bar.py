@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from server.msp import MspError  # noqa: E402
-from server.sessions import SessionRouter, flag_missing_workspaces  # noqa: E402
+from server.sessions import SessionRouter, _workspace_under_base  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_JS = (ROOT / "web" / "app.js").read_text()
@@ -93,62 +93,55 @@ class TestResumeUnknownSession(unittest.TestCase):
         # not reshape, drop, or invent it.
         self.assertEqual(reply["result"]["sessions"], msp.rows)
 
-    def test_list_flags_removed_dirs(self):
+    def test_list_auto_deletes_removed_dirs(self):
         with tempfile.TemporaryDirectory() as d:
+            import os
+            wsbase = os.path.join(d, "ws")
+            os.makedirs(os.path.join(wsbase, "kept"))
+            store = os.path.join(d, "store")
+            os.makedirs(store)
+
+            def mkstore(sid):
+                main = Path(store) / "2026" / "10" / "05" / sid
+                main.mkdir(parents=True)
+                (main / "session.jsonl").write_text("{}\n")
+
+            mkstore("kept")
+            mkstore("gone")
+
             class MspWithDirs:
                 async def command(self, method, params=None):
                     raise AssertionError(method)
 
                 async def call(self, method, params=None):
                     return {"sessions": [
-                        {"sessionId": "kept", "workspaceRoot": d},
+                        {"sessionId": "kept", "workspaceRoot": os.path.join(wsbase, "kept")},
                         {"sessionId": "gone",
-                         "workspaceRoot": d + "/removed-xyz-123"},
+                         "workspaceRoot": os.path.join(wsbase, "gone")},
                     ]}
 
-            router = SessionRouter(msp=MspWithDirs(), workspace_base=None)
+            router = SessionRouter(msp=MspWithDirs(), workspace_base=wsbase,
+                                   sessions_base=store)
             reply = asyncio.run(router.handle_client_message(
                 FakeConn(), {"id": 1, "type": "list"}))
             self.assertTrue(reply["ok"], reply)
-            by_id = {s["sessionId"]: s
-                     for s in reply["result"]["sessions"]}
-            self.assertNotIn("workspaceMissing", by_id["kept"])
-            self.assertTrue(by_id["gone"]["workspaceMissing"])
+            ids = [s["sessionId"] for s in reply["result"]["sessions"]]
+            self.assertIn("kept", ids)
+            self.assertNotIn("gone", ids)
 
 
-class TestFlagMissingWorkspaces(unittest.TestCase):
-    def test_missing_dir_flagged_present_dir_not(self):
+class TestWorkspaceUnderBase(unittest.TestCase):
+    def test_contained_and_outside(self):
         with tempfile.TemporaryDirectory() as d:
-            result = {"sessions": [
-                {"sessionId": "a", "workspaceRoot": d},
-                {"sessionId": "b",
-                 "workspaceRoot": d + "/removed-xyz-123"},
-                {"sessionId": "c"},
-            ]}
-            out = flag_missing_workspaces(result)
-            by_id = {s["sessionId"]: s for s in out["sessions"]}
-            self.assertNotIn("workspaceMissing", by_id["a"])
-            self.assertTrue(by_id["b"]["workspaceMissing"])
-            self.assertNotIn("workspaceMissing", by_id["c"])
-
-    def test_never_deletes_rows(self):
-        # Hiding is the UI's job (it filters on the flag); the bridge only
-        # annotates, so a transiently missing mount reappears with history.
-        result = {"sessions": [
-            {"sessionId": "a", "workspaceRoot": "/gone/xyz-123"}]}
-        out = flag_missing_workspaces(result)
-        self.assertEqual(len(out["sessions"]), 1)
-        self.assertTrue(out["sessions"][0]["workspaceMissing"])
-
-    def test_non_list_shapes_pass_through(self):
-        self.assertEqual(flag_missing_workspaces({}), {})
-        self.assertEqual(flag_missing_workspaces({"sessions": None}),
-                         {"sessions": None})
-        self.assertEqual(flag_missing_workspaces(None), None)
+            base = str(Path(d) / "ws")
+            self.assertTrue(_workspace_under_base(str(Path(d) / "ws" / "a"), base))
+            self.assertFalse(_workspace_under_base("/media/usb-xyz/repo", base))
+            self.assertFalse(_workspace_under_base("", base))
+            self.assertFalse(_workspace_under_base(str(Path(d) / "ws" / "a"), None))
 
 
-class TestPruneMissing(unittest.TestCase):
-    """pruneMissing removes session files from disk, never via the host."""
+class TestAutoDeleteMissing(unittest.TestCase):
+    """list auto-deletes sessions whose workspace dir is gone (scoped)."""
 
     def _setup(self):
         tmp = tempfile.TemporaryDirectory()
@@ -172,7 +165,7 @@ class TestPruneMissing(unittest.TestCase):
         class Msp:
             async def command(self, method, params=None):
                 raise AssertionError(
-                    f"prune must not call the host (got {method})")
+                    f"auto-delete must not call the host (got {method})")
 
             async def call(self, method, params=None):
                 assert method == "session/list"
@@ -181,10 +174,6 @@ class TestPruneMissing(unittest.TestCase):
                      "workspaceRoot": str(wsbase / "kept")},
                     {"sessionId": "gone-sid", "name": "gone",
                      "workspaceRoot": str(wsbase / "gone")},
-                    {"sessionId": "ghost-sid", "name": "ghost",
-                     "workspaceRoot": str(wsbase / "ghost")},
-                    {"sessionId": "../evil", "name": "evil",
-                     "workspaceRoot": str(wsbase / "evil")},
                     {"sessionId": "ext-sid", "name": "ext",
                      "workspaceRoot": "/media/usb-xyz-123/repo"},
                     {"sessionId": "noroot-sid", "name": "noroot"},
@@ -195,86 +184,23 @@ class TestPruneMissing(unittest.TestCase):
                                sessions_base=str(store))
         return router, gone_main, gone_view
 
-    def test_dry_run_previews_without_deleting(self):
+    def test_list_auto_deletes_and_tombstones(self):
         router, gone_main, gone_view = self._setup()
         reply = asyncio.run(router.handle_client_message(
-            FakeConn(), {"id": 1, "type": "pruneMissing",
-                         "dryRun": True}))
+            FakeConn(), {"id": 1, "type": "list"}))
         self.assertTrue(reply["ok"], reply)
-        res = reply["result"]
-        self.assertTrue(res["dryRun"])
-        # Only under-base missing dirs are candidates; the external
-        # missing mount and the rootless row are left alone.
-        self.assertEqual(
-            sorted(c["sessionId"] for c in res["candidates"]),
-            ["../evil", "ghost-sid", "gone-sid"])
-        self.assertEqual(res["outsideBase"], 1)
-        self.assertTrue(gone_main.is_dir())
-        self.assertTrue(gone_view.is_dir())
-
-    def test_execute_removes_files_and_tombstones(self):
-        router, gone_main, gone_view = self._setup()
-        reply = asyncio.run(router.handle_client_message(
-            FakeConn(), {"id": 1, "type": "pruneMissing",
-                         "dryRun": False}))
-        self.assertTrue(reply["ok"], reply)
-        res = reply["result"]
-        self.assertFalse(res["dryRun"])
-        self.assertEqual(
-            sorted(d["sessionId"] for d in res["deleted"]),
-            ["ghost-sid", "gone-sid"])
-        # File removal is synchronous: nothing stays pending.
-        self.assertEqual(res["pending"], [])
-        self.assertTrue(res["confirmed"])
-        # The unsafe id is reported, not raised; file errors carry no code.
-        self.assertEqual(len(res["failed"]), 1)
-        self.assertEqual(res["failed"][0]["sessionId"], "../evil")
-        self.assertIn("unsafe", res["failed"][0]["message"])
-        self.assertNotIn("code", res["failed"][0])
-        self.assertEqual(res["outsideBase"], 1)
-        # Files are actually gone now.
+        ids = [s["sessionId"] for s in reply["result"]["sessions"]]
+        self.assertIn("kept-sid", ids)
+        self.assertNotIn("gone-sid", ids)
+        self.assertIn("ext-sid", ids)
+        self.assertIn("noroot-sid", ids)
         self.assertFalse(gone_main.exists())
         self.assertFalse(gone_view.exists())
-        gone = next(d for d in res["deleted"]
-                    if d["sessionId"] == "gone-sid")
-        self.assertEqual(len(gone["removed"]), 2)
-        ghost = next(d for d in res["deleted"]
-                     if d["sessionId"] == "ghost-sid")
-        self.assertEqual(ghost["removed"], [])
-        # Tombstoned: hidden from list/resume even though a running host
-        # would still list them from memory.
-        listed = asyncio.run(router.handle_client_message(
-            FakeConn(), {"id": 2, "type": "list"}))
-        self.assertTrue(listed["ok"], listed)
-        ids = [s["sessionId"] for s in listed["result"]["sessions"]]
-        self.assertNotIn("gone-sid", ids)
-        self.assertNotIn("ghost-sid", ids)
-        self.assertIn("kept-sid", ids)
         resumed = asyncio.run(router.handle_client_message(
-            FakeConn(), {"id": 3, "type": "resume",
+            FakeConn(), {"id": 2, "type": "resume",
                          "sessionId": "gone-sid"}))
         self.assertFalse(resumed["ok"])
         self.assertIn("unknown session", resumed["error"]["message"])
-
-    def test_no_base_deletes_nothing(self):
-        async def body():
-            class Msp:
-                async def command(self, method, params=None):
-                    raise AssertionError(method)
-
-                async def call(self, method, params=None):
-                    return {"sessions": [
-                        {"sessionId": "x",
-                         "workspaceRoot": "/gone/xyz-123"}]}
-
-            router = SessionRouter(msp=Msp(), workspace_base=None)
-            reply = await router.handle_client_message(
-                FakeConn(), {"id": 1, "type": "pruneMissing",
-                             "dryRun": False})
-            self.assertTrue(reply["ok"], reply)
-            self.assertEqual(reply["result"]["deleted"], [])
-            self.assertEqual(reply["result"]["outsideBase"], 1)
-        asyncio.run(body())
 
 
 class TestSessionBarUI(unittest.TestCase):
@@ -353,19 +279,15 @@ class TestSessionBarUI(unittest.TestCase):
     def test_drawer_refreshes_on_open(self):
         self.assertIn("refreshSessions().catch(() => {});", APP_JS)
 
-    def test_missing_dir_rows_filtered(self):
+    def test_missing_dir_rows_auto_deleted(self):
+        for marker in ("state.sessionsCache = rows", "_workspace_under_base",
+                       "Auto-sync: the bridge deletes sessions"):
+            self.assertIn(marker, APP_JS + SESSIONS_PY)
         for marker in ("s.workspaceMissing", "state.sessionsHidden",
-                       "hidden — workspace directory removed"):
-            self.assertIn(marker, APP_JS)
-
-    def test_sync_flow(self):
-        for marker in ('name: "sync"', "cmdSync", "pruneMissing",
-                       "Sync now", "sync-btn",
-                       "Delete these ${cands.length} session(s)",
-                       "admitted but still listed — re-run /sync"):
-            self.assertIn(marker, APP_JS)
-        self.assertIn('"pruneMissing"', SESSIONS_PY)
-        self.assertIn("_prune_missing", SESSIONS_PY)
+                       "hidden — workspace directory removed",
+                       "Sync now", "sync-btn", "cmdSync", "pruneMissing",
+                       "_prune_missing", 'name: "sync"'):
+            self.assertNotIn(marker, APP_JS + SESSIONS_PY + STYLE_CSS)
 
 
 class BridgeMsp:

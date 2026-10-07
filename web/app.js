@@ -34,7 +34,6 @@ const state = {
   // defaultBranch|null}. Shown only while no session is open; the first
   // sent message clones it (branch) and roots the new session there.
   pendingRepo: null, stagedPrompt: null, stagedRepo: null, repoBusy: null,
-  sessionsHidden: 0,
   // "Other sessions" group collapsed (persisted across reloads).
   otherCollapsed: false,
   // Transcript density: active filter chip (all|edits|commands|errors)
@@ -165,11 +164,9 @@ async function refreshSessions() {
   if (state.listPromise) return state.listPromise;
   state.listPromise = (async () => {
     const r = await send({ type: "list", limit: 100 });
-  // Rows whose workspace directory was removed from disk stay out of the
-  // bar (the bridge flags them); the count keeps the hiding visible.
+  // Auto-sync: the bridge deletes sessions whose workspace dir is gone.
   const rows = r.sessions || [];
-  state.sessionsHidden = rows.filter((s) => s.workspaceMissing).length;
-  state.sessionsCache = rows.filter((s) => !s.workspaceMissing);
+  state.sessionsCache = rows;
   // Bridge-created sessions first; host order kept within each group
   // (stable sort), so TUI sessions stay exactly as the host listed them.
   state.sessionsCache.sort((a, b) => ((b.bridgeCreated ? 1 : 0) - (a.bridgeCreated ? 1 : 0)));
@@ -343,18 +340,6 @@ function renderSessionList(sessions) {
       counter.hidden = true;
       counter.textContent = "";
     }
-  }
-  if (state.sessionsHidden > 0) {
-    const n = document.createElement("div");
-    n.className = "meta";
-    n.textContent = `${sessN(state.sessionsHidden, "session")} hidden — workspace directory removed.`;
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "sync-btn"; b.textContent = "Sync now";
-    b.title = "Preview and delete session files whose workspace directory is gone (/sync)";
-    b.onclick = (e) => { e.stopPropagation(); cmdSync(); };
-    n.append(b);
-    box.append(n);
   }
   if (!focusScrolled) box.scrollTop = qChanged ? 0 : Math.min(prevScroll, box.scrollHeight);
   syncSelectionUI();
@@ -896,42 +881,6 @@ async function dropExternallyDeleted(sessionId, reason) {
   if (sessionId === state.sessionId) newSession();
   sysLine(`Session ${shortId(sessionId)} was already deleted outside the app — cleaned up (${reason}).`);
   refreshSessions().catch(() => {});
-}
-
-// Sync the session store with the workspace dir: remove session files
-// whose workspace directory is gone. Always previews first (dry run),
-// then confirms — and only sessions rooted under the bridge's workspace
-// base are candidates; external manual roots are left alone (a missing
-// mount is not a deletion).
-async function cmdSync() {
-  let prev;
-  try {
-    prev = await send({ type: "pruneMissing", dryRun: true });
-  } catch (e) { sysLine("sync failed: " + e.message, true); return; }
-  const cands = prev.candidates || [];
-  const outside = prev.outsideBase || 0;
-  if (!cands.length) {
-    sysLine("Nothing to sync." + (outside
-      ? ` (${outside} missing-dir session(s) outside the workspace base — left alone)` : ""));
-    return;
-  }
-  sysLine("Sessions with removed workspace directories (workspace base only):\n" +
-    cands.map((c) => `  ${shortId(c.sessionId)}  ${c.name || "(unnamed)"}\n    ${c.workspaceRoot}`).join("\n") +
-    (outside ? `\n(${outside} more outside the workspace base — left alone)` : ""));
-  if (!confirm(`Delete these ${cands.length} session(s) from disk? Their transcripts will be lost.`)) return;
-  try {
-    const r = await send({ type: "pruneMissing", dryRun: false });
-    const done = (r.deleted || []).length, bad = (r.failed || []).length;
-    const pend = (r.pending || []).length;
-    sysLine(`Sync done: ${done} deleted` +
-      (pend ? `, ${pend} admitted but still listed — re-run /sync to confirm` : "") +
-      (bad ? `, ${bad} failed` : "") + "." +
-      (r.confirmed === false ? " (confirmation listing failed)" : "") +
-      (r.failed || []).map((f) => `\n  ${shortId(f.sessionId)}: ${f.message}`).join("") +
-      (r.outsideBase ? `\n(${r.outsideBase} outside the workspace base — left alone)` : ""));
-    toast(`sync: ${done} deleted`);
-    refreshSessions().catch(() => {});
-  } catch (e) { sysLine("sync failed: " + e.message, true); }
 }
 
 async function deleteSession(sessionId) {
@@ -3034,7 +2983,6 @@ const SLASH = [
   { name: "rename", usage: "/rename <name>", desc: "Rename current session", run: (a) => renameSession(null, a.join(" ")) },
   { name: "fork", usage: "/fork", desc: "Fork current session", run: () => forkSession() },
   { name: "delete", usage: "/delete", desc: "Delete current session (confirm)", run: () => deleteSession() },
-  { name: "sync", usage: "/sync", desc: "Delete session files whose workspace dir is gone (preview + confirm)", run: () => cmdSync() },
   { name: "clear", usage: "/clear", desc: "Clear local transcript view", run: () => { clearTranscriptKeepSession(); } },
   { name: "models", usage: "/models", desc: "List models in transcript", run: () => cmdModels() },
   { name: "model", usage: "/model <id>", desc: "Set model for current session", run: (a) => cmdSetModel(a) },

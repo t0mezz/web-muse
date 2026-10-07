@@ -944,9 +944,3 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
 .repo-opt .sub { color: var(--faint); font-size: 11px; margin-left: 6px; }
 .repo-opt.dim { color: var(--dim); cursor: default; }
 .repo-opt.dim:hover { background: none; }
-#session-list .sync-btn {
-  background: none; border: 1px solid var(--line); color: var(--fg);
-  border-radius: 999px; padding: 1px 8px; font-size: 12px; cursor: pointer;
-  margin-left: 6px;
-}
-#session-list .sync-btn:hover { border-color: var(--accent); }
