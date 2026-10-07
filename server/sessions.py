@@ -14,7 +14,7 @@ import re
 import shutil
 from pathlib import Path
 
-from server.github import GithubError, run_gh_branches, run_gh_clone, run_gh_list, validate_branch, validate_fullname
+from server.github import GithubError, filter_repos, merge_branch_names, merge_repo_rows, run_gh_branches, run_gh_clone, run_gh_list, validate_branch, validate_fullname
 from server.msp import MspError, uuid7
 
 LOG = logging.getLogger("web_muse.sessions")
@@ -628,6 +628,13 @@ class SessionRouter:
             if self._sessions_base else None)
         self._load_bridge_sids()
         self._gh_bin = gh_bin or "gh"
+        # Known repos/branches: every listing still shells out to `gh`
+        # for new entries, then merges them in — so repeat picker opens
+        # keep working (stale) when `gh` hiccups and accumulate rows
+        # across `--limit` pages. Per-router (not global), which keeps
+        # the test suite hermetic.
+        self._known_repos = []
+        self._known_branches = {}
         # Clone opId -> [task, conn, fullName]. Terminal-event ownership
         # goes to whoever pops the record first (finishing task or
         # canceller), so exactly one githubCloneResult fires even when a
@@ -806,6 +813,48 @@ class SessionRouter:
             unattached = [c for c in self._conns if not c.sessions]
             return unattached
         return list(self._conns)
+
+    # -- GitHub picker caches ------------------------------------------------
+    async def _github_repos(self, search=None, limit=None):
+        """Cached repo rows; `gh` is still checked for new ones every call.
+
+        Returns (rows, stale): fresh rows are merged into the known set
+        and served; when `gh` fails and known rows exist, the known
+        (search-filtered) rows are served with stale True instead of
+        erroring the picker.
+        """
+        try:
+            fresh = await run_gh_list(search, limit, gh_bin=self._gh_bin)
+        except GithubError:
+            if self._known_repos:
+                LOG.warning("githubRepos: gh failed, serving %d known "
+                            "row(s)", len(self._known_repos))
+                return filter_repos(self._known_repos, search), True
+            raise
+        # Fresh rows arrive search-filtered; merging keeps each complete
+        # row, so the known set only ever grows toward the full list.
+        self._known_repos = merge_repo_rows(self._known_repos, fresh)
+        return filter_repos(self._known_repos, search), False
+
+    async def _github_branches(self, full_name):
+        """Cached branch names for one repo; `gh` still checked every call.
+
+        Returns (names, stale) with the same fresh-or-known contract as
+        _github_repos. Invalid names raise ValueError (never served from
+        cache).
+        """
+        try:
+            fresh = await run_gh_branches(full_name, gh_bin=self._gh_bin)
+        except GithubError:
+            known = self._known_branches.get(full_name)
+            if known:
+                LOG.warning("githubBranches: gh failed for %s, serving "
+                            "%d known branch(es)", full_name, len(known))
+                return list(known), True
+            raise
+        self._known_branches[full_name] = merge_branch_names(
+            self._known_branches.get(full_name), fresh)
+        return list(self._known_branches[full_name]), False
 
     # -- WS request dispatch ------------------------------------------------
     async def handle_client_message(self, conn, msg):
@@ -1047,18 +1096,23 @@ class SessionRouter:
                 return reply(True, result=await self._msp.call(
                     "approval/listPending", {"sessionId": msg["sessionId"]}))
             if mtype == "githubRepos":
-                # Repo picker rows, served live from `gh` (never cached).
-                return reply(True, result={
-                    "repos": await run_gh_list(
-                        msg.get("search"), msg.get("limit"),
-                        gh_bin=self._gh_bin),
-                })
+                # Repo picker rows: known rows cached, `gh` still
+                # checked for new ones every call (stale only when
+                # `gh` fails and known rows exist).
+                repos, stale = await self._github_repos(
+                    msg.get("search"), msg.get("limit"))
+                result = {"repos": repos}
+                if stale:
+                    result["stale"] = True
+                return reply(True, result=result)
             if mtype == "githubBranches":
-                # Branch picker rows for one repo, served live from `gh`.
-                return reply(True, result={
-                    "branches": await run_gh_branches(
-                        msg.get("fullName"), gh_bin=self._gh_bin),
-                })
+                # Branch picker rows for one repo: same cache contract.
+                branches, stale = await self._github_branches(
+                    msg.get("fullName"))
+                result = {"branches": branches}
+                if stale:
+                    result["stale"] = True
+                return reply(True, result=result)
             if mtype == "githubClone":
                 # Shallow-clone into workspaces/<sessionId>/repo/, admitted
                 # async: the reply is instant ({accepted, opId, ...}) and

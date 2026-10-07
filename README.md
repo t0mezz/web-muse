@@ -86,7 +86,7 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 | `readOutput {itemId, outputRef, ...}` | `item/readOutput` |
 | `mcp` | local `settings.json` inventory (MSP v1 has no mcp/* methods) |
 | `browse {path?}` | list one server-side directory for the `+` explorer (empty → `$HOME`) |
-| `githubRepos {search?, limit?}` | `gh repo list` rows `{name, fullName, private, defaultBranch, updatedAt}` (live, never cached) |
+| `githubRepos {search?, limit?}` | `gh repo list` rows `{name, fullName, private, defaultBranch, updatedAt}` (known rows cached, `gh` still checked for new ones every call; `stale: true` when `gh` fails and cached rows are served) |
 | `githubClone {fullName, sessionId?, opId?}` | admit a shallow `gh repo clone` into `workspaces/<sessionId>/repo/` (cancellable) |
 | `githubOpen {fullName, name?, mcpAttach?, opId?}` | admit a clone + `session/start` rooted at the clone |
 | `githubCancel {opId}` | cancel a running clone |

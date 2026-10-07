@@ -30,6 +30,8 @@ from server.github import (  # noqa: E402
     filter_repos,
     hosts_file_ok,
     map_gh_error,
+    merge_branch_names,
+    merge_repo_rows,
     normalize_limit,
     parse_branch_names,
     parse_repo_rows,
@@ -664,6 +666,172 @@ class TestGithubWiring(unittest.TestCase):
         self.assertIn("githubOpenRepo(sel.fullName, { branch: sel.branch })",
                       APP_JS)
         self.assertIn("await sendPromptText(t, true)", APP_JS)
+
+
+class TestMergeHelpers(unittest.TestCase):
+    def _row(self, full, branch="main"):
+        return {"name": full.split("/")[-1], "fullName": full,
+                "private": False, "defaultBranch": branch,
+                "updatedAt": None}
+
+    def test_repo_union_fresh_first_cached_tails(self):
+        cached = [self._row("octo/a"), self._row("octo/b")]
+        fresh = [self._row("octo/b", "dev"), self._row("octo/c")]
+        merged = merge_repo_rows(cached, fresh)
+        self.assertEqual([r["fullName"] for r in merged],
+                         ["octo/b", "octo/c", "octo/a"])
+        # Fresh wins on conflicts.
+        self.assertEqual(merged[0]["defaultBranch"], "dev")
+
+    def test_repo_empty_and_junk_safe(self):
+        self.assertEqual(merge_repo_rows([], []), [])
+        self.assertEqual(merge_repo_rows(None, None), [])
+        rows = merge_repo_rows([{"junk": 1}, "nope"],
+                               [self._row("octo/a"), {"junk": 2}])
+        self.assertEqual([r["fullName"] for r in rows], ["octo/a"])
+
+    def test_branch_union_order_and_dedup(self):
+        self.assertEqual(
+            merge_branch_names(["main", "old"], ["dev", "main"]),
+            ["dev", "main", "old"])
+        self.assertEqual(merge_branch_names(None, ["a"]), ["a"])
+        self.assertEqual(merge_branch_names(["a"], None), ["a"])
+
+
+def _repo_payload(names):
+    return [{"nameWithOwner": n, "isPrivate": False,
+             "defaultBranchRef": {"name": "main"},
+             "updatedAt": None} for n in names]
+
+
+class TestRouterGithubCache(unittest.TestCase):
+    """Known repos/branches are cached; `gh` is still checked each call."""
+
+    def _router(self, tmp):
+        bindir = Path(tmp) / "bin"
+        bindir.mkdir()
+        gh = bindir / "gh"
+        # Fixture-driven stub: rewrite fixture.json between calls to
+        # prove each listing re-queries `gh` instead of serving cache.
+        gh.write_text('#!/bin/sh\ncat "%s"\n' % (Path(tmp) / "fixture.json"))
+        gh.chmod(0o755)
+        old_hosts = G.hosts_file_ok
+        G.hosts_file_ok = lambda path=None: (True, "")
+        self.addCleanup(setattr, G, "hosts_file_ok", old_hosts)
+        return SessionRouter(msp=None, workspace_base=str(Path(tmp) / "ws"),
+                             gh_bin=str(gh))
+
+    def _write(self, tmp, payload):
+        Path(tmp, "fixture.json").write_text(json.dumps(payload))
+
+    def test_repos_accumulate_and_requery(self):
+        async def body():
+            with tempfile.TemporaryDirectory() as tmp:
+                router = self._router(tmp)
+                conn = FakeConn()
+                self._write(tmp, _repo_payload(["octo/a"]))
+                first = await router.handle_client_message(
+                    conn, {"id": 1, "type": "githubRepos"})
+                self.assertTrue(first["ok"], first)
+                self.assertEqual(
+                    [r["fullName"] for r in first["result"]["repos"]],
+                    ["octo/a"])
+                self.assertNotIn("stale", first["result"])
+                # New repo appears: `gh` was checked again, not skipped.
+                self._write(tmp, _repo_payload(["octo/b"]))
+                second = await router.handle_client_message(
+                    conn, {"id": 2, "type": "githubRepos"})
+                self.assertTrue(second["ok"], second)
+                self.assertEqual(
+                    [r["fullName"] for r in second["result"]["repos"]],
+                    ["octo/b", "octo/a"])
+                # Filtered calls merge without evicting the known set.
+                filt = await router.handle_client_message(
+                    conn, {"id": 3, "type": "githubRepos",
+                           "search": "octo/a"})
+                self.assertEqual(
+                    [r["fullName"] for r in filt["result"]["repos"]],
+                    ["octo/a"])
+                third = await router.handle_client_message(
+                    conn, {"id": 4, "type": "githubRepos"})
+                self.assertEqual(
+                    [r["fullName"] for r in third["result"]["repos"]],
+                    ["octo/b", "octo/a"])
+        asyncio.run(body())
+
+    def test_repos_failure_serves_stale(self):
+        async def body():
+            with tempfile.TemporaryDirectory() as tmp:
+                router = self._router(tmp)
+                conn = FakeConn()
+                self._write(tmp, _repo_payload(["octo/a"]))
+                ok = await router.handle_client_message(
+                    conn, {"id": 1, "type": "githubRepos"})
+                self.assertTrue(ok["ok"], ok)
+                gh = Path(router._gh_bin)
+                gh.write_text('#!/bin/sh\necho "boom" >&2\nexit 1\n')
+                stale = await router.handle_client_message(
+                    conn, {"id": 2, "type": "githubRepos"})
+                self.assertTrue(stale["ok"], stale)
+                self.assertTrue(stale["result"].get("stale"))
+                self.assertEqual(
+                    [r["fullName"] for r in stale["result"]["repos"]],
+                    ["octo/a"])
+        asyncio.run(body())
+
+    def test_repos_failure_empty_cache_errors(self):
+        async def body():
+            with tempfile.TemporaryDirectory() as tmp:
+                router = self._router(tmp)
+                Path(tmp, "fixture.json").write_text("{nope")
+                conn = FakeConn()
+                reply = await router.handle_client_message(
+                    conn, {"id": 1, "type": "githubRepos"})
+                self.assertFalse(reply["ok"])
+                self.assertNotIn("stale", reply.get("result", {}))
+        asyncio.run(body())
+
+    def test_branches_cache_fallback_and_invalid(self):
+        async def body():
+            with tempfile.TemporaryDirectory() as tmp:
+                router = self._router(tmp)
+                conn = FakeConn()
+                self._write(tmp, [{"name": "main"}, {"name": "dev"}])
+                first = await router.handle_client_message(
+                    conn, {"id": 1, "type": "githubBranches",
+                           "fullName": "octo/hello"})
+                self.assertTrue(first["ok"], first)
+                self.assertEqual(first["result"]["branches"],
+                                 ["main", "dev"])
+                self._write(tmp, [{"name": "feature"}])
+                second = await router.handle_client_message(
+                    conn, {"id": 2, "type": "githubBranches",
+                           "fullName": "octo/hello"})
+                self.assertEqual(second["result"]["branches"],
+                                 ["feature", "main", "dev"])
+                gh = Path(router._gh_bin)
+                gh.write_text('#!/bin/sh\necho "boom" >&2\nexit 1\n')
+                stale = await router.handle_client_message(
+                    conn, {"id": 3, "type": "githubBranches",
+                           "fullName": "octo/hello"})
+                self.assertTrue(stale["ok"], stale)
+                self.assertTrue(stale["result"].get("stale"))
+                self.assertEqual(stale["result"]["branches"],
+                                 ["feature", "main", "dev"])
+                # Invalid names are still rejected, never served stale.
+                bad = await router.handle_client_message(
+                    conn, {"id": 4, "type": "githubBranches",
+                           "fullName": "../escape"})
+                self.assertFalse(bad["ok"])
+        asyncio.run(body())
+
+    def test_cache_wiring_markers(self):
+        self.assertIn("merge_repo_rows", SESSIONS_PY)
+        self.assertIn("merge_branch_names", SESSIONS_PY)
+        self.assertIn("_known_repos", SESSIONS_PY)
+        self.assertIn("_known_branches", SESSIONS_PY)
+        self.assertIn("merge_repo_rows", GITHUB_PY)
+        self.assertIn("merge_branch_names", GITHUB_PY)
 
 
 if __name__ == "__main__":

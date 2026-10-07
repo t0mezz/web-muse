@@ -181,6 +181,44 @@ def parse_branch_names(payload):
     return names
 
 
+def merge_repo_rows(cached, fresh):
+    """Union of cached + fresh repo rows, keyed by fullName (pure).
+
+    Fresh rows win on conflicts and keep `gh` order first; cached-only
+    rows trail in their existing order. Lets the picker accumulate
+    known repos across `--limit` pages while every listing still
+    checks `gh` for new ones.
+    """
+    seen = {}
+    for row in cached or []:
+        if isinstance(row, dict) and isinstance(row.get("fullName"), str):
+            seen.setdefault(row["fullName"], row)
+    merged = []
+    for row in fresh or []:
+        if not (isinstance(row, dict)
+                and isinstance(row.get("fullName"), str)):
+            continue
+        seen[row["fullName"]] = row
+        merged.append(row)
+    merged += [row for name, row in seen.items()
+               if name not in {r.get("fullName") for r in merged
+                               if isinstance(r, dict)}]
+    return merged
+
+
+def merge_branch_names(cached, fresh):
+    """Union of cached + fresh branch names (pure).
+
+    Fresh order first, cached-only names appended. New branches from
+    `gh` always appear; branches seen before survive a sparse listing.
+    """
+    merged = [n for n in (fresh or [])
+              if isinstance(n, str) and n]
+    merged += [n for n in (cached or [])
+               if isinstance(n, str) and n and n not in merged]
+    return merged
+
+
 def redact(text):
     """Strip token-shaped secrets from `gh` output before framing/logging."""
     out = text if isinstance(text, str) else str(text)
