@@ -34,12 +34,14 @@ def _fn_body(name):
 class TestModelDefault(unittest.TestCase):
     def test_pick_remembered(self):
         self.assertIn("pickedModel: null", APP_JS)
-        self.assertIn("state.pickedModel = { modelId: o.value", APP_JS)
+        # Canonical setter, shared by the topbar picker and settings rows.
+        self.assertIn("state.pickedModel = { modelId: value", APP_JS)
+        self.assertIn("applyModelPick(o.value, o.dataset.provider", APP_JS)
 
     def test_picker_records_without_session(self):
         self.assertIn("default model →", APP_JS)
-        self.assertIn('toast("default model → " + o.value)', APP_JS)
-        self.assertNotIn('toast("default model → " + o.value + " (applies to new chats)")', APP_JS)
+        self.assertIn('toast("default model → " + value)', APP_JS)
+        self.assertNotIn('toast("default model → " + value + " (applies to new chats)")', APP_JS)
 
     def test_creation_paths_carry_model(self):
         self.assertIn("req.modelId = state.pickedModel.modelId", APP_JS)

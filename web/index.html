@@ -163,13 +163,15 @@
       </div>
     </aside>
 
-    <aside id="settings" aria-label="Settings">
-      <div class="settings-head">
-        <strong>Settings</strong>
-        <button id="btn-close-settings" title="Close settings (Esc)" aria-label="Close settings">✕</button>
+    <aside id="settings" aria-label="Settings" role="dialog" aria-modal="true">
+      <div class="settings-box">
+        <div class="settings-head">
+          <strong>Settings</strong>
+          <button id="btn-close-settings" title="Close settings (Esc)" aria-label="Close settings">✕</button>
+        </div>
+        <nav id="settings-nav" aria-label="Settings groups"></nav>
+        <div id="settings-body" class="settings-body" role="tabpanel" tabindex="0"></div>
       </div>
-      <nav id="settings-nav" aria-label="Settings groups"></nav>
-      <div id="settings-body" class="settings-body"></div>
     </aside>
   </div>
 </div>
