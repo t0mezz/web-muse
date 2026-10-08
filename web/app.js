@@ -3419,7 +3419,7 @@ function syncEffortPicker() {
 }
 // The approval-mode pick survives reloads (localStorage) like the model
 // and effort picks: changing it anywhere saves it, startup restores it
-// into the Session-panel select, and created sessions inherit it.
+// into the Settings select, and created sessions inherit it.
 const APPROVAL_MODES = ["onRequest", "promptUnmatched", "denyUnmatched", "allowAll"];
 const PICKED_APPROVAL_KEY = "webmuse.pickedApprovalMode";
 function savePickedApprovalMode() {
@@ -3440,9 +3440,13 @@ function loadPickedApprovalMode() {
   } catch (_) { /* corrupt or unavailable: no default */ }
 }
 function syncApprovalSelect() {
+  const S = window.WebMuseSettings;
+  const mode = (S && S.getSetting("approvalMode")) || state.pickedApprovalMode || "onRequest";
+  const ref = el("sess-approval-mode");
+  if (ref) ref.textContent = mode;
   const sel = el("approval-mode");
   if (!sel) return;
-  sel.value = state.pickedApprovalMode || "onRequest";
+  sel.value = mode;
   sel.dataset.prev = sel.value;
   syncApprovalWarn();
   if (window.WebMuseSettings) WebMuseSettings.sync();
@@ -4861,15 +4865,19 @@ el("btn-pending").onclick = () => fetchPending().then(() => toast("pending refre
 function syncApprovalWarn() {
   // The confirm panel opens only for a not-yet-confirmed allowAll pick:
   // once enabled (prev === allowAll) it stays closed until re-selected.
+  // Either node may be absent (settings closed or another group open):
+  // with no attempted pick there is nothing to confirm.
   const sel = el("approval-mode");
-  el("approval-warn").hidden =
-    sel.value !== "allowAll" || sel.dataset.prev === "allowAll";
+  const warn = el("approval-warn");
+  if (!warn) return;
+  warn.hidden = !sel || sel.value !== "allowAll" || sel.dataset.prev === "allowAll";
 }
 function setApprovalDefault(mode) {
   // Remember the pick for created sessions (parity with pickedModel).
   state.pickedApprovalMode = mode;
   savePickedApprovalMode();
-  el("approval-mode").dataset.prev = mode;
+  const sel = el("approval-mode");
+  if (sel) sel.dataset.prev = mode;
 }
 function applyApprovalPick(mode) {
   if (!APPROVAL_MODES.includes(mode)) {
@@ -4877,9 +4885,9 @@ function applyApprovalPick(mode) {
     syncApprovalSelect();
     return;
   }
-  // The Session-panel select is a pure view of the attempt: settings
-  // rows pick without touching it, so reflect the attempt first — the
-  // allowAll confirm panel below keys off this select's value.
+  // The Settings select is a pure view of the attempt: reflect it
+  // first — the allowAll confirm panel below keys off this select's
+  // value.
   const sel = el("approval-mode");
   if (sel && sel.value !== mode) sel.value = mode;
   if (!state.sessionId) {
@@ -4903,28 +4911,12 @@ function applyApprovalPick(mode) {
     })
     .catch((e) => toast("setApprovalMode failed: " + e.message, true));
 }
-el("approval-mode").onchange = (ev) => applyApprovalPick(ev.target.value);
-el("approval-confirm-yes").onclick = () => {
-  if (!state.sessionId) {
-    // No session loaded: confirm the default, send nothing.
-    setApprovalDefault("allowAll");
-    syncApprovalSelect();
-    toast("default approval mode → allowAll (new sessions)");
-    return;
-  }
-  send({ type: "setApprovalMode", sessionId: state.sessionId,
-         mode: "allowAll" })
-    .then(() => {
-      setApprovalDefault("allowAll");
-      syncApprovalSelect();
-      toast("approval mode → allowAll");
-    })
-    .catch((e) => toast("setApprovalMode failed: " + e.message, true));
-};
-el("approval-confirm-no").onclick = () => {
-  // Revert to the last confirmed mode (sync covers the select, the
-  // warn panel, and the settings mirror).
-  syncApprovalSelect();
+// The approval select + confirm live in the Defaults group render
+// below (fresh nodes per render), so their handlers attach there —
+// attaching here would dereference nodes that do not exist yet.
+el("btn-approval-settings").onclick = () => {
+  // Session info keeps only a pointer: the control lives in Settings.
+  if (window.WebMuseSettings) WebMuseSettings.open();
 };
 function applySubagentAutoApprovePick(v) {
   // One write path (parity with applyApprovalPick): state first, then
@@ -5139,12 +5131,58 @@ if (window.WebMuseSettings) {
       m.control.appendChild(h.makeSelect(opts, want,
         (v) => { if (v) S.setSetting("model", v); }, "Default model"));
       body.appendChild(m.wrap);
+      // Approval mode lives here in Defaults (full select + allowAll
+      // confirm): exactly one approval control in Settings. The group
+      // body rebuilds on every render, so the nodes below are fresh
+      // each time and their handlers attach here, not at load. Option
+      // literals mirror APPROVAL_MODES (picks are validated on apply).
       const a = h.row("Approval mode", "Default approval mode for new sessions.");
-      a.control.appendChild(h.makeSelect(
-        APPROVAL_MODES.map((v) => ({ value: v, label: v })),
-        S.getSetting("approvalMode"),
-        (v) => S.setSetting("approvalMode", v), "Default approval mode"));
+      a.control.innerHTML =
+        `<select id="approval-mode" class="setting-select" aria-label="Default approval mode" data-setting-key="Default approval mode">` +
+        `<option value="onRequest">onRequest</option>` +
+        `<option value="promptUnmatched">promptUnmatched</option>` +
+        `<option value="denyUnmatched">denyUnmatched</option>` +
+        `<option value="allowAll">allowAll</option>` +
+        `</select>`;
       body.appendChild(a.wrap);
+      const asel = el("approval-mode");
+      asel.value = S.getSetting("approvalMode");
+      asel.dataset.prev = asel.value;
+      asel.onchange = (ev) => {
+        if (window.WebMuseSettings) window.WebMuseSettings.setSetting("approvalMode", ev.target.value);
+        else applyApprovalPick(ev.target.value);
+      };
+      const awarn = document.createElement("div");
+      awarn.innerHTML =
+        `<div id="approval-warn" class="approval-warn" hidden>` +
+        `<p><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9.00006V13.0001M4.37891 15.1999C3.46947 16.775 3.01489 17.5629 3.08281 18.2092C3.14206 18.7729 3.43792 19.2851 3.89648 19.6182C4.42204 20.0001 5.3309 20.0001 7.14853 20.0001H16.8515C18.6691 20.0001 19.5778 20.0001 20.1034 19.6182C20.5619 19.2851 20.8579 18.7729 20.9172 18.2092C20.9851 17.5629 20.5307 16.775 19.6212 15.1999L14.7715 6.79986C13.8621 5.22468 13.4071 4.43722 12.8135 4.17291C12.2957 3.94236 11.704 3.94236 11.1862 4.17291C10.5928 4.43711 10.1381 5.22458 9.22946 6.79845L4.37891 15.1999ZM12.0508 16.0001V16.1001L11.9502 16.1003V16.0001H12.0508Z"/></svg><span>allowAll runs every command without asking, including destructive ones. Use only in throwaway sessions.</span></p>` +
+        `<div class="row-btns">` +
+        `<button id="approval-confirm-yes" title="Enable allowAll for this session">Enable allowAll</button>` +
+        `<button id="approval-confirm-no" title="Stay on the previous mode">Cancel</button>` +
+        `</div></div>`;
+      body.appendChild(awarn);
+      el("approval-confirm-yes").onclick = () => {
+        if (!state.sessionId) {
+          // No session loaded: confirm the default, send nothing.
+          setApprovalDefault("allowAll");
+          syncApprovalSelect();
+          toast("default approval mode → allowAll (new sessions)");
+          return;
+        }
+        send({ type: "setApprovalMode", sessionId: state.sessionId,
+               mode: "allowAll" })
+          .then(() => {
+            setApprovalDefault("allowAll");
+            syncApprovalSelect();
+            toast("approval mode → allowAll");
+          })
+          .catch((e) => toast("setApprovalMode failed: " + e.message, true));
+      };
+      el("approval-confirm-no").onclick = () => {
+        // Revert to the last confirmed mode (sync covers the select, the
+        // warn panel, and the session reference).
+        syncApprovalSelect();
+      };
       const s = h.row("Subagent auto-approve",
         "Auto-approve subagent prompts when the session runs allowAll.");
       s.control.appendChild(h.makeToggle(S.getSetting("subagentAutoApprove"), (btn) => {

@@ -177,12 +177,14 @@ class TestNoExposure(unittest.TestCase):
 
 class TestAllowAllPanel(unittest.TestCase):
     def test_option_and_warning_markup(self):
-        self.assertIn('value="allowAll"', INDEX_HTML)
-        self.assertIn('id="approval-warn"', INDEX_HTML)
+        # Rendered by the Defaults settings group (app.js), not static
+        # markup: approval settings live only in the Settings page.
+        self.assertIn('value="allowAll"', APP_JS)
+        self.assertIn('id="approval-warn"', APP_JS)
         # Warning icon, not a text prefix; the sentence stands alone.
-        self.assertIn("M12 9.00006V13.0001", INDEX_HTML)
+        self.assertIn("M12 9.00006V13.0001", APP_JS)
         self.assertIn("allowAll runs every command without asking",
-                      INDEX_HTML)
+                      APP_JS)
         self.assertNotIn("Warning: allowAll", INDEX_HTML)
 
     def test_handler_confirms_and_syncs_warning(self):
@@ -193,8 +195,8 @@ class TestAllowAllPanel(unittest.TestCase):
         self.assertIn("approval-confirm-no", APP_JS)
         self.assertIn("syncApprovalWarn", APP_JS)
         self.assertIn("dataset.prev", APP_JS)
-        self.assertIn('id="approval-confirm-yes"', INDEX_HTML)
-        self.assertIn('id="approval-confirm-no"', INDEX_HTML)
+        self.assertIn('id="approval-confirm-yes"', APP_JS)
+        self.assertIn('id="approval-confirm-no"', APP_JS)
 
     def test_warning_style_uses_theme(self):
         # Normal box (panel/line/fg), warning-colored icon, red allow btn.

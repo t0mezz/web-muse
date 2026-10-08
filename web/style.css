@@ -840,6 +840,18 @@ body {
 .tool-row .t { color: var(--warn); font-weight: 700; }
 .tool-row .s { color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: hidden; }
 #tab-session label { display: block; margin-bottom: 10px; font-size: 12px; color: var(--dim); }
+/* Session info keeps only a pointer to the approval control. */
+.approval-ref {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  margin-bottom: 10px; font-size: 12px; color: var(--dim);
+}
+.approval-ref strong { color: var(--fg); font-weight: 600; }
+#btn-approval-settings {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--accent); font-size: 12px;
+  white-space: nowrap; flex: none;
+}
+#btn-approval-settings:hover { color: var(--fg); text-decoration: underline; }
 #approval-mode { display: block; width: 100%; margin-top: 4px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 999px; padding: 6px; }
 .approval-warn {
   margin: 0 0 10px; padding: 7px 9px; border-radius: 10px; font-size: 12px;
