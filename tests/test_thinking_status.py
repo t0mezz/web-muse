@@ -77,9 +77,9 @@ class TestThinkingStatus(unittest.TestCase):
     def test_open_session_reconciles_running_turn(self):
         # Late join: resume + replay settle first, then reconcile.
         body = fn_body("openSession")
-        self.assertIn("handleSubscribeResult(sub)", body)
+        self.assertIn("handleSubscribeResult(sub, sessionId)", body)
         self.assertIn("reconcileRunningState();", body)
-        self.assertLess(body.index("handleSubscribeResult(sub)"),
+        self.assertLess(body.index("handleSubscribeResult(sub, sessionId)"),
                         body.index("reconcileRunningState();"))
 
     def test_reconcile_helper_starts_verbs_when_running(self):

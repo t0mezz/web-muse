@@ -105,8 +105,9 @@ function connect() {
       await refreshUsage();
       if (state.sessionId) {
         // Cursor-tracked replay: pick up where we left off.
-        await send({ type: "subscribe", sessionId: state.sessionId,
-          after: state.cursor || undefined }).then(handleSubscribeResult).catch(() => {});
+        const sid = state.sessionId;
+        await send({ type: "subscribe", sessionId: sid,
+          after: state.cursor || undefined }).then((r) => handleSubscribeResult(r, sid)).catch(() => {});
         fetchPending();
       } else if (!state.everConnected) {
         sysLine("Connected to web-muse bridge.");
@@ -655,9 +656,21 @@ setInterval(() => {
   });
 }, 60000);
 
+// Leaving a session ends its live stream on this tab: the bridge holds one
+// view/subscribe per session, so without this the old turn keeps fanning
+// out here and paints into the next transcript. Best-effort: a failed
+// unsubscribe just means stragglers are ignored by sessionId instead.
+function leaveSession(sid) {
+  if (!sid) return;
+  send({ type: "unsubscribe", sessionId: sid }).catch(() => {});
+}
+
 async function openSession(sessionId) {
   // The starfield stays up: the bottom-right switch owns it now.
   closeRowMenus();
+  // Stop the previous session's stream before the switch: its turn may
+  // still be running and would otherwise paint into this transcript.
+  if (state.sessionId && state.sessionId !== sessionId) leaveSession(state.sessionId);
   // Assign before clearTranscript: its updateWelcome() would otherwise see
   // a stale null sessionId and restart the starfield mid-open.
   state.sessionId = sessionId;
@@ -703,7 +716,7 @@ async function openSession(sessionId) {
     updateOlderBtn();
     updateSessionDetail();
     const sub = await send({ type: "subscribe", sessionId, after: state.cursor || undefined }).catch(() => null);
-    if (sub) handleSubscribeResult(sub);
+    if (sub) handleSubscribeResult(sub, sessionId);
     // A turn already running when the session opens (reload, late join)
     // never re-fires turn/started here: reconcile after replay settles.
     reconcileRunningState();
@@ -743,8 +756,10 @@ function reconcileRunningState() {
   ensureThinking();
 }
 
-function handleSubscribeResult(r) {
+function handleSubscribeResult(r, sessionId) {
   if (!r) return;
+  // A slow replay must not paint a session the user already left.
+  if (sessionId && state.sessionId !== sessionId) return;
   // Some hosts replay missed events inline in the subscribe result.
   const evs = r.events || r.missed || [];
   for (const e of evs) {
@@ -808,6 +823,9 @@ function ensureRootConfirmed(path) {
 }
 
 async function newSession(name, opts) {
+  // The blank view has no session to filter by, so stop the old stream up
+  // front instead of letting it render here.
+  if (state.sessionId) leaveSession(state.sessionId);
   clearTranscript();
   state.sessionId = null; state.session = null;
   updateRepoBar();
@@ -2390,9 +2408,10 @@ setInterval(() => {
 /* ---------- MSP event fan-in ---------- */
 function onEvent(method, p) {
   p = p || {};
-  if (p.sessionId && state.sessionId && p.sessionId !== state.sessionId) {
+  if (p.sessionId && p.sessionId !== state.sessionId) {
     if (method === "session/listChanged" || method === "session/started") refreshSessions().catch(() => {});
-    return; // another session's traffic
+    return; // another session's traffic (or none open: global events
+    // carry no sessionId and still pass through below)
   }
   if (p.viewCursor && (!p.sessionId || p.sessionId === state.sessionId)) {
     state.cursor = p.viewCursor; updateCursorChip();
