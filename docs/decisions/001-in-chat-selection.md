@@ -51,6 +51,4 @@ detour through the textbox.
 
 ## Unresolved
 
-*None.*
-- Scope boundary (artifact classes in/out, done checklist) — to be fixed
-  in writing and explicitly accepted before the interview ends.
+*None — scope boundary settled by the accepted scope above.*

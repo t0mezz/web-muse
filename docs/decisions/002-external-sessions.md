@@ -69,7 +69,7 @@ Let sessions work on directories outside the built-in
 
 ## Unresolved
 
-1. ~~Commit identity~~ — settled (Tom Korbmacher <acc2tom@gmail.com>);
+1. ~~Commit identity~~ — settled (see git history);
    base commit `c0757fa` on `main`, feature branch `external-sessions`.
 2. ~~Staging order~~ — settled by Decision 1 above.
 3. GitHub auth method (stage 2): OAuth device flow, personal-access-token
