@@ -106,7 +106,7 @@ params:{opId, ok, result|error}}` — clones are admitted instantly (like
 preempt a hanging clone. Agent orders arrive the same way: `themeApply`
 (applies a validated theme at once) and `ordersPending` (a policy order
 staged for a human's `ordersDecide`); every session workspace carries
-the protocol in `.web-muse/ORDERS.md`, checked after each turn.
+the protocol in `.web-muse/ORDERS.md`, checked mid-turn and after each turn.
 
 Every MSP command gets a fresh UUIDv7 `commandId` minted by the bridge;
 client-supplied ids are never forwarded.

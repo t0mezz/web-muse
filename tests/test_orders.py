@@ -232,6 +232,61 @@ class TestOrdersEngine(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(receipt["processed"]["t1"]["status"],
                              "applied")
 
+    async def test_mid_turn_event_processes_orders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, root, _ = self._router(tmp)
+            conn = FakeConn()
+            r._conns.add(conn)
+            write_orders(root, {"orders": [
+                {"id": "m1", "action": "theme.apply",
+                 "params": {"colors": {"accent": "#AEAC78"}}}]})
+            # A streamed mid-turn event (not turn/completed) picks the
+            # order up, so an agent reading the receipt mid-turn cannot
+            # deadlock waiting for its own turn to end.
+            r.on_notification("item/delta", {"sessionId": "sid-o1",
+                                            "turnId": "t"})
+            await asyncio.sleep(0.2)
+            evs = self._events(conn, "themeApply")
+            self.assertEqual(len(evs), 1)
+            self.assertEqual(evs[0]["orderId"], "m1")
+            receipt = json.loads(
+                (Path(root) / ".web-muse" / "orders.receipt.json")
+                .read_text())
+            self.assertEqual(receipt["processed"]["m1"]["status"],
+                             "applied")
+            # An unchanged file schedules nothing further (no dupes).
+            r.on_notification("item/delta", {"sessionId": "sid-o1",
+                                            "turnId": "t"})
+            await asyncio.sleep(0.2)
+            self.assertEqual(len(self._events(conn, "themeApply")), 1)
+
+    async def test_recheck_keeps_receipted_statuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, root, _ = self._router(tmp)
+            conn = FakeConn()
+            r._conns.add(conn)
+            write_orders(root, {"orders": [
+                {"id": "k1", "action": "theme.apply",
+                 "params": {"colors": {"accent": "#AEAC78"}}}]})
+            await r._check_orders("sid-o1")
+            # Agent appends a follow-up order; the recheck must process
+            # only the new id and leave the receipted one untouched.
+            write_orders(root, {"orders": [
+                {"id": "k1", "action": "theme.apply",
+                 "params": {"colors": {"accent": "#AEAC78"}}},
+                {"id": "k2", "action": "theme.apply",
+                 "params": {"colors": {"fg": "#4C4541"}}}]})
+            r.on_notification("item/completed", {"sessionId": "sid-o1",
+                                                "turnId": "t"})
+            await asyncio.sleep(0.2)
+            receipt = json.loads(
+                (Path(root) / ".web-muse" / "orders.receipt.json")
+                .read_text())
+            proc = receipt["processed"]
+            self.assertEqual(proc["k1"]["status"], "applied")
+            self.assertEqual(proc["k2"]["status"], "applied")
+            self.assertEqual(len(self._events(conn, "themeApply")), 2)
+
     async def test_bad_color_shapes_rejected_with_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
             r, root, _ = self._router(tmp)

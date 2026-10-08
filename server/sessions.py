@@ -310,7 +310,9 @@ def shell_auto_allowed(subject, cfg=None):
 # Agent orders channel: agents cannot write outside their workspace, so
 # app customization arrives as `.web-muse/orders.json` files (protocol in
 # server/orders_skill.md, seeded into every session workspace). The bridge
-# checks the file after each turn, validates every order, and acts:
+# checks the file on streamed turn events while the turn is still running
+# (gated on file change) and again after each turn, validates every
+# order, and acts:
 # `theme.apply` executes at once (fanned out as a themeApply event the
 # frontend applies); `theme.save`, `allowedCommands.update` and
 # `bridge.restart` only stage — a human's ordersDecide runs them, so
@@ -1232,6 +1234,10 @@ class SessionRouter:
         # keyed (sessionId, orderId).
         self._workspace_roots = {}
         self._pending_orders = {}
+        # Mid-turn orders polling: sessionId -> (mtime_ns, size) of
+        # orders.json at the last check. Streamed turn events only
+        # schedule a check when the stamp changed (see _poll_orders).
+        self._orders_seen = {}
         # Approved-restart executor: set by server/main.py to the real
         # graceful-restart coroutine; None in tests unless injected, in
         # which case an approved restart is recorded but not executed.
@@ -1340,20 +1346,26 @@ class SessionRouter:
         # Track the running turn per session so steer/interrupt/cancel can
         # default their exact-turn target (turn/steer REQUIRES expectedTurnId).
         if isinstance(params, dict) and params.get("sessionId"):
+            sid = params["sessionId"]
             if method == "turn/started" and params.get("turnId"):
-                self._turns[params["sessionId"]] = params["turnId"]
-            elif method == "turn/completed":
-                if self._turns.get(params["sessionId"]) == params.get("turnId"):
-                    self._turns.pop(params["sessionId"], None)
+                self._turns[sid] = params["turnId"]
+            if method == "turn/completed":
+                if self._turns.get(sid) == params.get("turnId"):
+                    self._turns.pop(sid, None)
                 # Agent orders are checked after each turn, in the
                 # background: the agent's file lands during the turn, so
-                # completion is the earliest moment it can be complete.
-                if params["sessionId"] in self._workspace_roots:
+                # completion is the final moment it can be complete.
+                if sid in self._workspace_roots:
                     try:
                         asyncio.create_task(
-                            self._check_orders(params["sessionId"]))
+                            self._check_orders(sid))
                     except RuntimeError:
                         pass  # no running loop (tests): caller checks directly
+            elif sid in self._workspace_roots:
+                # Mid-turn events (item/delta, ...): the orders file can
+                # land minutes before completion, so poll it here too —
+                # gated on change, so idle streams cost one stat each.
+                self._poll_orders(sid)
         frame = map_notification_to_ws(method, params)
         sid = notification_session_id(method, params)
         targets = self._targets_for(sid)
@@ -1448,6 +1460,23 @@ class SessionRouter:
         for conn in list(self._conns):
             conn.queue_frame(frame)
 
+    def _poll_orders(self, sid):
+        """Schedule a mid-turn orders check when the file looks new.
+
+        Never raises: a missing file means nothing to do, and without
+        a running loop (tests) the caller checks directly.
+        """
+        try:
+            root = self._workspace_roots.get(sid)
+            if not root:
+                return
+            st = (Path(root) / ORDERS_DIRNAME / ORDERS_FILENAME).stat()
+            if (st.st_mtime_ns, st.st_size) == self._orders_seen.get(sid):
+                return
+            asyncio.create_task(self._check_orders(sid))
+        except (OSError, RuntimeError):
+            pass
+
     async def _check_orders(self, sid):
         """Validate one session's orders file and act (never raises)."""
         root = self._workspace_roots.get(sid)
@@ -1456,14 +1485,21 @@ class SessionRouter:
         odir = Path(root) / ORDERS_DIRNAME
         ofile = odir / ORDERS_FILENAME
         try:
-            if not ofile.is_file() \
-                    or ofile.stat().st_size > ORDERS_MAX_BYTES:
+            if not ofile.is_file():
+                return
+            st = ofile.stat()
+            if st.st_size > ORDERS_MAX_BYTES:
+                self._orders_seen[sid] = (st.st_mtime_ns, st.st_size)
                 return
             payload = json.loads(ofile.read_text())
         except (OSError, ValueError) as e:
             LOG.warning("orders: unreadable file for session %s (%s)",
                         sid, e)
             return
+        # Stamp what was actually read: a torn mid-write read leaves
+        # the old stamp, so the next event retries instead of going
+        # blind until the completion backstop.
+        self._orders_seen[sid] = (st.st_mtime_ns, st.st_size)
         if isinstance(payload, dict) \
                 and isinstance(payload.get("orders"), list) \
                 and len(payload["orders"]) > ORDERS_MAX_COUNT:
@@ -1472,6 +1508,11 @@ class SessionRouter:
             return
         receipt = _read_receipt(odir)
         valid, rejected = validate_orders(payload, receipt)
+        # Rechecks (mid-turn growth, completion backstop) must not
+        # rewrite settled statuses: ids already in the receipt keep
+        # whatever they reported; only new ids are recorded.
+        rejected = {oid: reason for oid, reason in rejected.items()
+                    if oid not in receipt}
         processed = {oid: {"status": "rejected", "reason": reason}
                      for oid, reason in rejected.items()}
         for oid, action, params in valid:
