@@ -2420,7 +2420,9 @@ function onEvent(method, p) {
       trackWorkflowItem(p.item);
       break;
     case "turn/started":
-      state.running = true; state.turnId = p.turnId || null; updateRunChip();
+      state.running = true; state.turnId = p.turnId || null;
+      if (state.session && p.turnId) state.session.activeTurnId = p.turnId;
+      updateRunChip();
       openTurnBlock();
       showThinking();
       if (state.queuedTurnId && p.turnId === state.queuedTurnId) {
@@ -2432,7 +2434,9 @@ function onEvent(method, p) {
       hideThinking();
       // Single terminal event: p.terminal is completed|failed|cancelled.
       // (There are no turn/cancelled or turn/failed notifications on MSP v1.)
-      state.running = false; state.turnId = null; updateRunChip();
+      state.running = false; state.turnId = null;
+      if (state.session) state.session.activeTurnId = null;
+      updateRunChip();
       document.querySelectorAll(".tline.streaming").forEach((d) => {
         d.classList.remove("streaming");
         d.querySelectorAll(".caret").forEach((c) => c.remove());
@@ -2467,6 +2471,7 @@ function onEvent(method, p) {
     }
     case "turn/retracted":
       hideThinking();
+      if (state.session) state.session.activeTurnId = null;
       dissolveTurnBlock();
       sysLine("turn retracted — prompt restored to the composer.");
       if (p.promptText) { el("input").value = p.promptText; autosize(); }
@@ -4353,7 +4358,18 @@ async function sendPromptText(text, alreadyEchoed, extra) {
     state.running = true; updateRunChip();
     // Optimistic status: the new turn's clock restarts on send, not when
     // turn/started lands. A queued follow-up keeps the current turn's row.
-    if (r.disposition !== "queued") showThinking();
+    // Adopt the new turn id first: deriving the clock off the previous
+    // turn's id would restart the row at the old turn's elapsed time.
+    if (r.disposition !== "queued") {
+      if (r.turnId) {
+        state.turnId = r.turnId;
+        if (state.session) state.session.activeTurnId = r.turnId;
+      } else {
+        state.turnId = null;
+        if (state.session) state.session.activeTurnId = null;
+      }
+      showThinking();
+    }
   } catch (e) {
     sysLine("send failed: " + e.message, true);
     setStatus("send failed: " + e.message);
