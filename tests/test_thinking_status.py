@@ -129,6 +129,22 @@ class TestThinkingStatus(unittest.TestCase):
         self.assertLess(body.index("activeTurnId"),
                         body.index("showThinking();"))
 
+    def test_send_records_request_time(self):
+        body = fn_body("sendPromptText")
+        self.assertIn("thinkingRequestAt = Date.now()", body)
+        self.assertLess(body.index("thinkingRequestAt = Date.now()"),
+                        body.index("showThinking();"))
+
+    def test_reset_clamps_to_request_time(self):
+        self.assertIn("thinkingRequestAt", fn_body("showThinking"))
+
+    def test_request_clock_cleared_on_settle(self):
+        for marker in ("turn/completed", "turn/retracted"):
+            body = case_body(marker)
+            self.assertIn("thinkingRequestAt", body)
+            self.assertIn("= 0", body)
+        self.assertIn("thinkingRequestAt = 0", fn_body("clearTranscript"))
+
     def test_ensure_preserves_clock(self):
         body = fn_body("ensureThinking")
         self.assertIn("state.running", body)
