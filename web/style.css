@@ -700,6 +700,90 @@ body {
 }
 #hintbar span { overflow: hidden; text-overflow: ellipsis; }
 
+/* workflow panel: collapsible run/plan progress below the composer.
+ * Quiet by design (theme tokens only): a header row carrying overall
+ * progress (counts + bar), a run-setup row (status pill + definition,
+ * run id, trigger, start, elapsed), plus a step list. Hidden until the first
+ * published workflow/todo event lands. */
+#workflow-panel { width: min(760px, 100%); margin: 0 auto; padding: 0 12px 4px; font-size: 13px; }
+#workflow-panel[hidden] { display: none; }
+#workflow-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; border-radius: 6px; padding: 4px 10px;
+  color: var(--dim); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left;
+}
+#workflow-head:hover { color: var(--fg); }
+#workflow-caret { color: var(--faint); flex: none; width: 1em; }
+#workflow-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#workflow-count { color: var(--faint); white-space: nowrap; }
+#workflow-panel:not(.open) #workflow-body { display: none; }
+#workflow-body {
+  margin: 2px 0 0; padding: 2px 10px 2px 26px; max-height: 22vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 1px; overscroll-behavior-y: contain;
+}
+.wf-step { display: flex; gap: 8px; align-items: baseline; color: var(--dim); }
+.wf-step .g { flex: none; width: 1.1em; text-align: center; }
+.wf-step .t { overflow-wrap: break-word; min-width: 0; }
+.wf-step .s { color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+.wf-step.wf-done { color: var(--dim); }
+.wf-step.wf-done .g { color: var(--ok); }
+.wf-step.wf-active { color: var(--fg); }
+.wf-step.wf-active .g { color: var(--accent); }
+.wf-step.wf-failed .g { color: var(--errFg); }
+.wf-step.wf-cancelled { text-decoration: line-through; }
+.wf-step.wf-cancelled .g { text-decoration: none; }
+/* Per-step live detail in the transcript details-group idiom: the
+ * summary keeps the glyph+label row (▸/▾ marker), the body carries
+ * status text, timestamps, and the step's streamed output. */
+.wf-step .wf-detail { flex: 1; min-width: 0; }
+.wf-sum { display: flex; gap: 8px; align-items: baseline; cursor: pointer; list-style: none; }
+.wf-sum::-webkit-details-marker { display: none; }
+.wf-sum::before { content: "▸ "; color: var(--faint); flex: none; }
+.wf-detail[open] > .wf-sum::before { content: "▾ "; }
+.wf-step.wf-failed .wf-sum { color: var(--errFg); }
+.wf-info {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 2px 0 3px 1.4em; font-size: 11.5px; color: var(--faint);
+}
+.wf-info .wf-line { overflow-wrap: break-word; }
+.wf-log {
+  margin: 3px 0 0; padding: 6px 8px;
+  background: var(--codeBg); border: 1px solid var(--line); border-radius: 8px;
+  font-size: 11.5px; color: var(--dim);
+  white-space: pre; overflow: auto; max-height: 160px;
+}
+#workflow-meta {
+  display: flex; align-items: center; gap: 8px; padding: 1px 10px 0 26px;
+  font-size: 11.5px; color: var(--faint);
+  overflow: hidden; white-space: nowrap;
+}
+#workflow-meta[hidden] { display: none; }
+#workflow-meta [hidden] { display: none; }
+.wf-pill {
+  flex: none; padding: 0 8px; border-radius: 999px;
+  border: 1px solid var(--line); font-size: 11px; line-height: 1.7;
+}
+.wf-pill.wf-done { color: var(--ok); border-color: var(--ok); }
+.wf-pill.wf-active { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.wf-pill.wf-failed { color: var(--errFg); border-color: var(--errFg); }
+.wf-pill.wf-cancelled { color: var(--faint); }
+.wf-pill.wf-pending { color: var(--dim); }
+.wf-meta { overflow: hidden; text-overflow: ellipsis; flex: none; }
+#workflow-runid { font-family: var(--mono); }
+#workflow-def { font-family: var(--mono); max-width: 240px; }
+#workflow-elapsed { margin-left: auto; }
+/* Run-level annotations rollup: failure lines aggregated above the
+ * step list. Outside #workflow-body so the collapse rule leaves it
+ * visible with the meta row. */
+#workflow-annotations {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 1px 10px 0 26px; font-size: 11.5px;
+  max-height: 12vh; overflow-y: auto;
+}
+#workflow-annotations[hidden] { display: none; }
+.wf-ann-head { color: var(--errFg); font-weight: 600; white-space: nowrap; }
+.wf-ann { color: var(--dim); overflow-wrap: break-word; }
+
 /* slash popup: in-flow above the composer so it pushes the transcript
    up instead of overlapping it; transparent, '/' above input text */
 #slash-popup {
@@ -882,6 +966,7 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 .row-btns button:focus-visible,
 .repo-pill:focus-visible, .repo-opt:focus-visible,
 .composer-btns button:focus-visible, #selection-ticker:focus-visible,
+#workflow-head:focus-visible, .wf-sum:focus-visible,
 .out-toggle:focus-visible,
 .dir-head button:focus-visible, .dir-pathrow button:focus-visible,
 .dir-navrow button:focus-visible, .dir-crumbs button:focus-visible,
