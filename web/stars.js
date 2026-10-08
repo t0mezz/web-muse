@@ -81,7 +81,7 @@
   }
 
   function generateStars(count, starColor, bounds) {
-    if (starColor === undefined) starColor = themeColor('star', '#4C4541');
+    if (starColor === undefined) starColor = themeColor('star', '#F6E3C2');
     if (!bounds) bounds = { x0: -2000, x1: 2000, y0: -2000, y1: 2000 };
     const shadows = [];
     for (let i = 0; i < count; i++) {
@@ -114,7 +114,7 @@
     const count = options.count !== undefined ? options.count : 1000;
     const size = options.size !== undefined ? options.size : 1;
     const duration = options.duration !== undefined ? options.duration : 50;
-    const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#4C4541');
+    const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#F6E3C2');
     const bounds = options.bounds !== undefined ? options.bounds : null;
 
     const layer = document.createElement('div');
@@ -171,8 +171,8 @@
   const DEFAULT_COUNTS = [1000, 400, 200];
   function defaultBackground() {
     return 'radial-gradient(ellipse at bottom, ' +
-      themeColor('starBg0', '#F7DAA2') + ' 0%, ' +
-      themeColor('starBg1', '#FCF0DA') + ' 100%)';
+      themeColor('starBg0', '#0C0C0C') + ' 0%, ' +
+      themeColor('starBg1', '#050607') + ' 100%)';
   }
 
   /**
@@ -189,7 +189,7 @@
    *   speed (50)        base layer loop duration in seconds (others x2, x3)
    *   stiffness (50)    spring stiffness, as in useSpring({stiffness, damping})
    *   damping (20)      spring damping
-   *   starColor (theme star / '#4C4541')
+   *   starColor (theme star / '#F6E3C2')
    *   counts ([1000, 400, 200])  per-layer star counts, far -> near
    *   opacity (1)       field transparency, applied to the parallax wrapper
    *   background (theme gradient)  container backdrop paint
@@ -204,7 +204,7 @@
     const speed = options.speed !== undefined ? options.speed : 50;
     const stiffness = options.stiffness !== undefined ? options.stiffness : 50;
     const damping = options.damping !== undefined ? options.damping : 20;
-    const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#4C4541');
+    const starColor = options.starColor !== undefined ? options.starColor : themeColor('star', '#F6E3C2');
     const counts = options.counts !== undefined ? options.counts : DEFAULT_COUNTS;
     const opacity = options.opacity !== undefined ? options.opacity : 1;
     const background =

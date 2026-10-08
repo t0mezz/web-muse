@@ -67,9 +67,9 @@ color (e.g. `"rgba(241, 230, 209, 0.4)"`).
 - Text: `fg`, `dim`, `faint` — body, secondary, faintest, read on the
   surfaces above.
 - Accent: `accent`, `focus`, `onAccent`, `glow` — highlights, the
-  keyboard focus ring (a darker accent that holds 3:1 on every
-  surface), text sitting on the accent, the accent's RGB triplet
-  reused for glows.
+  keyboard focus ring (the accent itself on dark themes, a darker
+  accent on light ones, holding 3:1 on every surface), text sitting
+  on the accent, the accent's RGB triplet reused for glows.
 - Status: `ok`, `onOk`, `warn`, `warnBg`, `warnFg`, `err`, `errFg` —
   success, warning, error, each background paired with its text.
 - Messages: `user`, `agent`, `select` — user bubbles, agent bubbles,
@@ -96,17 +96,17 @@ default text roles and only move the surfaces and accent.
 Current defaults (copy, edit, send back the roles you change):
 
 ```json
-{"bg": "#FCF0DA", "panel": "#F1E6D1", "panel2": "#E9DDC9",
-"line": "#D5CAB8", "fg": "#4C4541", "dim": "#736B63",
-"faint": "#81786F", "accent": "#AEAC78", "focus": "#6D6753",
-"ok": "#78735A", "warn": "#F2C46A", "err": "#8B7551",
-"user": "#F6D89C", "agent": "#E9DDC9", "select": "#F6D89C",
-"warnBg": "#F4CC7E", "warnFg": "#71614A", "errFg": "#77664C",
-"codeBg": "#EEE2CE", "cardBg": "#F8DEAD", "pickedBg": "#F6D697",
-"onOk": "#FCF0DA", "onAccent": "#4C4541", "chipInk": "#4C4541",
-"light": "#fff", "glow": "174, 172, 120",
-"scrim": "rgba(241, 230, 209, 0.4)", "star": "#4C4541",
-"starBg0": "#F7DAA2", "starBg1": "#FCF0DA"}
+{"bg": "#0C0C0C", "panel": "#15171A", "panel2": "#1E2126",
+"line": "#33363A", "fg": "#CCD3DB", "dim": "#935B6C",
+"faint": "#A2717F", "accent": "#D25380", "focus": "#D25380",
+"ok": "#98614A", "warn": "#FB3D18", "err": "#ED1C24",
+"user": "#1E2126", "agent": "#15171A", "select": "#3A2029",
+"warnBg": "#2A1C12", "warnFg": "#8A9098", "errFg": "#ED1C24",
+"codeBg": "#15171A", "cardBg": "#1E2126", "pickedBg": "#2A2E34",
+"onOk": "#FFFAF4", "onAccent": "#0C0C0C", "chipInk": "#742E46",
+"light": "#fff", "glow": "210, 83, 128",
+"scrim": "rgba(12, 12, 12, 0.55)", "star": "#F6E3C2",
+"starBg0": "#0C0C0C", "starBg1": "#050607"}
 ```
 
 ## Limits

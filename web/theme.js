@@ -19,50 +19,46 @@
 
   var STORAGE_KEY = 'web-muse:theme';
 
-  // Warm-cream palette (Color Hunt fcf0daaeac78f2c46a4c4541):
-  // cream #FCF0DA, olive #AEAC78, gold #F2C46A, espresso #4C4541.
-  // Four hues cannot fill every role, so supporting shades are linear
-  // mixes of the palette extremes (e.g. panel = cream + 6% espresso);
-  // text roles are mixed to hold >= ~4:1 contrast on their surfaces.
-  // The palette has no red: err/errFg are gold deepened toward espresso
-  // (bronze), kept distinct from fg by hue and lightness.
+  // Ashen-rose default: near-black surfaces (#0C0C0C base), pale
+  // #CCD3DB body text with muted rose secondary roles, rose accent
+  // #D25380. Status hues stay warm (ember warn, red err) against the
+  // dark base; the starfield sky runs near-black with warm stars.
   var COLORS = {
-    bg: '#FCF0DA',
-    panel: '#F1E6D1',
-    panel2: '#E9DDC9',
-    line: '#D5CAB8',
-    fg: '#4C4541',
-    dim: '#736B63',
-    faint: '#81786F',
-    accent: '#AEAC78',
-    // Keyboard focus ring: accent mixed 2/3 toward espresso so the
-    // 2px :focus-visible outline holds >= 3:1 on every light surface
-    // (accent alone only reaches ~1.5-2.3:1 there). Dark themes reuse
-    // their accent, which already passes; tests/test_focus_rings.py
-    // guards the ratio per theme.
-    focus: '#6D6753',
-    ok: '#78735A',
-    warn: '#F2C46A',
-    err: '#8B7551',
-    user: '#F6D89C',
-    agent: '#E9DDC9',
-    select: '#F6D89C',
-    warnBg: '#F4CC7E',
-    warnFg: '#71614A',
-    errFg: '#77664C',
-    codeBg: '#EEE2CE',
-    cardBg: '#F8DEAD',
-    pickedBg: '#F6D697',
-    onOk: '#FCF0DA',
-    onAccent: '#4C4541',
-    chipInk: '#4C4541',
+    bg: '#0C0C0C',
+    panel: '#15171A',
+    panel2: '#1E2126',
+    line: '#33363A',
+    fg: '#CCD3DB',
+    dim: '#935B6C',
+    faint: '#A2717F',
+    accent: '#D25380',
+    // Keyboard focus ring: the accent itself, which already holds
+    // >= 3:1 on every dark surface. Light themes (e.g. parchment)
+    // darken it instead; tests/test_focus_rings.py guards the ratio
+    // per theme.
+    focus: '#D25380',
+    ok: '#98614A',
+    warn: '#FB3D18',
+    err: '#ED1C24',
+    user: '#1E2126',
+    agent: '#15171A',
+    select: '#3A2029',
+    warnBg: '#2A1C12',
+    warnFg: '#8A9098',
+    errFg: '#ED1C24',
+    codeBg: '#15171A',
+    cardBg: '#1E2126',
+    pickedBg: '#2A2E34',
+    onOk: '#FFFAF4',
+    onAccent: '#0C0C0C',
+    chipInk: '#742E46',
     light: '#fff',
     // Non-hex roles (kept as strings; applied verbatim).
-    glow: '174, 172, 120',
-    scrim: 'rgba(241, 230, 209, 0.4)',
-    star: '#4C4541',
-    starBg0: '#F7DAA2',
-    starBg1: '#FCF0DA',
+    glow: '210, 83, 128',
+    scrim: 'rgba(12, 12, 12, 0.55)',
+    star: '#F6E3C2',
+    starBg0: '#0C0C0C',
+    starBg1: '#050607',
   };
 
   // Theme key -> CSS custom property. Most are --<key>; mapped here so

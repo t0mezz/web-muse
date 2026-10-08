@@ -77,6 +77,20 @@ class TestThemesDir(unittest.TestCase):
         payload = json.loads((THEMES_DIR / "default.json").read_text())
         self.assertEqual(payload, theme_colors())
 
+    def test_parchment_keeps_previous_default(self):
+        """The warm-cream default retired to parchment.json keeps its
+        palette (spot values), so the swap never loses it."""
+        payload = json.loads((THEMES_DIR / "parchment.json").read_text())
+        self.assertEqual(payload["bg"], "#FCF0DA")
+        self.assertEqual(payload["accent"], "#AEAC78")
+        self.assertEqual(payload["fg"], "#4C4541")
+        self.assertEqual(set(payload), set(theme_colors()))
+
+    def test_ashen_rose_lives_only_as_default(self):
+        """ashen-rose became the default: no stale duplicate file."""
+        self.assertFalse((THEMES_DIR / "ashen-rose.json").exists(),
+                         "ashen-rose.json still present beside default.json")
+
 
 class TestThemeCommand(unittest.TestCase):
     def test_slash_entry(self):
