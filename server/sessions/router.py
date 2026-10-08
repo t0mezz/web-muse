@@ -117,6 +117,11 @@ class SessionRouter:
         # never assumed allowAll.
         self._approval_modes = {}
         self._subs = {}   # sessionId -> set of ClientConnection
+        # Conns that ever opened a session (any attach path). The fan-out
+        # fallback below is for fresh tabs waiting on their first
+        # subscribe — a tab that attached and then unsubscribed everything
+        # explicitly left, so it must not receive the fallback again.
+        self._attached_once = set()
         # Sessions this bridge created while still unnamed: the first
         # prompt names them from its initial text (default fallback).
         # An explicit rename drops the id, so user/host names always win.
@@ -160,6 +165,7 @@ class SessionRouter:
 
     def drop_conn(self, conn):
         self._conns.discard(conn)
+        self._attached_once.discard(conn)
         for members in self._subs.values():
             members.discard(conn)
 
@@ -170,8 +176,7 @@ class SessionRouter:
             params["after"] = after
         result = await self._msp.call("view/subscribe", params)
         async with self._lock:
-            self._subs.setdefault(session_id, set()).add(conn)
-            conn.sessions.add(session_id)
+            self._attach(conn, session_id)
         return result
 
     async def unsubscribe(self, conn, session_id):
@@ -660,8 +665,11 @@ class SessionRouter:
             if subs:
                 return list(subs)
             # Session-scoped events also go to conns with no subscription yet
-            # (fresh clients waiting for their first subscribe).
-            unattached = [c for c in self._conns if not c.sessions]
+            # (fresh clients waiting for their first subscribe). Tabs that
+            # attached before and unsubscribed everything are excluded:
+            # they left on purpose (see _attached_once).
+            unattached = [c for c in self._conns
+                        if not c.sessions and c not in self._attached_once]
             return unattached
         return list(self._conns)
 
@@ -1533,6 +1541,7 @@ class SessionRouter:
         if session_id:
             self._subs.setdefault(session_id, set()).add(conn)
             conn.sessions.add(session_id)
+            self._attached_once.add(conn)
 
     def _drop_routing(self, session_id):
         """Forget router state for a deleted session (subs, cursors...)."""
