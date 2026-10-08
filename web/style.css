@@ -306,6 +306,7 @@ body {
   .config-btn .line { transition: none; }
   .sess-icon.running svg { animation: none; }
   #btn-refresh-sessions.spin svg { animation: none; }
+  #btn-settings.spin svg { animation: none; }
 }
 .row-menu {
   position: absolute; top: calc(100% - 2px); right: 6px; z-index: 20;
@@ -886,6 +887,8 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 #btn-settings[aria-pressed="true"] { color: var(--fg); border-color: var(--line); }
 #topbar #btn-settings { font-size: 16px; }
 #topbar #btn-settings svg { display: block; width: 16px; height: 16px; }
+/* One-shot 360° on every press: same effect/keyframes as the session refresh. */
+#btn-settings.spin svg { animation: sess-spin-once 0.65s cubic-bezier(0.34, 1.4, 0.64, 1); }
 #settings-nav {
   display: flex; gap: 6px; padding: 0 10px 8px; flex: none;
   border-bottom: 1px solid var(--line);

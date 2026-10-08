@@ -105,8 +105,9 @@ function connect() {
       await refreshUsage();
       if (state.sessionId) {
         // Cursor-tracked replay: pick up where we left off.
-        await send({ type: "subscribe", sessionId: state.sessionId,
-          after: state.cursor || undefined }).then(handleSubscribeResult).catch(() => {});
+        const sid = state.sessionId;
+        await send({ type: "subscribe", sessionId: sid,
+          after: state.cursor || undefined }).then((r) => handleSubscribeResult(r, sid)).catch(() => {});
         fetchPending();
       } else if (!state.everConnected) {
         sysLine("Connected to web-muse bridge.");
@@ -655,9 +656,21 @@ setInterval(() => {
   });
 }, 60000);
 
+// Leaving a session ends its live stream on this tab: the bridge holds one
+// view/subscribe per session, so without this the old turn keeps fanning
+// out here and paints into the next transcript. Best-effort: a failed
+// unsubscribe just means stragglers are ignored by sessionId instead.
+function leaveSession(sid) {
+  if (!sid) return;
+  send({ type: "unsubscribe", sessionId: sid }).catch(() => {});
+}
+
 async function openSession(sessionId) {
   // The starfield stays up: the bottom-right switch owns it now.
   closeRowMenus();
+  // Stop the previous session's stream before the switch: its turn may
+  // still be running and would otherwise paint into this transcript.
+  if (state.sessionId && state.sessionId !== sessionId) leaveSession(state.sessionId);
   // Assign before clearTranscript: its updateWelcome() would otherwise see
   // a stale null sessionId and restart the starfield mid-open.
   state.sessionId = sessionId;
@@ -703,7 +716,7 @@ async function openSession(sessionId) {
     updateOlderBtn();
     updateSessionDetail();
     const sub = await send({ type: "subscribe", sessionId, after: state.cursor || undefined }).catch(() => null);
-    if (sub) handleSubscribeResult(sub);
+    if (sub) handleSubscribeResult(sub, sessionId);
     // A turn already running when the session opens (reload, late join)
     // never re-fires turn/started here: reconcile after replay settles.
     reconcileRunningState();
@@ -743,8 +756,10 @@ function reconcileRunningState() {
   ensureThinking();
 }
 
-function handleSubscribeResult(r) {
+function handleSubscribeResult(r, sessionId) {
   if (!r) return;
+  // A slow replay must not paint a session the user already left.
+  if (sessionId && state.sessionId !== sessionId) return;
   // Some hosts replay missed events inline in the subscribe result.
   const evs = r.events || r.missed || [];
   for (const e of evs) {
@@ -808,6 +823,9 @@ function ensureRootConfirmed(path) {
 }
 
 async function newSession(name, opts) {
+  // The blank view has no session to filter by, so stop the old stream up
+  // front instead of letting it render here.
+  if (state.sessionId) leaveSession(state.sessionId);
   clearTranscript();
   state.sessionId = null; state.session = null;
   updateRepoBar();
@@ -1025,6 +1043,7 @@ function clearTranscript() {
   el("tab-tools").innerHTML = "";
   state.items.clear(); state.tools.clear();
   state.running = false; state.turnId = null; state.turnBlock = null;
+  thinkingStartedAt = 0; thinkingRequestAt = 0;
   state.workflow = null; state.todos = null; renderWorkflow();
   // A fresh transcript reads unfiltered; the chip row reflects it.
   state.txFilter = "all";
@@ -1137,6 +1156,10 @@ function placeStarsToggle() {
    ensureThinking() re-shows mid-turn without resetting the clock. */
 let thinkingTimer = null;
 let thinkingStartedAt = 0;
+// Local send time of the current turn: a freshly derived clock for a
+// locally-initiated turn never predates it (stale session timestamps
+// must not restart the row at an old turn's elapsed time).
+let thinkingRequestAt = 0;
 // Derive the active turn's start time for late-join/new-browser cases:
 // the server keeps running but this browser never saw turn/started, so
 // Date.now() would reset the clock. Use the earliest recordedAt for the
@@ -1199,6 +1222,7 @@ function showThinking(reset = true) {
   if (reset || !thinkingStartedAt) {
     const derived = thinkingStartForActiveTurn();
     thinkingStartedAt = (derived !== null && derived <= Date.now()) ? derived : Date.now();
+    if (thinkingRequestAt && thinkingStartedAt < thinkingRequestAt) thinkingStartedAt = thinkingRequestAt;
   }
   const tick = () => {
     const s = Math.max(0, Math.round((Date.now() - thinkingStartedAt) / 1000));
@@ -2390,9 +2414,10 @@ setInterval(() => {
 /* ---------- MSP event fan-in ---------- */
 function onEvent(method, p) {
   p = p || {};
-  if (p.sessionId && state.sessionId && p.sessionId !== state.sessionId) {
+  if (p.sessionId && p.sessionId !== state.sessionId) {
     if (method === "session/listChanged" || method === "session/started") refreshSessions().catch(() => {});
-    return; // another session's traffic
+    return; // another session's traffic (or none open: global events
+    // carry no sessionId and still pass through below)
   }
   if (p.viewCursor && (!p.sessionId || p.sessionId === state.sessionId)) {
     state.cursor = p.viewCursor; updateCursorChip();
@@ -2420,7 +2445,9 @@ function onEvent(method, p) {
       trackWorkflowItem(p.item);
       break;
     case "turn/started":
-      state.running = true; state.turnId = p.turnId || null; updateRunChip();
+      state.running = true; state.turnId = p.turnId || null;
+      if (state.session && p.turnId) state.session.activeTurnId = p.turnId;
+      updateRunChip();
       openTurnBlock();
       showThinking();
       if (state.queuedTurnId && p.turnId === state.queuedTurnId) {
@@ -2432,7 +2459,10 @@ function onEvent(method, p) {
       hideThinking();
       // Single terminal event: p.terminal is completed|failed|cancelled.
       // (There are no turn/cancelled or turn/failed notifications on MSP v1.)
-      state.running = false; state.turnId = null; updateRunChip();
+      state.running = false; state.turnId = null;
+      if (state.session) state.session.activeTurnId = null;
+      thinkingRequestAt = 0;
+      updateRunChip();
       document.querySelectorAll(".tline.streaming").forEach((d) => {
         d.classList.remove("streaming");
         d.querySelectorAll(".caret").forEach((c) => c.remove());
@@ -2467,6 +2497,8 @@ function onEvent(method, p) {
     }
     case "turn/retracted":
       hideThinking();
+      if (state.session) state.session.activeTurnId = null;
+      thinkingRequestAt = 0;
       dissolveTurnBlock();
       sysLine("turn retracted — prompt restored to the composer.");
       if (p.promptText) { el("input").value = p.promptText; autosize(); }
@@ -4351,9 +4383,21 @@ async function sendPromptText(text, alreadyEchoed, extra) {
       state.queuedTurnId = null;
     }
     state.running = true; updateRunChip();
+    thinkingRequestAt = Date.now();
     // Optimistic status: the new turn's clock restarts on send, not when
     // turn/started lands. A queued follow-up keeps the current turn's row.
-    if (r.disposition !== "queued") showThinking();
+    // Adopt the new turn id first: deriving the clock off the previous
+    // turn's id would restart the row at the old turn's elapsed time.
+    if (r.disposition !== "queued") {
+      if (r.turnId) {
+        state.turnId = r.turnId;
+        if (state.session) state.session.activeTurnId = r.turnId;
+      } else {
+        state.turnId = null;
+        if (state.session) state.session.activeTurnId = null;
+      }
+      showThinking();
+    }
   } catch (e) {
     sysLine("send failed: " + e.message, true);
     setStatus("send failed: " + e.message);
@@ -4844,6 +4888,15 @@ function syncSettingsGear() {
 function toggleSettings() {
   const S = window.WebMuseSettings;
   if (!S) return;
+  // Restart the one-shot 360° on every press, even mid-tail of a prior
+  // spin (same effect as the session refresh button).
+  const g = el("btn-settings");
+  if (g) {
+    g.classList.remove("spin");
+    void g.offsetWidth;
+    g.classList.add("spin");
+    setTimeout(() => g.classList.remove("spin"), 650);
+  }
   if (S.isOpen()) {
     S.close();
   } else {
