@@ -2684,6 +2684,7 @@ function applyThemeOrder(p) {
   // vars, so a running field would keep its old sky: rebuild it when it
   // is up so the new star / starBg0 / starBg1 take effect at once.
   if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }
+  syncPearlTone();
   sysLine(`theme updated by session ${shortId(p.sessionId)} (${n} colors, order ${p.orderId}).`);
   toast(`theme updated (${n} colors)`);
 }
@@ -2705,6 +2706,34 @@ const THEME_NAME_KEY = "web-muse:theme-name";
 function activeThemeName() {
   try { return localStorage.getItem(THEME_NAME_KEY) || null; }
   catch (_) { return null; }
+}
+/* ---------- pearl button surface tone ---------- */
+// The pearl repo pill's gloss is baked for dark surfaces (bright
+// highlights, black shade). On light palettes that recipe goes flat
+// and dirty, so the tone follows the live panel luminance and the
+// stylesheet retunes behind body[data-pearl="light"]. Luminance-based
+// (not name-based) so custom localStorage overrides are covered too.
+function pearlToneFor(panel) {
+  // Relative luminance of a #rgb/#rrggbb panel color. Anything
+  // unparseable stays on the dark recipe: the default palette is
+  // dark, and that matches the pre-tone rendering.
+  const m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.exec((panel || "").trim());
+  if (!m) return "dark";
+  let hex = m[1].slice(0, 6);
+  if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+  const chan = [0, 2, 4].map((i) => {
+    const v = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  });
+  const lum = 0.2126 * chan[0] + 0.7152 * chan[1] + 0.0722 * chan[2];
+  // Shipped panels sit far apart (darks <= 0.03, lights >= 0.75),
+  // so 0.3 leaves wide margin on both sides (see test_pearl_tone).
+  return lum > 0.3 ? "light" : "dark";
+}
+function syncPearlTone() {
+  const T = window.WebMuseTheme;
+  const tone = T ? pearlToneFor(T.get("panel")) : "dark";
+  try { document.body.dataset.pearl = tone; } catch (_) {}
 }
 async function fetchThemeColors(hit) {
   // Never cached: an edited theme file must come back fresh when the
@@ -2737,6 +2766,7 @@ function applyThemeColors(hit, colors) {
   // is up so the new star / starBg0 / starBg1 take effect at once
   // (same as applyThemeOrder).
   if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }
+  syncPearlTone();
   return n;
 }
 async function cmdThemeReload(names) {
@@ -4985,6 +5015,7 @@ function applySettingsTheme(name) {
     } catch (_) { /* storage unavailable: memory-only */ }
     T.apply();
     if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }
+    syncPearlTone();
     toast("theme → default");
     return;
   }
@@ -5196,6 +5227,7 @@ updateWelcome();
 syncStarsToggle();
 syncStarToggleVisibility();
 placeStarsToggle();
+syncPearlTone();
 updateRepoBar();
 loadPickedModel();
 loadPickedEffort();

@@ -1131,18 +1131,137 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab,
 #center.is-welcome #repo-bar { width: min(680px, 100%); }
 .pill-wrap { position: relative; flex: none; }
 .pill-wrap[hidden] { display: none; }
+/* Pearl repo pill (Uiverse marcelodolza), base colors mapped to the
+ * theme scheme: surface var(--panel), ink var(--dim)/var(--fg), edge
+ * var(--line)/var(--accent). The gloss recipe below is baked for dark
+ * surfaces; body[data-pearl="light"] (marked from the live panel
+ * luminance by syncPearlTone in app.js) retunes it for light palettes,
+ * where faint white highlights vanish and black shades go harsh. The
+ * light block adds no hex literals (rgba()/var() only) so the
+ * test_theme no-hex rule keeps passing. */
 .repo-pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 12px; border-radius: 999px; cursor: pointer;
-  background: var(--panel); color: var(--dim); border: 1px solid var(--line);
+  --pearl-radius: 999px;
+  position: relative;
+  display: inline-flex; align-items: center;
+  padding: 0; border-radius: var(--pearl-radius); cursor: pointer;
+  outline: none;
+  background-color: var(--panel); color: var(--dim); border: 1px solid var(--line);
   font-size: 12px; line-height: 1.6; max-width: 44vw;
+  transition: box-shadow 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+  box-shadow:
+    inset 0 0.12rem 0.3rem rgba(255, 255, 255, 0.18),
+    inset 0 -0.06rem 0.12rem rgba(0, 0, 0, 0.6),
+    inset 0 -0.15rem 0.4rem rgba(255, 255, 255, 0.22),
+    0 0.6rem 0.9rem rgba(0, 0, 0, 0.22),
+    0 0.25rem 0.45rem -0.2rem rgba(0, 0, 0, 0.6);
 }
-.repo-pill:hover { color: var(--fg); border-color: var(--accent); }
+.repo-pill .pearl-wrap {
+  display: block;
+  padding: 6px 14px;
+  border-radius: inherit;
+  position: relative;
+  overflow: hidden;
+  max-width: 100%;
+}
+.repo-pill .pearl-row {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0;
+  max-width: 100%;
+  transform: translateY(2%);
+  transition: transform 0.2s ease;
+  mask-image: linear-gradient(to bottom, white 45%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, white 45%, transparent);
+}
+.repo-pill .pearl-wrap::before,
+.repo-pill .pearl-wrap::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.repo-pill .pearl-wrap::before {
+  left: -15%; right: -15%; bottom: 25%; top: -100%;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.06);
+}
+.repo-pill .pearl-wrap::after {
+  left: 6%; right: 6%; top: 12%; bottom: 42%;
+  border-radius: 22px 22px 0 0;
+  box-shadow: inset 0 6px 6px -6px rgba(255, 255, 255, 0.45);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.16) 0%,
+    rgba(0, 0, 0, 0) 55%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+.repo-pill:hover {
+  color: var(--fg); border-color: var(--accent);
+  box-shadow:
+    inset 0 0.12rem 0.25rem rgba(255, 255, 255, 0.24),
+    inset 0 -0.06rem 0.12rem rgba(0, 0, 0, 0.6),
+    inset 0 -0.15rem 0.4rem rgba(255, 255, 255, 0.32),
+    0 0.6rem 0.9rem rgba(0, 0, 0, 0.22),
+    0 0.25rem 0.45rem -0.2rem rgba(0, 0, 0, 0.6);
+}
+.repo-pill:hover .pearl-wrap::before { transform: translateY(-5%); }
+.repo-pill:hover .pearl-wrap::after { opacity: 0.4; transform: translateY(5%); }
+.repo-pill:hover .pearl-row { transform: translateY(-4%); }
+.repo-pill:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 0.12rem 0.25rem rgba(255, 255, 255, 0.26),
+    inset 0 -0.06rem 0.12rem rgba(0, 0, 0, 0.7),
+    inset 0 -0.15rem 0.4rem rgba(255, 255, 255, 0.2),
+    0 0.4rem 0.6rem rgba(0, 0, 0, 0.2),
+    0 0.15rem 0.3rem -0.15rem rgba(0, 0, 0, 0.5);
+}
 #branch-pill { max-width: 28vw; }
-.repo-pill:disabled { opacity: .55; cursor: default; }
+.repo-pill:disabled { opacity: .55; cursor: default; transform: none; }
 .repo-pill svg { flex: none; }
 .repo-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-pill .pearl-wrap { min-width: 0; }
 .repo-pill.picked { color: var(--fg); }
+/* Light-surface treatment: no glow. White highlights vanish against
+ * near-white panels and read as haze, so light palettes get a flat
+ * pill instead: theme surface, a faint ink-tinted foot, and a soft
+ * drop shadow, with the accent edge on hover. The pearl sheen layers
+ * stay off behind this hook. */
+body[data-pearl="light"] .repo-pill {
+  --pearl-lo: rgba(93, 74, 58, 0.22);
+  --pearl-lo: color-mix(in srgb, var(--fg) 22%, transparent);
+  box-shadow:
+    inset 0 -0.06rem 0.1rem var(--pearl-lo),
+    0 0.4rem 0.8rem rgba(0, 0, 0, 0.10),
+    0 0.15rem 0.35rem -0.15rem rgba(0, 0, 0, 0.16);
+}
+body[data-pearl="light"] .repo-pill .pearl-wrap::before,
+body[data-pearl="light"] .repo-pill .pearl-wrap::after {
+  display: none;
+}
+body[data-pearl="light"] .repo-pill:hover {
+  box-shadow:
+    inset 0 -0.06rem 0.1rem var(--pearl-lo),
+    0 0.5rem 1rem rgba(0, 0, 0, 0.12),
+    0 0.2rem 0.4rem -0.15rem rgba(0, 0, 0, 0.18);
+}
+body[data-pearl="light"] .repo-pill:active {
+  box-shadow:
+    inset 0 -0.06rem 0.1rem var(--pearl-lo),
+    0 0.25rem 0.5rem rgba(0, 0, 0, 0.10),
+    0 0.1rem 0.25rem -0.1rem rgba(0, 0, 0, 0.14);
+}
+@media (prefers-reduced-motion: reduce) {
+  .repo-pill, .repo-pill .pearl-row,
+  .repo-pill .pearl-wrap::before, .repo-pill .pearl-wrap::after {
+    transition: none;
+  }
+  .repo-pill .pearl-row, .repo-pill:hover .pearl-row,
+  .repo-pill:hover .pearl-wrap::before, .repo-pill:hover .pearl-wrap::after,
+  .repo-pill:active {
+    transform: none;
+  }
+}
 /* menus open upward from the pills */
 .repo-menu {
   position: absolute; bottom: calc(100% + 6px); left: 0;
