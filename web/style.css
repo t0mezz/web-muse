@@ -845,6 +845,65 @@ body {
 }
 pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
 
+/* settings panel: right drawer like the inspector, Linear-style
+ * lightweight groups — a segmented group nav up top, one quiet
+ * label-plus-control row per setting. Future groups need no CSS:
+ * they reuse .setting-row and the nav pills. */
+#settings {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(88vw, 340px); z-index: 30;
+  background: var(--panel); border-left: 1px solid var(--line);
+  display: none; flex-direction: column;
+  padding-top: env(safe-area-inset-top); padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+#settings.open { display: flex; }
+.settings-head { display: flex; align-items: center; gap: 8px; padding: 10px 6px 8px 12px; flex: none; }
+.settings-head strong { flex: 1; font-size: 13px; }
+#btn-close-settings {
+  display: block; background: none; border: none; color: var(--dim);
+  padding: 10px 12px; cursor: pointer; font-size: 14px; flex: none;
+}
+#btn-close-settings:hover { color: var(--fg); }
+/* Pressed gear reads active while its panel is open. */
+#btn-settings[aria-pressed="true"] { color: var(--fg); border-color: var(--line); }
+#settings-nav {
+  display: flex; gap: 6px; padding: 0 10px 8px; flex: none;
+  border-bottom: 1px solid var(--line);
+}
+#settings-nav button {
+  flex: 1; background: none; border: 1px solid transparent; border-radius: 999px;
+  color: var(--dim); padding: 6px 4px; font: inherit; font-size: 12.5px; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#settings-nav button:hover { color: var(--fg); }
+#settings-nav button.active { color: var(--fg); background: var(--panel2); border-color: var(--line); font-weight: 600; }
+.settings-body { flex: 1; overflow-y: auto; padding: 4px 12px 12px; }
+.setting-row { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.setting-row:last-child { border-bottom: none; }
+.setting-label { flex: 1; min-width: 0; }
+.setting-title { font-size: 13px; font-weight: 600; }
+.setting-desc { font-size: 12px; color: var(--dim); margin-top: 2px; }
+.setting-control { flex: none; display: flex; align-items: center; }
+.setting-select {
+  max-width: 38vw; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 8px; font-size: 13px;
+}
+.setting-select:focus { outline: none; border-color: var(--accent); }
+/* switch in the stars-toggle idiom, but in-flow (no fixed position) */
+.setting-toggle {
+  width: 34px; height: 20px; padding: 0 1px; flex: none;
+  display: flex; align-items: center; justify-content: flex-start;
+  border-radius: 999px; border: 1px solid transparent;
+  background: var(--line); cursor: pointer; outline: none;
+}
+.setting-toggle[aria-checked="true"] { background: var(--accent); justify-content: flex-end; }
+.setting-toggle:hover { border-color: var(--faint); }
+.setting-toggle:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--glow-color), .3); }
+.setting-toggle .setting-thumb {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  background: var(--light); pointer-events: none;
+}
+
 /* directory explorer dialog */
 #dir-dialog {
   position: fixed; inset: 0; z-index: 60;
@@ -961,7 +1020,10 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 .side-head button:focus-visible, .sess-toggle:focus-visible,
 #btn-older:focus-visible, #tx-filters button:focus-visible,
 #jump-latest:focus-visible, .tab:focus-visible,
-#btn-close-inspector:focus-visible, #approval-mode:focus-visible,
+#btn-close-inspector:focus-visible, #btn-settings:focus-visible,
+#btn-close-settings:focus-visible, #settings-nav button:focus-visible,
+.setting-toggle:focus-visible, .setting-select:focus-visible,
+#approval-mode:focus-visible,
 .card button:focus-visible, .card .opt:focus-visible,
 .row-btns button:focus-visible,
 .repo-pill:focus-visible, .repo-opt:focus-visible,
@@ -975,21 +1037,23 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 }
 
 /* touch: no double-tap zoom delay, no scroll chaining out of panes */
-button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
+button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab,
+#settings-nav button, .setting-toggle, .setting-select {
   touch-action: manipulation;
 }
-#terminal, #session-list, .tabpanel, #slash-popup, #cards {
+#terminal, #session-list, .tabpanel, .settings-body, #slash-popup, #cards {
   overscroll-behavior-y: contain;
 }
 
 /* mobile */
 @media (max-width: 899px) {
   /* 16px inputs: iOS Safari zooms on focus below this. */
-  #input, #session-filter, .card input[type="text"], #model-picker, #effort-picker, #dir-path, #approval-mode { font-size: 16px; }
+  #input, #session-filter, .card input[type="text"], #model-picker, #effort-picker, #dir-path, #approval-mode, .setting-select { font-size: 16px; }
   .composer-btns button { width: 44px; height: 44px; }
   .row-opt { padding: 8px 14px; }
   #btn-older { padding: 6px 12px; font-size: 13px; }
   #btn-close-inspector { display: block; }
+  #btn-close-settings { display: block; }
   #slash-popup { width: 100%; max-height: 38vh; }
 }
 /* narrow phones: declutter the topbar and toolbar */
@@ -1017,6 +1081,8 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab {
   #center { max-width: 880px; margin: 0 auto; width: 100%; border: none; }
   #inspector { position: static; width: 264px; flex: none; }
   #inspector.open { display: flex; }
+  #settings { position: static; width: 300px; flex: none; }
+  #settings.open { display: flex; }
   #terminal { padding: 16px 20px 20px; }
   /* Star-mode translucency is a desktop treat: phones stay opaque so the
    * transcript never bleeds through the drawers. */

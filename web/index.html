@@ -18,6 +18,7 @@
     <select id="effort-picker" title="Reasoning effort (default for new chats)" aria-label="Reasoning effort"><option value="">effort…</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select>
     <select id="model-picker" title="Model" aria-label="Model"><option value="">model…</option></select>
     <button id="btn-inspector" title="Toggle inspector (Ctrl+.)" aria-label="Inspector">ⓘ</button>
+    <button id="btn-settings" title="Settings (Ctrl+,)" aria-label="Settings" aria-pressed="false">⚙</button>
     <a id="btn-progress" href="/progress.html" title="Live bridge status page" aria-label="Progress">⏱</a>
     <button id="btn-new" title="New session (/new)" aria-label="New session">＋</button>
   </header>
@@ -161,6 +162,15 @@
         <pre id="session-detail" class="detail"></pre>
       </div>
     </aside>
+
+    <aside id="settings" aria-label="Settings">
+      <div class="settings-head">
+        <strong>Settings</strong>
+        <button id="btn-close-settings" title="Close settings (Esc)" aria-label="Close settings">✕</button>
+      </div>
+      <nav id="settings-nav" aria-label="Settings groups"></nav>
+      <div id="settings-body" class="settings-body"></div>
+    </aside>
   </div>
 </div>
 <div id="dir-dialog" hidden role="dialog" aria-modal="true" aria-label="Choose session directory">
@@ -194,6 +204,7 @@
 <button id="stars-toggle" role="switch" aria-checked="false" aria-label="Toggle starfield" title="Toggle starfield"><span class="stars-thumb" aria-hidden="true"></span></button>
 <script src="/theme.js"></script>
 <script src="/stars.js"></script>
+<script src="/settings.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

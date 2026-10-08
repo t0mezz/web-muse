@@ -905,7 +905,8 @@ function syncScrim() {
   // Scrim shows for the sessions drawer, and on mobile also for the
   // inspector overlay (which otherwise covers its own toggle: a trap).
   el("scrim").hidden = !(el("sessions").classList.contains("open") ||
-    (isNarrow() && el("inspector").classList.contains("open")));
+    (isNarrow() && el("inspector").classList.contains("open")) ||
+    (isNarrow() && el("settings") && el("settings").classList.contains("open")));
 }
 function closeDrawer() {
   // Auto-shut is a mobile-drawer behavior; the desktop panel is
@@ -924,7 +925,7 @@ function toggleSessions() {
     closeRowMenus();
     p.classList.remove("open");
   } else {
-    if (isNarrow()) el("inspector").classList.remove("open");
+    if (isNarrow()) { el("inspector").classList.remove("open"); el("settings").classList.remove("open"); }
     p.classList.add("open");
     refreshSessions().catch(() => {});
     el("session-filter").focus();
@@ -937,6 +938,7 @@ function toggleInspector() {
   if (isNarrow() && el("inspector").classList.contains("open")) {
     closeRowMenus();
     el("sessions").classList.remove("open");
+    el("settings").classList.remove("open");
   }
   syncScrim();
   savePanelState();
@@ -999,7 +1001,8 @@ window.addEventListener("resize", () => {
   placeStarsToggle();
   if (!isNarrow()) return;
   if (el("sessions").classList.contains("open") &&
-      el("inspector").classList.contains("open")) {
+      (el("inspector").classList.contains("open") ||
+        (el("settings") && el("settings").classList.contains("open")))) {
     el("sessions").classList.remove("open");
     syncScrim();
     savePanelState();
@@ -1092,6 +1095,7 @@ function syncStarsToggle() {
   const t = el("stars-toggle");
   if (!t) return;
   t.setAttribute("aria-checked", stopStarsFx ? "true" : "false");
+  if (window.WebMuseSettings) WebMuseSettings.sync();
 }
 function toggleStarsFx() {
   if (stopStarsFx) {
@@ -3301,6 +3305,7 @@ function syncEffortPicker() {
   const sel = el("effort-picker");
   if (!sel) return;
   sel.value = state.pickedEffort || "";
+  if (window.WebMuseSettings) WebMuseSettings.sync();
 }
 // The approval-mode pick survives reloads (localStorage) like the model
 // and effort picks: changing it anywhere saves it, startup restores it
@@ -3330,6 +3335,7 @@ function syncApprovalSelect() {
   sel.value = state.pickedApprovalMode || "onRequest";
   sel.dataset.prev = sel.value;
   syncApprovalWarn();
+  if (window.WebMuseSettings) WebMuseSettings.sync();
 }
 async function refreshModels() {
   const r = await send({ type: "models", sessionId: state.sessionId || undefined });
@@ -3351,6 +3357,7 @@ async function refreshModels() {
     if (want ? m.modelId === want : m.isActive) o.selected = true;
     sel.append(o);
   }
+  if (window.WebMuseSettings) WebMuseSettings.sync();
 }
 
 function fmtUsage(u) {
@@ -4385,6 +4392,11 @@ document.addEventListener("keydown", (ev) => {
       }
       return;
     }
+    if (window.WebMuseSettings && WebMuseSettings.isOpen()) {
+      closeSettings();
+      el("btn-settings").focus();
+      return;
+    }
     if (state.running) cmdCancel();
     return;
   }
@@ -4396,11 +4408,19 @@ document.addEventListener("keydown", (ev) => {
     } else if (k === ".") {
       ev.preventDefault();
       toggleInspector();
+    } else if (k === ",") {
+      ev.preventDefault();
+      toggleSettings();
     }
   }
 });
 el("btn-close-sessions").onclick = closeDrawer;
-el("scrim").onclick = () => { closeDrawer(); closeInspector(); };
+el("scrim").onclick = () => {
+  const sOpen = window.WebMuseSettings && WebMuseSettings.isOpen();
+  closeDrawer(); closeInspector(); closeSettings();
+  // Pointer dismissal returns focus to the gear that opened the panel.
+  if (sOpen) el("btn-settings").focus();
+};
 /* ---------- new-session directory explorer ---------- */
 // Filesystem explorer for the + button: lists server-side directories via
 // the bridge `browse` method. Current directory is the selection; files
@@ -4627,6 +4647,7 @@ el("model-picker").onchange = (ev) => {
 };
 el("btn-inspector").onclick = toggleInspector;
 el("btn-close-inspector").onclick = closeInspector;
+el("btn-settings").onclick = toggleSettings;
 document.querySelectorAll(".tab").forEach((t) => { t.onclick = () => selectTab(t.dataset.tab); });
 el("btn-compact").onclick = () => cmdCompact();
 el("btn-usage").onclick = () => cmdUsage();
@@ -4688,6 +4709,150 @@ el("approval-confirm-no").onclick = () => {
     el("approval-mode").dataset.prev || "onRequest";
   syncApprovalWarn();
 };
+
+/* ---------- settings panel ---------- */
+// Expandable group system (shell in settings.js): the topbar gear button
+// opens a right drawer showing one lightweight group at a time. A new
+// group stays one registerGroup call — no markup, CSS, or wiring changes.
+function syncSettingsGear() {
+  const g = el("btn-settings");
+  const open = window.WebMuseSettings && WebMuseSettings.isOpen();
+  if (g) {
+    g.setAttribute("aria-pressed", open ? "true" : "false");
+    g.classList.toggle("active", !!open);
+  }
+}
+function toggleSettings() {
+  const S = window.WebMuseSettings;
+  if (!S) return;
+  if (S.isOpen()) {
+    S.close();
+  } else {
+    // Narrow screens fit one overlay drawer: opening settings shuts the
+    // other two (mirrors toggleSessions/toggleInspector).
+    if (isNarrow()) {
+      el("sessions").classList.remove("open");
+      el("inspector").classList.remove("open");
+    }
+    S.open();
+  }
+  syncScrim();
+  syncSettingsGear();
+  savePanelState();
+}
+function closeSettings() {
+  const S = window.WebMuseSettings;
+  if (S) S.close();
+  syncScrim();
+  syncSettingsGear();
+}
+// Write-through mirror: settings rows reuse the topbar/Session-panel
+// controls' own onchange logic (persistence, bridge send, toasts) instead
+// of duplicating it — the existing controls stay the source of truth.
+function mirrorTopbarPick(pickerId, value) {
+  const sel = el(pickerId);
+  if (!sel || typeof sel.onchange !== "function") return;
+  sel.value = value;
+  sel.onchange({ target: sel });
+}
+// Theme pick for the Appearance group: "" is the default palette (clears
+// the stored override + name, like theme.js with no overrides), otherwise
+// a named file from web/themes via the /theme machinery.
+function applySettingsTheme(name) {
+  const T = window.WebMuseTheme;
+  if (!T) { toast("theme support missing", true); return; }
+  if (!name) {
+    try {
+      localStorage.removeItem(T.storageKey);
+      localStorage.removeItem(THEME_NAME_KEY);
+    } catch (_) { /* storage unavailable: memory-only */ }
+    T.apply();
+    if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }
+    toast("theme → default");
+    return;
+  }
+  fetchThemeColors(name)
+    .then((colors) => {
+      const n = applyThemeColors(name, colors);
+      if (!n) toast(`Theme ${name} has no known color keys.`, true);
+      else { sysLine(`Theme → ${name} (${n} colors).`); toast(`theme → ${name}`); }
+    })
+    .catch((e) => toast("theme load failed: " + e.message, true));
+}
+function fillSettingsThemeOptions(sel) {
+  // Async: the row renders with Default first; saved names append when
+  // the bridge lists them (same /themes source as /theme).
+  fetch("themes", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error("themes " + r.status))))
+    .then((j) => {
+      if (!sel.isConnected) return;
+      const names = j && Array.isArray(j.themes) ? j.themes.map(String) : [];
+      const active = activeThemeName();
+      for (const n of names) {
+        const o = document.createElement("option");
+        o.value = n; o.textContent = n;
+        if (n === active) o.selected = true;
+        sel.append(o);
+      }
+      if (active && !names.includes(active)) {
+        // Stored name with no file (deleted since): show it rather than
+        // silently displaying Default.
+        const o = document.createElement("option");
+        o.value = active; o.textContent = active + " (missing)";
+        o.selected = true;
+        sel.append(o);
+      }
+    })
+    .catch(() => { /* Default stays the only option */ });
+}
+if (window.WebMuseSettings) {
+  WebMuseSettings.registerGroup({
+    id: "appearance",
+    title: "Appearance",
+    render(body, h) {
+      const t = h.row("Theme", "Named palette from web/themes, or the default.");
+      const tsel = h.makeSelect([{ value: "", label: "Default" }],
+        activeThemeName() || "", (v) => applySettingsTheme(v), "Theme");
+      t.control.appendChild(tsel);
+      body.appendChild(t.wrap);
+      fillSettingsThemeOptions(tsel);
+      const s = h.row("Starfield", "Animated welcome backdrop behind the app.");
+      s.control.appendChild(h.makeToggle(!!stopStarsFx, (btn) => {
+        toggleStarsFx();
+        btn.setAttribute("aria-checked", stopStarsFx ? "true" : "false");
+      }, "Starfield"));
+      body.appendChild(s.wrap);
+    },
+  });
+  WebMuseSettings.registerGroup({
+    id: "defaults",
+    title: "Defaults",
+    render(body, h) {
+      const e = h.row("Effort", "Default reasoning effort for new chats.");
+      e.control.appendChild(h.makeSelect(
+        EFFORT_TIERS.map((v) => ({ value: v, label: v })),
+        state.pickedEffort || "medium",
+        (v) => mirrorTopbarPick("effort-picker", v), "Default effort"));
+      body.appendChild(e.wrap);
+      const m = h.row("Model", "Default model for new chats.");
+      const opts = state.models.length ? state.models.map((mo) => ({
+        value: mo.modelId,
+        label: (mo.isActive ? "● " : "") + (mo.displayLabel || mo.modelId),
+      })) : [{ value: "", label: "Loading…", disabled: true }];
+      const want = (state.pickedModel && state.pickedModel.modelId) ||
+        el("model-picker").value || "";
+      m.control.appendChild(h.makeSelect(opts, want,
+        (v) => { if (v) mirrorTopbarPick("model-picker", v); }, "Default model"));
+      body.appendChild(m.wrap);
+      const a = h.row("Approval mode", "Default approval mode for new sessions.");
+      a.control.appendChild(h.makeSelect(
+        APPROVAL_MODES.map((v) => ({ value: v, label: v })),
+        state.pickedApprovalMode || "onRequest",
+        (v) => mirrorTopbarPick("approval-mode", v), "Default approval mode"));
+      body.appendChild(a.wrap);
+    },
+  });
+}
 document.addEventListener("click", (ev) => {
   if (!el("slash-popup").hidden && !el("slash-popup").contains(ev.target) && ev.target !== el("input")) {
     el("slash-popup").hidden = true;
@@ -4767,6 +4932,7 @@ function startComposerHints() {
 
 // Stored UI prefs win; first run falls back to hidden bars, no model/effort pick.
 restorePanelState();
+if (window.WebMuseSettings) WebMuseSettings.init();
 restoreWorkflowOpen();
 updateWelcome();
 syncStarsToggle();
