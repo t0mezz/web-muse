@@ -904,9 +904,10 @@ const isNarrow = () => matchMedia("(max-width: 899px)").matches;
 function syncScrim() {
   // Scrim shows for the sessions drawer, and on mobile also for the
   // inspector overlay (which otherwise covers its own toggle: a trap).
+  // Settings is a centered overlay with its own backdrop, so it never
+  // uses the scrim.
   el("scrim").hidden = !(el("sessions").classList.contains("open") ||
-    (isNarrow() && el("inspector").classList.contains("open")) ||
-    (isNarrow() && el("settings") && el("settings").classList.contains("open")));
+    (isNarrow() && el("inspector").classList.contains("open")));
 }
 function closeDrawer() {
   // Auto-shut is a mobile-drawer behavior; the desktop panel is
@@ -925,7 +926,7 @@ function toggleSessions() {
     closeRowMenus();
     p.classList.remove("open");
   } else {
-    if (isNarrow()) { el("inspector").classList.remove("open"); el("settings").classList.remove("open"); }
+    if (isNarrow()) { el("inspector").classList.remove("open"); }
     p.classList.add("open");
     refreshSessions().catch(() => {});
     el("session-filter").focus();
@@ -938,7 +939,6 @@ function toggleInspector() {
   if (isNarrow() && el("inspector").classList.contains("open")) {
     closeRowMenus();
     el("sessions").classList.remove("open");
-    el("settings").classList.remove("open");
   }
   syncScrim();
   savePanelState();
@@ -1001,8 +1001,7 @@ window.addEventListener("resize", () => {
   placeStarsToggle();
   if (!isNarrow()) return;
   if (el("sessions").classList.contains("open") &&
-      (el("inspector").classList.contains("open") ||
-        (el("settings") && el("settings").classList.contains("open")))) {
+      el("inspector").classList.contains("open")) {
     el("sessions").classList.remove("open");
     syncScrim();
     savePanelState();
@@ -3337,6 +3336,18 @@ function syncApprovalSelect() {
   syncApprovalWarn();
   if (window.WebMuseSettings) WebMuseSettings.sync();
 }
+// Topbar model picker follows the canonical pick (settings rows and
+// /model change state without touching this select). A pick the current
+// options lack (stale catalog) falls back to a full refresh.
+function syncModelPicker() {
+  const sel = el("model-picker");
+  if (!sel) return;
+  const want = (state.pickedModel && state.pickedModel.modelId) || "";
+  const has = want && Array.from(sel.options).some((o) => o.value === want);
+  if (has) sel.value = want;
+  else refreshModels().catch(() => {});
+  if (window.WebMuseSettings) WebMuseSettings.sync();
+}
 async function refreshModels() {
   const r = await send({ type: "models", sessionId: state.sessionId || undefined });
   state.models = r.models || [];
@@ -4416,11 +4427,16 @@ document.addEventListener("keydown", (ev) => {
 });
 el("btn-close-sessions").onclick = closeDrawer;
 el("scrim").onclick = () => {
-  const sOpen = window.WebMuseSettings && WebMuseSettings.isOpen();
-  closeDrawer(); closeInspector(); closeSettings();
-  // Pointer dismissal returns focus to the gear that opened the panel.
-  if (sOpen) el("btn-settings").focus();
+  // Drawers only: settings is a centered overlay with its own backdrop
+  // (the #settings click handler below), so one backdrop owns each close.
+  closeDrawer(); closeInspector();
 };
+el("settings").addEventListener("click", (ev) => {
+  if (ev.target === el("settings")) {
+    closeSettings();
+    el("btn-settings").focus();
+  }
+});
 /* ---------- new-session directory explorer ---------- */
 // Filesystem explorer for the + button: lists server-side directories via
 // the bridge `browse` method. Current directory is the selection; files
@@ -4607,14 +4623,22 @@ el("terminal").addEventListener("scroll", () => {
   state.stick = t.scrollHeight - t.scrollTop - t.clientHeight < 80;
   updateJumpBtn();
 });
-el("effort-picker").onchange = (ev) => {
-  const v = ev.target.value || "";
+// Canonical setters: the single write path for default picks, shared by
+// the topbar controls and the settings rows (via the WebMuseSettings
+// registry). Either surface calls these; neither scrapes the other's DOM.
+function applyEffortPick(v) {
+  v = v || "";
   if (!v) {
     // Placeholder (effort…): back to the medium default.
     state.pickedEffort = "medium";
     savePickedEffort();
     syncEffortPicker();
     toast("default effort → medium");
+    return;
+  }
+  if (!EFFORT_TIERS.includes(v)) {
+    toast("unknown effort: " + v, true);
+    syncEffortPicker();
     return;
   }
   // Remembered as the default for created chats, not just this one.
@@ -4628,22 +4652,28 @@ el("effort-picker").onchange = (ev) => {
   send({ type: "setEffort", sessionId: state.sessionId, reasoningEffort: v })
     .then(() => toast("effort → " + v))
     .catch((e) => toast("setEffort failed: " + e.message, true));
-};
-el("model-picker").onchange = (ev) => {
-  const o = ev.target.selectedOptions[0];
-  if (!o || !o.value) return;
+}
+el("effort-picker").onchange = (ev) => applyEffortPick(ev.target.value || "");
+function applyModelPick(value, provider) {
+  if (!value) return;
   // Remembered as the default for created chats, not just this one.
-  state.pickedModel = { modelId: o.value,
-    providerId: o.dataset.provider || undefined };
+  state.pickedModel = { modelId: value,
+    providerId: provider || undefined };
   savePickedModel();
+  syncModelPicker();
   if (!state.sessionId) {
-    toast("default model → " + o.value);
+    toast("default model → " + value);
     return;
   }
   send({ type: "setModel", sessionId: state.sessionId,
-    model: { modelId: o.value, providerId: o.dataset.provider || undefined } })
-    .then(() => toast("model → " + o.value))
+    model: { modelId: value, providerId: provider || undefined } })
+    .then(() => toast("model → " + value))
     .catch((e) => toast("setModel failed: " + e.message, true));
+}
+el("model-picker").onchange = (ev) => {
+  const o = ev.target.selectedOptions[0];
+  if (!o || !o.value) return;
+  applyModelPick(o.value, o.dataset.provider || undefined);
 };
 el("btn-inspector").onclick = toggleInspector;
 el("btn-close-inspector").onclick = closeInspector;
@@ -4665,8 +4695,17 @@ function setApprovalDefault(mode) {
   savePickedApprovalMode();
   el("approval-mode").dataset.prev = mode;
 }
-el("approval-mode").onchange = (ev) => {
-  const mode = ev.target.value;
+function applyApprovalPick(mode) {
+  if (!APPROVAL_MODES.includes(mode)) {
+    toast("unknown approval mode: " + mode, true);
+    syncApprovalSelect();
+    return;
+  }
+  // The Session-panel select is a pure view of the attempt: settings
+  // rows pick without touching it, so reflect the attempt first — the
+  // allowAll confirm panel below keys off this select's value.
+  const sel = el("approval-mode");
+  if (sel && sel.value !== mode) sel.value = mode;
   if (!state.sessionId) {
     // No session loaded: the pick becomes the default for new sessions
     // (allowAll still confirms first via the panel below).
@@ -4675,6 +4714,7 @@ el("approval-mode").onchange = (ev) => {
       toast("default approval mode → " + mode + " (new sessions)");
     }
     syncApprovalWarn();
+    if (window.WebMuseSettings) WebMuseSettings.sync();
     return;
   }
   syncApprovalWarn();
@@ -4682,16 +4722,17 @@ el("approval-mode").onchange = (ev) => {
   send({ type: "setApprovalMode", sessionId: state.sessionId, mode })
     .then(() => {
       setApprovalDefault(mode);
-      syncApprovalWarn();
+      syncApprovalSelect();
       toast("approval mode → " + mode);
     })
     .catch((e) => toast("setApprovalMode failed: " + e.message, true));
-};
+}
+el("approval-mode").onchange = (ev) => applyApprovalPick(ev.target.value);
 el("approval-confirm-yes").onclick = () => {
   if (!state.sessionId) {
     // No session loaded: confirm the default, send nothing.
     setApprovalDefault("allowAll");
-    syncApprovalWarn();
+    syncApprovalSelect();
     toast("default approval mode → allowAll (new sessions)");
     return;
   }
@@ -4699,20 +4740,21 @@ el("approval-confirm-yes").onclick = () => {
          mode: "allowAll" })
     .then(() => {
       setApprovalDefault("allowAll");
-      syncApprovalWarn();
+      syncApprovalSelect();
       toast("approval mode → allowAll");
     })
     .catch((e) => toast("setApprovalMode failed: " + e.message, true));
 };
 el("approval-confirm-no").onclick = () => {
-  el("approval-mode").value =
-    el("approval-mode").dataset.prev || "onRequest";
-  syncApprovalWarn();
+  // Revert to the last confirmed mode (sync covers the select, the
+  // warn panel, and the settings mirror).
+  syncApprovalSelect();
 };
 
 /* ---------- settings panel ---------- */
 // Expandable group system (shell in settings.js): the topbar gear button
-// opens a right drawer showing one lightweight group at a time. A new
+// opens a centered overlay window showing one lightweight group at a
+// time. A new
 // group stays one registerGroup call — no markup, CSS, or wiring changes.
 function syncSettingsGear() {
   const g = el("btn-settings");
@@ -4728,12 +4770,8 @@ function toggleSettings() {
   if (S.isOpen()) {
     S.close();
   } else {
-    // Narrow screens fit one overlay drawer: opening settings shuts the
-    // other two (mirrors toggleSessions/toggleInspector).
-    if (isNarrow()) {
-      el("sessions").classList.remove("open");
-      el("inspector").classList.remove("open");
-    }
+    // Centered overlay: independent of the side drawers, so opening it
+    // leaves sessions/inspector untouched underneath.
     S.open();
   }
   syncScrim();
@@ -4746,14 +4784,35 @@ function closeSettings() {
   syncScrim();
   syncSettingsGear();
 }
-// Write-through mirror: settings rows reuse the topbar/Session-panel
-// controls' own onchange logic (persistence, bridge send, toasts) instead
-// of duplicating it — the existing controls stay the source of truth.
-function mirrorTopbarPick(pickerId, value) {
-  const sel = el(pickerId);
-  if (!sel || typeof sel.onchange !== "function") return;
-  sel.value = value;
-  sel.onchange({ target: sel });
+// Settings rows and outside controls share the canonical setters above
+// (applyEffortPick/applyModelPick/applyApprovalPick, toggleStarsFx,
+// applySettingsTheme) through the WebMuseSettings value registry: one
+// write path per setting, no DOM scraping, no fake events. Registered
+// once here; rows call getSetting/setSetting, the topbar calls the
+// setters directly, and both stay in sync through the sync* functions.
+function defineAppSettings() {
+  const S = window.WebMuseSettings;
+  if (!S || S.hasSetting("effort")) return;
+  S.defineSetting("effort", {
+    get: () => state.pickedEffort || "medium",
+    set: (v) => applyEffortPick(v),
+  });
+  S.defineSetting("model", {
+    get: () => (state.pickedModel && state.pickedModel.modelId) || "",
+    set: (v) => applyModelPick(v),
+  });
+  S.defineSetting("approvalMode", {
+    get: () => state.pickedApprovalMode || "onRequest",
+    set: (v) => applyApprovalPick(v),
+  });
+  S.defineSetting("theme", {
+    get: () => activeThemeName() || "",
+    set: (v) => applySettingsTheme(v),
+  });
+  S.defineSetting("starfield", {
+    get: () => !!stopStarsFx,
+    set: (on) => { if (!!on !== !!stopStarsFx) toggleStarsFx(); },
+  });
 }
 // Theme pick for the Appearance group: "" is the default palette (clears
 // the stored override + name, like theme.js with no overrides), otherwise
@@ -4779,14 +4838,34 @@ function applySettingsTheme(name) {
     })
     .catch((e) => toast("theme load failed: " + e.message, true));
 }
+// Theme name list: cached briefly and shared across renders, so every
+// Appearance render (open, group switch, outside sync) does not hit the
+// bridge. In-flight requests dedupe; a stale select (re-rendered away)
+// is left alone via isConnected.
+let themeNamesCache = { at: 0, names: null, promise: null };
+const THEME_LIST_TTL_MS = 30000;
+function getThemeNames() {
+  const now = Date.now();
+  if (themeNamesCache.names && now - themeNamesCache.at < THEME_LIST_TTL_MS) {
+    return Promise.resolve(themeNamesCache.names.slice());
+  }
+  if (themeNamesCache.promise) return themeNamesCache.promise;
+  themeNamesCache.promise = fetch("themes", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error("themes " + r.status))))
+    .then((j) => {
+      const names = j && Array.isArray(j.themes) ? j.themes.map(String) : [];
+      themeNamesCache = { at: Date.now(), names, promise: null };
+      return names.slice();
+    })
+    .catch((e) => { themeNamesCache.promise = null; throw e; });
+  return themeNamesCache.promise;
+}
 function fillSettingsThemeOptions(sel) {
   // Async: the row renders with Default first; saved names append when
   // the bridge lists them (same /themes source as /theme).
-  fetch("themes", { cache: "no-store" })
-    .then((r) => (r.ok ? r.json() : Promise.reject(new Error("themes " + r.status))))
-    .then((j) => {
+  getThemeNames()
+    .then((names) => {
       if (!sel.isConnected) return;
-      const names = j && Array.isArray(j.themes) ? j.themes.map(String) : [];
       const active = activeThemeName();
       for (const n of names) {
         const o = document.createElement("option");
@@ -4806,20 +4885,22 @@ function fillSettingsThemeOptions(sel) {
     .catch(() => { /* Default stays the only option */ });
 }
 if (window.WebMuseSettings) {
+  defineAppSettings();
   WebMuseSettings.registerGroup({
     id: "appearance",
     title: "Appearance",
     render(body, h) {
+      const S = window.WebMuseSettings;
       const t = h.row("Theme", "Named palette from web/themes, or the default.");
       const tsel = h.makeSelect([{ value: "", label: "Default" }],
-        activeThemeName() || "", (v) => applySettingsTheme(v), "Theme");
+        S.getSetting("theme"), (v) => S.setSetting("theme", v), "Theme");
       t.control.appendChild(tsel);
       body.appendChild(t.wrap);
       fillSettingsThemeOptions(tsel);
       const s = h.row("Starfield", "Animated welcome backdrop behind the app.");
-      s.control.appendChild(h.makeToggle(!!stopStarsFx, (btn) => {
-        toggleStarsFx();
-        btn.setAttribute("aria-checked", stopStarsFx ? "true" : "false");
+      s.control.appendChild(h.makeToggle(S.getSetting("starfield"), (btn) => {
+        S.setSetting("starfield", !S.getSetting("starfield"));
+        btn.setAttribute("aria-checked", S.getSetting("starfield") ? "true" : "false");
       }, "Starfield"));
       body.appendChild(s.wrap);
     },
@@ -4828,27 +4909,28 @@ if (window.WebMuseSettings) {
     id: "defaults",
     title: "Defaults",
     render(body, h) {
+      const S = window.WebMuseSettings;
       const e = h.row("Effort", "Default reasoning effort for new chats.");
       e.control.appendChild(h.makeSelect(
         EFFORT_TIERS.map((v) => ({ value: v, label: v })),
-        state.pickedEffort || "medium",
-        (v) => mirrorTopbarPick("effort-picker", v), "Default effort"));
+        S.getSetting("effort"),
+        (v) => S.setSetting("effort", v), "Default effort"));
       body.appendChild(e.wrap);
       const m = h.row("Model", "Default model for new chats.");
       const opts = state.models.length ? state.models.map((mo) => ({
         value: mo.modelId,
         label: (mo.isActive ? "● " : "") + (mo.displayLabel || mo.modelId),
       })) : [{ value: "", label: "Loading…", disabled: true }];
-      const want = (state.pickedModel && state.pickedModel.modelId) ||
-        el("model-picker").value || "";
+      const active = state.models.find((mo) => mo.isActive);
+      const want = S.getSetting("model") || (active && active.modelId) || "";
       m.control.appendChild(h.makeSelect(opts, want,
-        (v) => { if (v) mirrorTopbarPick("model-picker", v); }, "Default model"));
+        (v) => { if (v) S.setSetting("model", v); }, "Default model"));
       body.appendChild(m.wrap);
       const a = h.row("Approval mode", "Default approval mode for new sessions.");
       a.control.appendChild(h.makeSelect(
         APPROVAL_MODES.map((v) => ({ value: v, label: v })),
-        state.pickedApprovalMode || "onRequest",
-        (v) => mirrorTopbarPick("approval-mode", v), "Default approval mode"));
+        S.getSetting("approvalMode"),
+        (v) => S.setSetting("approvalMode", v), "Default approval mode"));
       body.appendChild(a.wrap);
     },
   });
@@ -4932,7 +5014,14 @@ function startComposerHints() {
 
 // Stored UI prefs win; first run falls back to hidden bars, no model/effort pick.
 restorePanelState();
-if (window.WebMuseSettings) WebMuseSettings.init();
+if (window.WebMuseSettings) {
+  WebMuseSettings.init();
+  // The gear mirrors the shell itself: the X button closes inside the
+  // shell, bypassing closeSettings(), so event-driven sync is the only
+  // wiring that covers every open/close route.
+  WebMuseSettings.on("open", syncSettingsGear);
+  WebMuseSettings.on("close", syncSettingsGear);
+}
 restoreWorkflowOpen();
 updateWelcome();
 syncStarsToggle();

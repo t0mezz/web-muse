@@ -1,4 +1,4 @@
-"""Expandable settings system: gear icon opens a lightweight grouped panel.
+"""Expandable settings system: gear icon opens a centered grouped overlay.
 
 Contract (source level, following tests/test_inspector_toggle.py —
 no JS harness in this repo):
@@ -6,16 +6,20 @@ no JS harness in this repo):
 - Topbar: a small `#btn-settings` gear sits next to the inspector icon
   and advertises the Ctrl+, shortcut.
 - Shell (web/settings.js, classic script like theme.js): WebMuseSettings
-  owns open/close/toggle, group navigation, and the persisted active
-  group (`webmuse.settingsGroup`); groups register via registerGroup, so
-  future groups need no markup/CSS/wiring changes.
+  owns open/close/toggle, group navigation, a versioned settings store,
+  a value registry, and modal behavior (focus trap, Esc, background
+  inert). Groups register via registerGroup, so future groups need no
+  markup/CSS/wiring changes.
 - Groups (app.js): Appearance (theme, starfield) and Defaults (effort,
-  model, approval mode). Default rows mirror the existing controls
-  write-through (mirrorTopbarPick reuses their onchange logic), so every
-  pick persists through the existing keys and bridge sends.
+  model, approval mode). Rows and outside controls share canonical
+  setters (applyEffortPick/applyModelPick/applyApprovalPick,
+  toggleStarsFx, applySettingsTheme) through the registry, so every pick
+  persists through the existing keys and bridge sends with no DOM
+  scraping between surfaces.
 - Behavior: Ctrl+, toggles, Esc closes with focus back on the gear,
-  scrim click closes, narrow screens keep one overlay drawer, and open
-  groups re-render when outside state changes (Settings.sync).
+  the panel's own backdrop click closes (the scrim owns the drawers
+  only), and open groups re-render with focus preserved when outside
+  state changes (Settings.sync).
 
 Covers the six pieces: icon placement, open-close, group navigation,
 individual row layout, persistence, mobile.
@@ -61,11 +65,20 @@ class TestSettingsIcon(unittest.TestCase):
         self.assertLess(INDEX_HTML.index("/settings.js"),
                         INDEX_HTML.index("/app.js"))
 
+    def test_gear_size_beats_topbar_base(self):
+        # The gear bump must outrank `#topbar button`: ID+element beats
+        # a lone ID, so plain `#btn-settings` silently loses (no visual
+        # change at any size).
+        m = re.search(r"#topbar\s+#btn-settings\s*\{([^}]*)\}", STYLE_CSS)
+        self.assertIsNotNone(m, "gear size rule missing")
+        self.assertIn("font-size:", m.group(1))
+
 
 class TestSettingsOpenClose(unittest.TestCase):
     def test_panel_markup(self):
         for token in ('id="settings"', 'id="settings-nav"',
-                      'id="settings-body"', 'id="btn-close-settings"'):
+                      'id="settings-body"', 'id="btn-close-settings"',
+                      'settings-box', 'role="dialog"'):
             self.assertIn(token, INDEX_HTML)
 
     def test_toggle_flips_open_state(self):
@@ -86,10 +99,15 @@ class TestSettingsOpenClose(unittest.TestCase):
         self.assertIn("closeSettings();", APP_JS)
         self.assertIn('el("btn-settings").focus();', APP_JS)
 
-    def test_scrim_closes_settings(self):
-        m = re.search(r'el\("scrim"\)\.onclick = \(\) => \{([^}]*)\}', APP_JS)
+    def test_scrim_ignores_settings(self):
+        # Single backdrop: the scrim owns the drawers only; settings has
+        # its own backdrop (the #settings click handler), so one surface
+        # owns each close.
+        m = re.search(r'el\("scrim"\)\.onclick = \(\) => \{(.*?)\n\};',
+                      APP_JS, re.S)
         self.assertIsNotNone(m)
-        self.assertIn("closeSettings()", m.group(1))
+        self.assertNotIn("closeSettings()", m.group(1))
+        self.assertNotIn("isOpen()", m.group(1))
 
 
 class TestSettingsGroups(unittest.TestCase):
@@ -104,7 +122,10 @@ class TestSettingsGroups(unittest.TestCase):
     def test_group_nav_renders_and_selects(self):
         self.assertIn("settings-nav", SETTINGS_JS)
         self.assertIn("selectGroup", SETTINGS_JS)
-        self.assertIn("aria-pressed", SETTINGS_JS)
+        # Tabs use tab semantics only: aria-selected, never the button
+        # idiom aria-pressed.
+        self.assertIn("aria-selected", SETTINGS_JS)
+        self.assertNotIn("aria-pressed", SETTINGS_JS)
 
     def test_row_layout_helpers(self):
         for helper in ("setting-row", "setting-label", "setting-title",
@@ -121,11 +142,19 @@ class TestSettingsPersistence(unittest.TestCase):
         self.assertIn("localStorage.setItem", SETTINGS_JS)
         self.assertIn("localStorage.getItem", SETTINGS_JS)
 
-    def test_defaults_mirror_existing_controls(self):
-        body = body_of("mirrorTopbarPick")
-        self.assertIn("onchange", body)
-        for picker in ("effort-picker", "model-picker", "approval-mode"):
-            self.assertIn(f'mirrorTopbarPick("{picker}"', APP_JS)
+    def test_defaults_share_canonical_setters(self):
+        # One write path per setting: rows and topbar controls call the
+        # same apply* functions through the value registry — no DOM
+        # scraping, no fake-event dispatch between surfaces.
+        self.assertNotIn("mirrorTopbarPick", APP_JS)
+        self.assertNotIn("sel.onchange({", APP_JS)
+        for fn in ("applyEffortPick", "applyModelPick", "applyApprovalPick"):
+            self.assertIn(f"function {fn}(", APP_JS)
+        for key in ("effort", "model", "approvalMode", "theme", "starfield"):
+            self.assertIn(f'defineSetting("{key}"', APP_JS)
+            self.assertIn(f'setSetting("{key}"', APP_JS)
+        for key in ("effort", "model", "approvalMode"):
+            self.assertIn(f'getSetting("{key}")', APP_JS)
 
     def test_every_setting_uses_existing_storage(self):
         # Theme (theme.js override key), starfield, effort, model,
@@ -138,7 +167,7 @@ class TestSettingsPersistence(unittest.TestCase):
 
     def test_mirrors_refresh_when_outside_changes(self):
         for fn in ("syncStarsToggle", "syncEffortPicker",
-                   "syncApprovalSelect"):
+                   "syncApprovalSelect", "syncModelPicker"):
             self.assertIn("WebMuseSettings.sync()", body_of(fn),
                           f"{fn} does not refresh settings")
         m = re.search(r"async function refreshModels\(\) \{(.*?)\n\}",
@@ -154,20 +183,30 @@ class TestSettingsPersistence(unittest.TestCase):
 
 
 class TestSettingsMobile(unittest.TestCase):
-    def test_drawer_styles(self):
+    def test_overlay_styles(self):
         self.assertIn("#settings.open", STYLE_CSS)
-        self.assertIn("min(88vw, 340px)", STYLE_CSS)
+        self.assertIn("inset: 0", STYLE_CSS)
+        self.assertIn("justify-content: center", STYLE_CSS)
+        self.assertIn(".settings-box", STYLE_CSS)
+        self.assertIn("min(480px", STYLE_CSS)
+        self.assertNotIn("min(88vw, 340px)", STYLE_CSS)
 
-    def test_narrow_keeps_one_drawer(self):
-        self.assertIn('el("settings").classList.remove("open")',
-                      body_of("toggleSessions"))
-        self.assertIn('el("settings").classList.remove("open")',
-                      body_of("toggleInspector"))
-        self.assertIn('el("settings")', body_of("syncScrim"))
+    def test_modal_independent_of_drawers(self):
+        # Centered overlay: the side drawers never shut settings, and
+        # the scrim belongs to the drawers only.
+        self.assertNotIn('el("settings").classList.remove("open")',
+                         body_of("toggleSessions"))
+        self.assertNotIn('el("settings").classList.remove("open")',
+                         body_of("toggleInspector"))
+        self.assertNotIn('el("settings")', body_of("syncScrim"))
 
-    def test_mobile_close_button_and_static_desktop(self):
+    def test_backdrop_click_closes_and_refocuses(self):
+        self.assertIn('el("settings").addEventListener("click"', APP_JS)
+        self.assertIn('ev.target === el("settings")', APP_JS)
+
+    def test_close_button_and_no_static_drawer(self):
         self.assertIn("#btn-close-settings { display: block; }", STYLE_CSS)
-        self.assertIn("#settings { position: static;", STYLE_CSS)
+        self.assertNotIn("#settings { position: static;", STYLE_CSS)
 
     def test_focus_and_touch(self):
         self.assertIn("#btn-settings:focus-visible", STYLE_CSS)
@@ -187,6 +226,16 @@ class TestSettingsCriticFixes(unittest.TestCase):
         for fn in ("toggleSettings", "closeSettings"):
             self.assertIn("syncSettingsGear();", body_of(fn))
 
+    def test_gear_mirrors_shell_open_close_events(self):
+        # The X button closes inside the shell (settings.js init),
+        # bypassing app.js closeSettings(): without an event-driven
+        # sync the gear stays pressed after an X close while every
+        # other close path (Esc, backdrop, gear toggle) clears it.
+        self.assertIn('WebMuseSettings.on("open", syncSettingsGear)',
+                      APP_JS)
+        self.assertIn('WebMuseSettings.on("close", syncSettingsGear)',
+                      APP_JS)
+
     def test_open_moves_focus_into_panel(self):
         m = re.search(r"function open\(\) \{(.*?)\n  \}", SETTINGS_JS, re.S)
         self.assertIsNotNone(m, "settings open missing")
@@ -201,10 +250,10 @@ class TestSettingsCriticFixes(unittest.TestCase):
         self.assertIsNotNone(m, "settings init missing")
         self.assertIn('btn-settings', m.group(1))
         self.assertIn('.focus()', m.group(1))
-        # Scrim path refocuses the gear when settings was open.
-        m = re.search(r'el\("scrim"\)\.onclick = \(\) => \{(.*?)\n\};',
-                      APP_JS, re.S)
-        self.assertIsNotNone(m, "scrim handler missing")
+        # Backdrop path (app.js #settings click) refocuses the gear.
+        m = re.search(r'el\("settings"\)\.addEventListener\("click", '
+                      r'\(ev\) => \{(.*?)\n\}\);', APP_JS, re.S)
+        self.assertIsNotNone(m, "settings backdrop handler missing")
         self.assertIn('el("btn-settings").focus();', m.group(1))
 
     def test_close_button_visible_on_desktop(self):
@@ -222,11 +271,120 @@ class TestSettingsCriticFixes(unittest.TestCase):
 
     def test_starfield_switch_matches_topbar_idiom(self):
         # Topbar: checked == field up (stop handle present). The settings
-        # row must use the same polarity, not the inverse.
+        # registry must expose the same polarity, not the inverse.
         m = re.search(r"function syncStarsToggle\(\) \{(.*?)\n\}", APP_JS, re.S)
         self.assertIsNotNone(m)
         self.assertIn('stopStarsFx ? "true" : "false"', m.group(1))
-        self.assertIn("makeToggle(!!stopStarsFx", APP_JS)
+        m = re.search(r"function defineAppSettings\(\) \{(.*?)\n\}",
+                      APP_JS, re.S)
+        self.assertIsNotNone(m, "defineAppSettings missing")
+        self.assertIn("get: () => !!stopStarsFx", m.group(1))
+        self.assertIn('getSetting("starfield")', APP_JS)
+
+class TestSettingsHarshCriticFixes(unittest.TestCase):
+    """Second harsh-critic round: model, sync, loud API, modal, store."""
+
+    def test_setting_rows_read_state_not_dom(self):
+        # No settings render reaches into another surface's live DOM
+        # value (the old model row read the topbar picker's .value, which
+        # throws when the picker is absent).
+        self.assertNotIn('el("model-picker").value', APP_JS)
+        self.assertNotIn('el("effort-picker").value', APP_JS)
+        self.assertNotIn('el("approval-mode").value ||', APP_JS)
+
+    def test_value_registry_rejects_unknown_keys(self):
+        for tok in ("defineSetting", "hasSetting",
+                    "getSetting", "setSetting"):
+            self.assertIn(tok, SETTINGS_JS)
+        self.assertIn("unknown setting", SETTINGS_JS)
+        self.assertIn("duplicate settings key", SETTINGS_JS)
+
+    def test_group_api_validates_loudly(self):
+        self.assertIn("throw new TypeError", SETTINGS_JS)
+        self.assertIn("duplicate settings group id", SETTINGS_JS)
+        self.assertIn("unknown settings group", SETTINGS_JS)
+        self.assertIn("unregisterGroup", SETTINGS_JS)
+        self.assertIn("getGroups", SETTINGS_JS)
+        self.assertIn("getActiveGroup", SETTINGS_JS)
+
+    def test_group_events_and_ordering(self):
+        for tok in ("emit('open')", "emit('close')", "emit('group'"):
+            self.assertIn(tok, SETTINGS_JS)
+        self.assertIn("sortGroups", SETTINGS_JS)
+
+    def test_render_failure_names_group(self):
+        m = re.search(r"function renderBody\(\) \{(.*?)\n  \}",
+                      SETTINGS_JS, re.S)
+        self.assertIsNotNone(m, "settings renderBody missing")
+        self.assertIn("console.error", m.group(1))
+        self.assertIn("setting-error", m.group(1))
+        self.assertIn(".setting-error", STYLE_CSS)
+
+    def test_sync_preserves_focus(self):
+        # The old sync bailed whenever focus sat inside the panel (which
+        # open() guarantees), so async updates never landed while open.
+        m = re.search(r"function sync\(\) \{(.*?)\n  \}", SETTINGS_JS, re.S)
+        self.assertIsNotNone(m, "settings sync missing")
+        self.assertNotIn("if (p.contains(document.activeElement)) return",
+                         m.group(1))
+        self.assertIn("data-setting-key", m.group(1))
+        self.assertIn("renderBody()", m.group(1))
+        self.assertIn(".focus()", m.group(1))
+
+    def test_theme_list_cached_and_deduped(self):
+        # Every Appearance render used to fetch("themes") with no cache,
+        # no dedup, and no stale-render guard.
+        self.assertIn("themeNamesCache", APP_JS)
+        self.assertIn("THEME_LIST_TTL_MS", APP_JS)
+        self.assertIn("function getThemeNames()", APP_JS)
+        m = re.search(r"function fillSettingsThemeOptions\(sel\) \{(.*?)\n\}",
+                      APP_JS, re.S)
+        self.assertIsNotNone(m, "fillSettingsThemeOptions missing")
+        self.assertIn("getThemeNames()", m.group(1))
+        self.assertIn("isConnected", m.group(1))
+
+    def test_modal_traps_focus_and_inerts_background(self):
+        self.assertIn("trapTab", SETTINGS_JS)
+        self.assertIn("'Tab'", SETTINGS_JS)
+        self.assertIn("n.inert", SETTINGS_JS)
+        self.assertIn("setBackgroundInert(true)", SETTINGS_JS)
+        self.assertIn("setBackgroundInert(false)", SETTINGS_JS)
+
+    def test_shell_owns_escape(self):
+        self.assertIn("onDocumentKeydown", SETTINGS_JS)
+        self.assertIn("'Escape'", SETTINGS_JS)
+        self.assertIn("addEventListener('keydown', onDocumentKeydown)",
+                      SETTINGS_JS)
+
+    def test_tabs_wire_tabpanel(self):
+        self.assertIn("tabpanel", SETTINGS_JS)
+        self.assertIn("aria-controls", SETTINGS_JS)
+        self.assertIn("aria-labelledby", SETTINGS_JS)
+        self.assertIn("tabpanel", INDEX_HTML)
+        self.assertIn("ArrowUp", SETTINGS_JS)
+        self.assertIn("ArrowDown", SETTINGS_JS)
+
+    def test_store_versioned_with_legacy_migration(self):
+        self.assertIn("STORE_KEY = 'webmuse.settings'", SETTINGS_JS)
+        self.assertIn("STORE_VERSION", SETTINGS_JS)
+        self.assertIn("migrat", SETTINGS_JS)
+        # The pre-v1 plain-string key still migrates forward on first read.
+        self.assertIn("webmuse.settingsGroup", SETTINGS_JS)
+
+    def test_nav_scales_and_rows_wrap(self):
+        m = re.search(r"#settings-nav \{([^}]*)\}", STYLE_CSS)
+        self.assertIsNotNone(m)
+        self.assertIn("overflow-x: auto", m.group(1))
+        m = re.search(r"#settings-nav button \{([^}]*)\}", STYLE_CSS)
+        self.assertIsNotNone(m)
+        self.assertIn("min-width: max-content", m.group(1))
+        m = re.search(r"\.setting-row \{([^}]*)\}", STYLE_CSS)
+        self.assertIsNotNone(m)
+        self.assertIn("flex-wrap: wrap", m.group(1))
+        m = re.search(r"\.setting-select \{([^}]*)\}", STYLE_CSS)
+        self.assertIsNotNone(m)
+        self.assertIn("min(260px", m.group(1))
+
 
 if __name__ == "__main__":
     unittest.main()
