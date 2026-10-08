@@ -20,7 +20,7 @@
   "panel": "#0C0C0C",
   "panel2": "#0C0C0C",
   "pickedBg": "#0C0C0C",
-  "scrim": "rgba(24, 35, 52, 0.55)",
+  "scrim": "rgba(12, 12, 12, 0.55)",
   "select": "#5FAFFF",
   "star": "#949494",
   "starBg0": "#0F0F0F",

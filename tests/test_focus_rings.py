@@ -6,11 +6,12 @@ The shared rule extends the same 2px idiom (no mouse behavior change)
 to the topbar, toolbar, inspector tabs, approval cards, repo pills,
 composer buttons, directory dialog, and long-output toggles.
 
-The ring uses --focus, not --accent: the default theme's accent only
-reaches ~1.5-2.3:1 on light surfaces, below the WCAG 1.4.11 3:1 floor,
-so it would swap the browser-default ring for a dimmer custom one.
-Each theme carries its own focus value (dark themes reuse their
-accent, which already passes); the contrast test below pins >= 3:1
+The ring uses --focus, not --accent: accent only reaches ~1.5-2.3:1
+on light surfaces (e.g. the parchment theme), below the WCAG 1.4.11
+3:1 floor, so it would swap the browser-default ring for a dimmer
+custom one. Each theme carries its own focus value (dark themes,
+including the default, reuse their accent, which already passes;
+light themes darken it); the contrast test below pins >= 3:1
 against every surface role in every saved theme.
 
 No JS harness in this repo, so the contract is guarded at the source

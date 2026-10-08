@@ -15,8 +15,8 @@
 //   WebMuseSettings.registerGroup({ id: "defaults", title: "Defaults",
 //     render: function (body, h) { ... h.makeSelect(...) ... } });
 //
-// render(body, h) appends rows built with the h.row/makeSelect/makeToggle
-// helpers and reads live values through getSetting, so rows and outside
+// render(body, h) appends rows built with the h.row/makeSelect/makeToggle/
+// makeCheckbox helpers and reads live values through getSetting, so rows and outside
 // controls (topbar pickers, starfield switch) share the same canonical
 // setters: no DOM scraping, no fake events. The shell re-renders the open
 // group on WebMuseSettings.sync(), preserving focus on the edited control.
@@ -521,8 +521,22 @@
     return btn;
   }
 
+  // Native checkbox. onChange receives (checked, box) so the group can
+  // push the real state through setSetting; the box keeps its own
+  // checked paint, so no rebuild (focus stays put).
+  function makeCheckbox(checked, onChange, ariaLabel) {
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'setting-checkbox';
+    box.checked = !!checked;
+    tagControl(box, ariaLabel);
+    box.onchange = function (ev) { onChange(ev.target.checked, box); };
+    return box;
+  }
+
   function helpers() {
-    return { row: row, makeSelect: makeSelect, makeToggle: makeToggle };
+    return { row: row, makeSelect: makeSelect, makeToggle: makeToggle,
+      makeCheckbox: makeCheckbox };
   }
 
   function init() {

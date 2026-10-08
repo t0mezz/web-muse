@@ -56,9 +56,9 @@ class TestStarsWelcome(unittest.TestCase):
         # roles with the current palette as fallback; the gradient is
         # composed per call, never baked at load (or a theme.apply
         # could never move a sky the field already shows).
-        for key, fallback in (("star", "#4C4541"),
-                              ("starBg0", "#F7DAA2"),
-                              ("starBg1", "#FCF0DA")):
+        for key, fallback in (("star", "#F6E3C2"),
+                              ("starBg0", "#0C0C0C"),
+                              ("starBg1", "#050607")):
             self.assertIn(f"themeColor('{key}', '{fallback}')", STARS_JS)
         self.assertIn("function defaultBackground()", STARS_JS)
         self.assertNotIn("DEFAULT_BACKGROUND", STARS_JS)
