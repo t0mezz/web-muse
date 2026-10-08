@@ -1163,3 +1163,54 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab,
 .repo-opt .sub { color: var(--faint); font-size: 11px; margin-left: 6px; }
 .repo-opt.dim { color: var(--dim); cursor: default; }
 .repo-opt.dim:hover { background: none; }
+/* Fetch loader (Uiverse aryamitra06): three bars in front of the
+ * status text while `gh` lists repos/branches, shrunk to sit inside a
+ * menu row. Bars rest on --dim and peak on --fg so the pulse reads on
+ * light and dark palettes alike; no hex literals (see test_theme's
+ * no-hex rule). */
+.repo-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.repo-loading-label {
+  /* Same size as the "select a repo" pill text. */
+  font-size: 12px; line-height: 1.6;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.loader {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 2px 0;
+}
+.bar {
+  display: inline-block;
+  width: 2px;
+  height: 4px;
+  background-color: var(--dim);
+  border-radius: 3px;
+  animation: repo-bar-grow 1s linear infinite;
+}
+.bar:nth-child(2) {
+  height: 7px;
+  margin: 0 2px;
+  animation-delay: .25s;
+}
+.bar:nth-child(3) {
+  animation-delay: .5s;
+}
+@keyframes repo-bar-grow {
+  20% {
+    background-color: var(--fg);
+    transform: scaleY(1.5);
+  }
+  40% {
+    transform: scaleY(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loader .bar {
+    animation: none;
+  }
+}
