@@ -15,13 +15,22 @@
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+html { scrollbar-gutter: stable; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Safari keyboard: keep the page pinned so the visualViewport
+   * offset doesn't shift the whole site up. */
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+  width: 100%;
 }
-/* --app-height tracks visualViewport (see syncAppHeight) so the
- * iOS keyboard can't bury the composer; 100vh covers pre-dvh browsers. */
-#app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; height: var(--app-height, 100dvh); }
+#app {
+  display: flex; flex-direction: column;
+  height: 100vh; height: 100dvh; height: var(--app-height, 100dvh);
+  overflow: hidden;
+}
 /* welcome starfield backdrop: negative z-index keeps it below ALL app
  * content (even non-positioned blocks like the topbar), above only the
  * body canvas background; pointer-transparent so it never eats input */
@@ -875,11 +884,8 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 #btn-close-settings:hover { color: var(--fg); }
 /* Pressed gear reads active while its panel is open. */
 #btn-settings[aria-pressed="true"] { color: var(--fg); border-color: var(--line); }
-/* The ⚙ glyph runs small at the shared 15px topbar size; bump the gear
- * alone so it matches its neighbors visually (32px box untouched).
- * Doubled ID beats the `#topbar button` base (ID+element outranks a
- * lone ID, so plain `#btn-settings` would lose). */
-#topbar #btn-settings { font-size: 22px; }
+#topbar #btn-settings { font-size: 16px; }
+#topbar #btn-settings svg { display: block; width: 16px; height: 16px; }
 #settings-nav {
   display: flex; gap: 6px; padding: 0 10px 8px; flex: none;
   border-bottom: 1px solid var(--line);

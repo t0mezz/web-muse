@@ -4268,18 +4268,28 @@ function autosize() {
 }
 
 /* ---------- viewport / keyboard ---------- */
-// Mobile keyboards (notably iOS Safari) don't shrink dvh, which can leave
-// the composer buried. Track the real visible height and expose it as
-// --app-height, which #app prefers over 100dvh.
+// iOS Safari overlays the keyboard over the visual viewport; with
+// `interactive-widget=resizes-content` the layout viewport (dvh)
+// already shrinks, but older Safari still needs a JS fallback.
+// Track the real visible height as --app-height and keep the page
+// pinned so Safari's automatic scroll doesn't shift the whole site up.
 function syncAppHeight() {
   const vv = window.visualViewport;
   const h = vv ? Math.round(vv.height) : window.innerHeight;
   if (h > 0) document.documentElement.style.setProperty("--app-height", h + "px");
+  // Safari tries to pan the page to keep the focused input visible by
+  // adjusting visualViewport.offsetTop and window.scrollY. With a
+  // fixed body the pan just shifts content unexpectedly — clamp it.
+  if (vv && (vv.offsetTop !== 0 || window.scrollY !== 0)) {
+    window.scrollTo(0, 0);
+  }
 }
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", syncAppHeight);
+  window.visualViewport.addEventListener("scroll", syncAppHeight);
 }
 window.addEventListener("orientationchange", syncAppHeight);
+window.addEventListener("scroll", () => { if (window.scrollY !== 0) window.scrollTo(0, 0); }, { passive: true });
 syncAppHeight();
 
 async function submitComposer() {
@@ -4391,10 +4401,14 @@ el("stars-toggle").addEventListener("click", () => { toggleStarsFx(); });
 el("workflow-head").addEventListener("click", () => { toggleWorkflow(); });
 el("composer").addEventListener("submit", (ev) => { ev.preventDefault(); submitComposer(); });
 el("input").addEventListener("focus", () => {
-  // Let the keyboard finish opening, then bring the composer into view.
+  // Safari used to need scrollIntoView to bring the composer above the
+  // keyboard, but with `interactive-widget=resizes-content` + a fixed
+  // body that pan shifts the whole site up. Keep the page pinned and
+  // just keep the transcript scrolled to the bottom instead.
   setTimeout(() => {
-    el("composer-wrap").scrollIntoView({ block: "nearest" });
     syncAppHeight();
+    window.scrollTo(0, 0);
+    if (state.stick) scrollDown();
   }, 300);
 });
 el("input").addEventListener("input", () => { autosize(); state.slashSel = 0; updateSlashPopup(); });
