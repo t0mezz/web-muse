@@ -1134,6 +1134,25 @@ function toggleStarsFx() {
     syncStarsToggle();
   }
 }
+// Visibility of the switch itself: a settings checkbox owns it, shown
+// by default. Persisted per browser, like the starfield choice.
+const STARS_TOGGLE_KEY = "web-muse:stars-toggle";
+function starToggleWanted() {
+  try {
+    const saved = localStorage.getItem(STARS_TOGGLE_KEY);
+    if (saved !== null) return saved === "1";
+  } catch (_) {}
+  return true;
+}
+function syncStarToggleVisibility() {
+  const t = el("stars-toggle");
+  if (t) t.style.display = starToggleWanted() ? "" : "none";
+  if (window.WebMuseSettings) WebMuseSettings.sync();
+}
+function applyShowStarTogglePick(on) {
+  try { localStorage.setItem(STARS_TOGGLE_KEY, on ? "1" : "0"); } catch (_) {}
+  syncStarToggleVisibility();
+}
 // Narrow screens dock the switch into the hintbar status row: the
 // floating corner toggle crowds the composer send/stop buttons there.
 // Desktop restores the corner (starsHome remembers the exact slot).
@@ -4916,7 +4935,8 @@ function closeSettings() {
 }
 // Settings rows and outside controls share the canonical setters above
 // (applyEffortPick/applyModelPick/applyApprovalPick, toggleStarsFx,
-// applySettingsTheme) through the WebMuseSettings value registry: one
+// applyShowStarTogglePick, applySettingsTheme) through the
+// WebMuseSettings value registry: one
 // write path per setting, no DOM scraping, no fake events. Registered
 // once here; rows call getSetting/setSetting, the topbar calls the
 // setters directly, and both stay in sync through the sync* functions.
@@ -4946,6 +4966,10 @@ function defineAppSettings() {
   S.defineSetting("starfield", {
     get: () => !!stopStarsFx,
     set: (on) => { if (!!on !== !!stopStarsFx) toggleStarsFx(); },
+  });
+  S.defineSetting("showStarToggle", {
+    get: () => starToggleWanted(),
+    set: (v) => applyShowStarTogglePick(!!v),
   });
 }
 // Theme pick for the Appearance group: "" is the default palette (clears
@@ -5037,6 +5061,10 @@ if (window.WebMuseSettings) {
         btn.setAttribute("aria-checked", S.getSetting("starfield") ? "true" : "false");
       }, "Starfield"));
       body.appendChild(s.wrap);
+      const st = h.row("Show star toggle", "Show the floating starfield switch.");
+      st.control.appendChild(h.makeCheckbox(S.getSetting("showStarToggle"),
+        (on) => S.setSetting("showStarToggle", on), "Show star toggle"));
+      body.appendChild(st.wrap);
     },
   });
   WebMuseSettings.registerGroup({
@@ -5166,6 +5194,7 @@ if (window.WebMuseSettings) {
 restoreWorkflowOpen();
 updateWelcome();
 syncStarsToggle();
+syncStarToggleVisibility();
 placeStarsToggle();
 updateRepoBar();
 loadPickedModel();

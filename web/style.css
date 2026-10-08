@@ -931,6 +931,10 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
   width: 16px; height: 16px; flex: none; border-radius: 50%;
   background: var(--light); pointer-events: none;
 }
+.setting-checkbox {
+  width: 16px; height: 16px; flex: none; margin: 2px;
+  accent-color: var(--accent); cursor: pointer;
+}
 
 /* directory explorer dialog */
 #dir-dialog {
@@ -1050,7 +1054,7 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 #jump-latest:focus-visible, .tab:focus-visible,
 #btn-close-inspector:focus-visible, #btn-settings:focus-visible,
 #btn-close-settings:focus-visible, #settings-nav button:focus-visible,
-.setting-toggle:focus-visible, .setting-select:focus-visible,
+.setting-toggle:focus-visible, .setting-select:focus-visible, .setting-checkbox:focus-visible,
 #approval-mode:focus-visible,
 .card button:focus-visible, .card .opt:focus-visible,
 .row-btns button:focus-visible,
@@ -1066,7 +1070,7 @@ pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white
 
 /* touch: no double-tap zoom delay, no scroll chaining out of panes */
 button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab,
-#settings-nav button, .setting-toggle, .setting-select {
+#settings-nav button, .setting-toggle, .setting-select, .setting-checkbox {
   touch-action: manipulation;
 }
 #terminal, #session-list, .tabpanel, .settings-body, #slash-popup, #cards {
