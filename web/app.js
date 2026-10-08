@@ -27,6 +27,10 @@ const state = {
   // Last explicitly chosen approval mode (Session panel): applied to the
   // current session AND remembered as the default for created sessions.
   pickedApprovalMode: null,
+  // Subagent auto-approve (Settings toggle): when on, the bridge
+  // auto-decides child approvals on allowAll sessions instead of
+  // carding them. Persisted per browser, enforced bridge-side.
+  subagentAutoApprove: false,
   reconnectDelay: 1000, everConnected: false,
   lastCumulative: null, lastContext: null, ctxLine: "", sessionMcp: [],
   githubCache: [], githubOp: null, githubPending: new Map(),
@@ -110,6 +114,11 @@ function connect() {
       // Staged agent orders survive reloads server-side; re-render
       // them (a restart card affects every tab, not just one session).
       fetchOrders();
+      // The subagent toggle is enforced bridge-side but kept memory-only
+      // there: re-sync the persisted pick on every (re)connect, so a
+      // backend restart never silently resets it to off.
+      send({ type: "setSubagentAutoApprove",
+        enabled: !!state.subagentAutoApprove }).catch(() => {});
       state.everConnected = true;
     } catch (e) { setStatus("init failed: " + e.message); }
   };
@@ -2533,6 +2542,9 @@ function onEvent(method, p) {
     case "githubAutoApproved":
       sysLine(`auto-approved (github policy): ${String(p.command || "gh command")}`);
       break;
+    case "subagentAutoApproved":
+      sysLine(`auto-approved (subagent${p.subagent ? " " + p.subagent : ""}): ${String(p.tool || "tool")}`);
+      break;
     case "themeApply":
       applyThemeOrder(p);
       break;
@@ -2625,7 +2637,7 @@ function applyThemeOrder(p) {
   toast(`theme updated (${n} colors)`);
 }
 function themeValueOk(k, v) {
-  // Frontend twin of the bridge's theme_color_error (server/sessions.py):
+  // Frontend twin of the bridge's theme_color_error (server/sessions/themes.py):
   // hex roles take #rgb/#rrggbb/#rrggbbaa, glow an "r, g, b" triplet,
   // scrim an rgba() color. Bridge already rejected bad shapes; this only
   // stops a stale client from applying one.
@@ -2907,6 +2919,22 @@ function onApproval(a) {
     escNote.className = "q";
     escNote.textContent = "escalated by approval judge";
   }
+  let subNote = null;
+  const origin = a.subagentOrigin;
+  if (origin && typeof origin === "object") {
+    // Child approvals project onto the parent session even when the
+    // parent runs allowAll (children resolve their own profile) — label
+    // them so the card doesn't look like the session's own mode failed.
+    subNote = document.createElement("div");
+    subNote.className = "q";
+    subNote.textContent =
+      `from subagent ${origin.subagentId || origin.childSessionId || "?"}`;
+    const detail = [
+      origin.childRunId && `run ${origin.childRunId}`,
+      origin.childSessionId && `session ${origin.childSessionId}`,
+    ].filter(Boolean).join(" · ");
+    if (detail) subNote.title = detail;
+  }
   const fb = document.createElement("input");
   fb.type = "text";
   fb.placeholder = "Feedback for the model (optional, denial only)";
@@ -2924,6 +2952,7 @@ function onApproval(a) {
     row.append(b);
   }
   div.append(h);
+  if (subNote) div.append(subNote);
   if (escNote) div.append(escNote);
   div.append(pre, fb, row);
   // Approvals live ONLY in the right-hand inspector (Approvals tab) —
@@ -2932,7 +2961,8 @@ function onApproval(a) {
   el("tab-approvals").append(div);
   const _denyUnmatched = (el("approval-mode") && el("approval-mode").value === "denyUnmatched") || state.pickedApprovalMode === "denyUnmatched";
   if (!_denyUnmatched) {
-    sysLine(`approval requested: ${a.toolName || "tool"} — decide in the inspector (Approvals tab).`);
+    const originTag = (a.subagentOrigin && typeof a.subagentOrigin === "object") ? " (subagent)" : "";
+    sysLine(`approval requested: ${a.toolName || "tool"}${originTag} — decide in the inspector (Approvals tab).`);
     // A parked agent is worse than a moved panel: on desktop make sure the
     // card is actually seen (mobile keeps its flash-open behavior below).
     if (window.innerWidth >= 900 && !el("inspector").classList.contains("open")) {
@@ -3335,6 +3365,25 @@ function syncApprovalSelect() {
   sel.dataset.prev = sel.value;
   syncApprovalWarn();
   if (window.WebMuseSettings) WebMuseSettings.sync();
+}
+// The subagent toggle persists per browser (localStorage) like the
+// approval default; the bridge keeps it memory-only, so connect()
+// re-syncs it on every (re)connect.
+const SUBAGENT_AUTO_KEY = "webmuse.subagentAutoApprove";
+function saveSubagentAutoApprove() {
+  try {
+    if (state.subagentAutoApprove) {
+      localStorage.setItem(SUBAGENT_AUTO_KEY, "1");
+    } else {
+      localStorage.removeItem(SUBAGENT_AUTO_KEY);
+    }
+  } catch (_) { /* storage unavailable: memory-only */ }
+}
+function loadSubagentAutoApprove() {
+  try {
+    state.subagentAutoApprove =
+      localStorage.getItem(SUBAGENT_AUTO_KEY) === "1";
+  } catch (_) { state.subagentAutoApprove = false; }
 }
 // Topbar model picker follows the canonical pick (settings rows and
 // /model change state without touching this select). A pick the current
@@ -4750,6 +4799,20 @@ el("approval-confirm-no").onclick = () => {
   // warn panel, and the settings mirror).
   syncApprovalSelect();
 };
+function applySubagentAutoApprovePick(v) {
+  // One write path (parity with applyApprovalPick): state first, then
+  // the bridge. The local pick persists even when the send fails — a
+  // failed sync self-heals on the next (re)connect, which re-sends it.
+  state.subagentAutoApprove = !!v;
+  saveSubagentAutoApprove();
+  if (window.WebMuseSettings) WebMuseSettings.sync();
+  send({ type: "setSubagentAutoApprove",
+    enabled: state.subagentAutoApprove })
+    .then(() => toast("subagent auto-approve → " +
+      (state.subagentAutoApprove ? "on" : "off")))
+    .catch((e) => toast("subagent auto-approve sync failed: " + e.message,
+      true));
+}
 
 /* ---------- settings panel ---------- */
 // Expandable group system (shell in settings.js): the topbar gear button
@@ -4804,6 +4867,10 @@ function defineAppSettings() {
   S.defineSetting("approvalMode", {
     get: () => state.pickedApprovalMode || "onRequest",
     set: (v) => applyApprovalPick(v),
+  });
+  S.defineSetting("subagentAutoApprove", {
+    get: () => !!state.subagentAutoApprove,
+    set: (v) => applySubagentAutoApprovePick(v),
   });
   S.defineSetting("theme", {
     get: () => activeThemeName() || "",
@@ -4932,6 +4999,13 @@ if (window.WebMuseSettings) {
         S.getSetting("approvalMode"),
         (v) => S.setSetting("approvalMode", v), "Default approval mode"));
       body.appendChild(a.wrap);
+      const s = h.row("Subagent auto-approve",
+        "Auto-approve subagent prompts when the session runs allowAll.");
+      s.control.appendChild(h.makeToggle(S.getSetting("subagentAutoApprove"), (btn) => {
+        S.setSetting("subagentAutoApprove", !S.getSetting("subagentAutoApprove"));
+        btn.setAttribute("aria-checked", S.getSetting("subagentAutoApprove") ? "true" : "false");
+      }, "Subagent auto-approve"));
+      body.appendChild(s.wrap);
     },
   });
 }
@@ -5030,6 +5104,7 @@ updateRepoBar();
 loadPickedModel();
 loadPickedEffort();
 loadPickedApprovalMode();
+loadSubagentAutoApprove();
 syncEffortPicker();
 syncApprovalSelect();
 updateRunChip();

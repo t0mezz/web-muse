@@ -56,11 +56,26 @@ passes through untouched. No API keys are accepted or stored here.
 
 - `server/main.py` — entrypoint: spawn serve, run HTTP+WS on 127.0.0.1:8000
 - `server/msp.py` — MSP client: NDJSON JSON-RPC, handshake, id map, receipts
-- `server/sessions.py` — WS↔sessionId routing, cursor store, frame mapping
+- `server/sessions/` — WS↔sessionId routing, cursor store, frame mapping
+  (`router.py`; helpers in `policy.py`, `orders.py`, `themes.py`, `mapping.py`,
+  `mcp.py`, `workspaces.py`, `github_parts.py`)
 - `server/ws.py` — stdlib HTTP static server + minimal RFC 6455 WebSocket
 - `web/` — static UI (`index.html`, `app.js`, `style.css`, `progress.html`)
 - `web/themes/` — saved theme palettes (`<name>.json`); see `web/themes/README.md`
 - `tests/` — frame-mapping tests with recorded fixtures + full-stack smoke test
+
+## Config files
+
+- `server/allowed_commands.json` — shell auto-approve policy (allow/deny
+  regexes). The bridge reloads it on approved `allowedCommands.update`
+  orders (previous version kept as `allowed_commands.json.bak`).
+- `web/themes/<name>.json` — saved theme palettes (see `web/themes/README.md`);
+  approved `theme.save` orders write new files here.
+- The active theme and its tweaks live in browser `localStorage`
+  (`web-muse:theme-name`, `web-muse:theme`) — the server never stores them,
+  so each browser keeps its own selection.
+
+There is no `~/.config` layer for these: edits live in the checkout itself.
 
 ## WS protocol (`/ws`, JSON text frames)
 
@@ -81,6 +96,7 @@ Client→server (each `{id, type, ...}` gets `{id, type:"result", ok, result|err
 | `page {sessionId, limit, cursor?, direction?}` | `view/page` |
 | `models {sessionId?}` / `setModel` | `model/list` / `session/setModel` |
 | `setApprovalMode` (allowAll permitted, warned in UI) | `session/setApprovalMode` |
+| `setSubagentAutoApprove {enabled}` | bridge-only toggle (no host call): auto-decide subagent prompts on allowAll sessions |
 | `compact`, `usage`, `pending` | `session/compact`, `usage/read`, `approval/listPending` |
 | `setEffort {reasoningEffort}` | `session/setReasoningEffort` (tier validated) |
 | `skills` | `skill/list` |
@@ -103,7 +119,11 @@ cancelled`; no sessionId, so every client renders it). The outcome follows
 as global `{type:"event", method:"githubCloneResult",
 params:{opId, ok, result|error}}` — clones are admitted instantly (like
 `compact`) so the connection stays responsive and `githubCancel` can
-preempt a hanging clone. Agent orders arrive the same way: `themeApply`
+preempt a hanging clone. Subagent auto-decisions (see above) arrive as
+`{type:"event", method:"subagentAutoApproved",
+params:{sessionId, approvalId, tool, subagent}}` instead of a card —
+the host never propagates the parent's mode to children, so each
+subagent prompt would otherwise park the session. Agent orders arrive the same way: `themeApply`
 (applies a validated theme at once) and `ordersPending` (a policy order
 staged for a human's `ordersDecide`); every session workspace carries
 the protocol in `.web-muse/ORDERS.md`, checked mid-turn and after each turn.

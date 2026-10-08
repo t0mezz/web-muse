@@ -563,7 +563,7 @@ class TestNewMcpAttach(unittest.IsolatedAsyncioTestCase):
     async def test_attach_builds_config(self):
         from unittest import mock
         r = SessionRouter(SessionStartMsp())
-        with mock.patch("server.sessions.read_settings_raw",
+        with mock.patch("server.sessions.mcp.read_settings_raw",
                         return_value=self.SETTINGS):
             f = await r.handle_client_message(
                 FakeConn(), {"id": 1, "type": "new",
@@ -578,7 +578,7 @@ class TestNewMcpAttach(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_attach_is_clear_error(self):
         from unittest import mock
         r = SessionRouter(SessionStartMsp())
-        with mock.patch("server.sessions.read_settings_raw",
+        with mock.patch("server.sessions.mcp.read_settings_raw",
                         return_value=self.SETTINGS):
             f = await r.handle_client_message(
                 FakeConn(), {"id": 1, "type": "new",
@@ -598,7 +598,7 @@ class TestNewMcpAttach(unittest.IsolatedAsyncioTestCase):
         from unittest import mock
         r = SessionRouter(SessionStartMsp())
         mine = {"transport": "stdio", "command": "/bin/mine"}
-        with mock.patch("server.sessions.read_settings_raw",
+        with mock.patch("server.sessions.mcp.read_settings_raw",
                         return_value=self.SETTINGS):
             f = await r.handle_client_message(
                 FakeConn(), {"id": 1, "type": "new", "mcpAttach": ["gh"],

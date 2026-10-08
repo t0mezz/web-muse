@@ -25,7 +25,7 @@ from server.sessions import (  # noqa: E402
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-SESSIONS_PY = (ROOT / "server" / "sessions.py").read_text()
+SESSIONS_PY = "".join(p.read_text() for p in sorted((ROOT / "server" / "sessions").glob("*.py")))
 APP_JS = (ROOT / "web" / "app.js").read_text()
 STYLE_CSS = (ROOT / "web" / "style.css").read_text()
 INDEX_HTML = (ROOT / "web" / "index.html").read_text()

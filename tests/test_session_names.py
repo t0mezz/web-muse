@@ -22,7 +22,7 @@ from server.sessions import (  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_JS = (ROOT / "web" / "app.js").read_text()
-SESSIONS_PY = (ROOT / "server" / "sessions.py").read_text()
+SESSIONS_PY = "".join(p.read_text() for p in sorted((ROOT / "server" / "sessions").glob("*.py")))
 
 
 class FakeConn:

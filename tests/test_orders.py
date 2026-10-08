@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from server.sessions import SessionRouter  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-SESSIONS_PY = (ROOT / "server" / "sessions.py").read_text()
+SESSIONS_PY = "".join(p.read_text() for p in sorted((ROOT / "server" / "sessions").glob("*.py")))
 APP_JS = (ROOT / "web" / "app.js").read_text()
 SKILL_MD = (ROOT / "server" / "orders_skill.md").read_text()
 THEME_JS = (ROOT / "web" / "theme.js").read_text()
@@ -139,7 +139,7 @@ class TestThemeKeys(unittest.TestCase):
     def test_bridge_knows_every_theme_key(self):
         m = re.search(r"THEME_KEYS = frozenset\(\{(.*?)\}\)", SESSIONS_PY,
                       re.S)
-        self.assertIsNotNone(m, "THEME_KEYS missing from sessions.py")
+        self.assertIsNotNone(m, "THEME_KEYS missing from sessions package")
         bridge_keys = set(re.findall(r'"([A-Za-z0-9]+)"', m.group(1)))
         self.assertEqual(bridge_keys, theme_keys())
 

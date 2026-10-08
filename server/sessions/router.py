@@ -1,8 +1,4 @@
-"""Session routing: WS connections <-> MSP sessionIds, cursor store, frame mapping.
-
-Pure mapping helpers (build_* / map_*) are unit-tested in
-tests/test_msp_mapping.py against recorded fixtures.
-"""
+"""Session routing: WS connections <-> MSP sessionIds, cursor store, dispatch."""
 
 from __future__ import annotations
 
@@ -10,1182 +6,20 @@ import asyncio
 import json
 import logging
 import os
-import re
 import shutil
 from pathlib import Path
 
 from server.github import GithubError, filter_repos, is_safe_leaf_name, merge_branch_names, merge_repo_rows, repo_dir_name, run_gh_branches, run_gh_clone, run_gh_list, validate_branch, validate_fullname
 from server.msp import MspError, uuid7
+from server.sessions.github_parts import has_seeded_instructions, seed_github_instructions, seed_session_agents
+from server.sessions.mapping import METHOD_NOT_FOUND, VALID_APPROVAL_MODES, VALID_PAGE_DIRECTIONS, VALID_REASONING_EFFORTS, _retained_refused, build_turn_input, default_session_name, map_notification_to_ws, map_server_request_to_ws, notification_session_id, pick_approve_once_choice
+from server.sessions.mcp import build_session_mcp_config, read_mcp_servers
+from server.sessions.orders import DEFAULT_THEMES_DIR, ORDERS_DIRNAME, ORDERS_FILENAME, ORDERS_MAX_BYTES, ORDERS_MAX_COUNT, RESTART_DELAY_DEFAULT, RESTART_DELAY_MAX, RESTART_DELAY_MIN, _read_receipt, _write_receipt, seed_orders_skill, validate_orders
+from server.sessions.policy import ALLOWED_COMMANDS_FILE, load_allowed_commands, shell_auto_allowed
+from server.sessions.themes import THEME_KEYS, THEME_NAME_RE, theme_color_error
+from server.sessions.workspaces import SAFE_SESSION_ID, _workspace_under_base, browse_dir, delete_session_files, session_workspace_dir, validate_manual_root
 
 LOG = logging.getLogger("web_muse.sessions")
-
-# JSON-RPC "method not found": a --no-session-log (memory-only) host serves
-# no view-store methods — session/resume, session/read, view/subscribe and
-# view/page all answer -32601 there (verified live). Durable hosts serve
-# them. The bridge falls back below instead of failing the UI.
-METHOD_NOT_FOUND = -32601
-
-# A serve host cannot load sessions whose retained permission profile it
-# cannot compose (verified live: TUI-created `:auto-review` sessions are
-# refused with -32603 "retained session refused", while serve-created
-# sessions resume fine; the TUI resumes in-process where the reviewer
-# exists). This is a host capability gap, not a missing method, so the
-# bridge degrades honestly (metadata + live attach) instead of failing
-# the switch — same philosophy as the --no-session-log fallback below.
-RETAINED_REFUSED_CODE = -32603
-RETAINED_REFUSED_MARKER = "retained session refused"
-
-
-def _retained_refused(e):
-    """True when the host refuses to load a stored session (-32603).
-
-    Matched on code plus the host's marker text so unrelated internal
-    errors still surface instead of degrading silently.
-    """
-    return (getattr(e, "code", None) == RETAINED_REFUSED_CODE
-            and RETAINED_REFUSED_MARKER in str(e).lower())
-
-
-# MSP methods that are commands: the bridge must NOT accept a client commandId,
-# it always mints a fresh UUIDv7 (see MspClient.command).
-COMMAND_METHODS = {
-    "session/start": "session/start",
-    "session/resume": "session/resume",
-    "session/fork": "session/fork",
-    "session/rename": "session/rename",
-    "session/delete": "session/delete",
-    "session/setModel": "session/setModel",
-    "session/setApprovalMode": "session/setApprovalMode",
-    "session/setReasoningEffort": "session/setReasoningEffort",
-    "session/compact": "session/compact",
-    "turn/start": "turn/start",
-    "turn/interrupt": "turn/interrupt",
-    "turn/cancel": "turn/cancel",
-    "turn/steer": "turn/steer",
-    "turn/unqueue": "turn/unqueue",
-    "approval/decide": "approval/decide",
-    "userInput/answer": "userInput/answer",
-}
-
-# MSP ApprovalMode closed enum (schema $defs/ApprovalMode). All four are
-# selectable, including allowAll ("approve all" in the Session panel):
-# with it the host runs every command without prompting, so it carries
-# an explicit warning in the UI and should be used only in throwaway
-# sessions. (The host default onRequest applies unless changed here or
-# in the TUI.)
-VALID_APPROVAL_MODES = {"allowAll", "promptUnmatched", "onRequest",
-                        "denyUnmatched"}
-
-# Shell allowlist auto-decided for GitHub-opened sessions.
-#
-# MSP v1 has no per-session command policy on the wire (SessionConfig admits
-# only mcpServers; ApprovalMode is select-never-create), so "gh may run"
-# cannot be sent to the host. Instead the bridge answers the host's
-# approval/request itself via approval/decide before any card reaches the
-# UI, so the agent never parks on an unanswered prompt. Anything outside
-# this list falls through to the normal UI approval card.
-#
-# NOTE: `gh` is covered in full, including destructive subcommands
-# (`gh repo delete`, `gh release delete`, `gh secret set`, `gh pr merge`,
-# raw `gh api` writes, ...). That breadth is explicit user policy for
-# GitHub-opened sessions. `git` is covered except the destructive forms
-# carved back out in GH_GIT_DENY_RE below.
-GH_AUTO_ALLOW_RE = (
-    re.compile(r"^gh(\s|$)"),
-    re.compile(r"^git(\s|$)"),
-)
-
-# Read-only inspection + common build/test toolchains, also pre-approved
-# in GitHub-opened sessions so agents can explore repos and run checks
-# without stalling. Shell file mutation outside git (rm/mv/cp, shell
-# redirection) is deliberately NOT here — the agent's file tools own
-# that job — and `find`'s write modes are carved back out below.
-# Network fetchers (curl/wget/ssh) are excluded on purpose: anything
-# that leaves the machine still asks a human.
-#
-# The word lists are the single source of truth: the matchers below are
-# compiled from them, and the seeded instruction file renders them
-# verbatim (see github_preapproved_section), so the doc can never drift
-# from what the bridge actually auto-decides.
-AUTO_ALLOW_INSPECT = (
-    "ls", "cat", "head", "tail", "less", "find", "grep", "rg", "tree",
-    "wc", "file", "stat", "diff", "jq", "pwd", "echo", "printf",
-)
-AUTO_ALLOW_TOOLCHAINS = (
-    "node", "npm", "npx", "python3", "pip", "pip3", "pytest", "uv",
-    "uvx", "cargo", "rustc", "go", "make", "tsc",
-)
-GH_AUTO_ALLOW_TOOLS_RE = (
-    re.compile(r"^(?:%s)(\s|$)" % "|".join(AUTO_ALLOW_INSPECT)),
-    re.compile(r"^(?:%s)(\s|$)" % "|".join(AUTO_ALLOW_TOOLCHAINS)),
-)
-
-# Everyday-git carve-outs, mirrored in the instruction text below.
-GIT_DENY_SUMMARY = (
-    "`reset --hard`, `clean -f`/`--force`, `push --force`/`-f`/`--delete`, "
-    "`branch -D`, `stash drop`/`clear`"
-)
-
-# `find` stays inspection-only: -delete/-exec* would smuggle writes and
-# process execution past the allowlist above.
-GH_TOOL_DENY_RE = (
-    re.compile(r"\bfind\b.*\s(-delete|-exec|-execdir)(\s|$)"),
-)
-
-# Destructive git forms: discarded work is unrecoverable, so these keep
-# prompting a human even in GitHub-opened sessions. Matched with search
-# (flags can sit anywhere in the argv).
-GH_GIT_DENY_RE = (
-    re.compile(r"(^|\s)--force(\s|$)"),    # push --force, clean --force
-    re.compile(r"(^|\s)--hard(\s|$)"),     # reset --hard
-    re.compile(r"(^|\s)-f(\s|$)"),         # push -f
-    re.compile(r"\bclean\s+-[a-zA-Z]*f"),  # clean -fd / -fx / ...
-    re.compile(r"\bpush\b.*\s--delete(\s|$)"),  # push --delete
-    re.compile(r"\bbranch\s+-[a-zA-Z]*D\b"),   # branch -D
-    re.compile(r"\bstash\s+(drop|clear)\b"),   # stash drop / clear
-)
-
-
-# Protected allowed-commands config: server/allowed_commands.json holds the
-# same allow/deny semantics as the GH_* matchers above, but as data the
-# bridge validates on load. Protection is threefold: the file lives under
-# server/ (never under the served web/ dir, so no WS route can reach it),
-# every value is type/shape/regex-checked with a builtin fallback, and a
-# corrupt file degrades to prompting (never to wider auto-approval).
-# Nothing here — rows aside — ever crosses the WS boundary to the browser.
-ALLOWED_COMMANDS_FILE = str(
-    Path(__file__).resolve().parent / "allowed_commands.json")
-MAX_ALLOWED_PATTERNS = 200
-MAX_PATTERN_LEN = 500
-SAFE_COMMAND_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
-
-
-def _builtin_allowed_config():
-    """Compiled GH_* matchers as a config dict (fallback + parity base)."""
-    return {
-        "allow": list(GH_AUTO_ALLOW_RE) + list(GH_AUTO_ALLOW_TOOLS_RE),
-        "deny": [(("find",), list(GH_TOOL_DENY_RE)),
-                 (("git",), list(GH_GIT_DENY_RE))],
-    }
-
-
-def _compile_patterns(patterns, warnings, what):
-    """Compile a pattern list, dropping bad entries with a warning each."""
-    compiled = []
-    for pat in patterns or []:
-        if (not isinstance(pat, str) or not pat
-                or len(pat) > MAX_PATTERN_LEN):
-            warnings.append(f"allowed-commands: dropping invalid {what} "
-                            f"entry {pat!r}")
-            continue
-        if len(compiled) >= MAX_ALLOWED_PATTERNS:
-            warnings.append(f"allowed-commands: too many {what} entries; "
-                            "keeping the first "
-                            f"{MAX_ALLOWED_PATTERNS}")
-            break
-        try:
-            compiled.append(re.compile(pat))
-        except re.error as e:
-            warnings.append(f"allowed-commands: dropping bad {what} "
-                            f"regex {pat!r} ({e})")
-    return compiled
-
-
-def load_allowed_commands(path=None):
-    """Load and validate the allowed-commands config (never raises).
-
-    Returns (cfg, warnings): cfg is {"allow": [re], "deny":
-    [(commands, [re])]}. A missing/unparseable file, or an unusable side
-    of it, falls back to the builtin GH_* matchers with a warning — so a
-    corrupt file degrades to the audited default, never to silent
-    allow-everything. An explicit empty allow list is honored (nothing
-    auto-approved).
-    """
-    builtin = _builtin_allowed_config()
-    p = path if path is not None else ALLOWED_COMMANDS_FILE
-    try:
-        raw = json.loads(Path(p).read_text())
-    except FileNotFoundError:
-        return builtin, [f"allowed-commands: no file at {p}; "
-                         "using builtin matchers"]
-    except (OSError, ValueError) as e:
-        LOG.warning("allowed-commands: unreadable %s (%s); using builtin "
-                    "matchers", p, e)
-        return builtin, [f"allowed-commands: unreadable file ({e}); "
-                         "using builtin matchers"]
-    if not isinstance(raw, dict):
-        return builtin, ["allowed-commands: top level must be an object; "
-                         "using builtin matchers"]
-    warnings = []
-    cfg = {}
-    if "allow" not in raw:
-        cfg["allow"] = builtin["allow"]
-    elif not isinstance(raw["allow"], list):
-        warnings.append("allowed-commands: 'allow' must be a list; "
-                        "using builtin allow matchers")
-        cfg["allow"] = builtin["allow"]
-    else:
-        cfg["allow"] = _compile_patterns(raw["allow"], warnings, "allow")
-        if raw["allow"] and not cfg["allow"]:
-            warnings.append("allowed-commands: no usable 'allow' entries; "
-                            "using builtin allow matchers")
-            cfg["allow"] = builtin["allow"]
-    if "deny" not in raw:
-        cfg["deny"] = builtin["deny"]
-    elif not isinstance(raw["deny"], list):
-        warnings.append("allowed-commands: 'deny' must be a list; "
-                        "using builtin deny rules")
-        cfg["deny"] = builtin["deny"]
-    else:
-        rules = []
-        for entry in raw["deny"]:
-            if not isinstance(entry, dict) or not isinstance(
-                    entry.get("patterns"), list):
-                warnings.append("allowed-commands: dropping malformed "
-                                f"deny entry {entry!r}")
-                continue
-            commands = entry.get("commands") or []
-            if not isinstance(commands, list) or not all(
-                    isinstance(c, str) and SAFE_COMMAND_NAME.fullmatch(c)
-                    for c in commands):
-                warnings.append("allowed-commands: dropping deny entry "
-                                f"with bad 'commands' {entry!r}")
-                continue
-            patterns = _compile_patterns(entry["patterns"], warnings,
-                                         "deny")
-            if entry["patterns"] and not patterns:
-                warnings.append("allowed-commands: deny entry has no "
-                                f"usable patterns {entry!r}")
-                continue
-            rules.append((tuple(commands), patterns))
-        cfg["deny"] = rules
-    for w in warnings:
-        LOG.warning("%s", w)
-    return cfg, warnings
-
-
-_DEFAULT_ALLOWED = None
-
-
-def default_allowed_config():
-    """Process-wide allowed-commands config (shipped file or builtins)."""
-    global _DEFAULT_ALLOWED
-    if _DEFAULT_ALLOWED is None:
-        _DEFAULT_ALLOWED, _ = load_allowed_commands()
-    return _DEFAULT_ALLOWED
-
-
-def shell_allowed(command, cfg):
-    """True when a shell command string passes an allowed-commands config.
-
-    Pure: allow entries match from the command start; deny rules search
-    anywhere but only fire for their listed leading commands (an empty
-    command list scopes a rule to every allowed command).
-    """
-    cmd = command.strip() if isinstance(command, str) else ""
-    if not cmd:
-        return False
-    if not any(pat.match(cmd) for pat in cfg.get("allow", ())):
-        return False
-    first = cmd.split()[0]
-    for commands, patterns in cfg.get("deny", ()):
-        if commands and first not in commands:
-            continue
-        if any(pat.search(cmd) for pat in patterns):
-            return False
-    return True
-
-
-def shell_auto_allowed(subject, cfg=None):
-    """True when a shell approval subject is auto-decided bridge-side."""
-    if not isinstance(subject, dict) or subject.get("kind") != "shell":
-        return False
-    cmd = subject.get("command")
-    if not isinstance(cmd, str):
-        return False
-    return shell_allowed(
-        cmd, default_allowed_config() if cfg is None else cfg)
-
-
-# Agent orders channel: agents cannot write outside their workspace, so
-# app customization arrives as `.web-muse/orders.json` files (protocol in
-# server/orders_skill.md, seeded into every session workspace). The bridge
-# checks the file on streamed turn events while the turn is still running
-# (gated on file change) and again after each turn, validates every
-# order, and acts:
-# `theme.apply` executes at once (fanned out as a themeApply event the
-# frontend applies); `theme.save`, `allowedCommands.update` and
-# `bridge.restart` only stage — a human's ordersDecide runs them, so
-# agents never loosen their own policy or bounce the backend alone.
-# Everything else is rejected with a reason in the receipt file.
-ORDERS_DIRNAME = ".web-muse"
-ORDERS_FILENAME = "orders.json"
-ORDERS_RECEIPT = "orders.receipt.json"
-ORDERS_SKILL_FILE = "ORDERS.md"
-ORDERS_MAX_BYTES = 65536
-ORDERS_MAX_COUNT = 20
-ORDERS_RECEIPT_CAP = 200
-ORDERS_TEMPLATE = (
-    Path(__file__).resolve().parent / "orders_skill.md")
-# Saved themes live under <repo>/web/themes; an approved theme.save order
-# writes one file there so it appears under bare `/theme`.
-DEFAULT_THEMES_DIR = (
-    Path(__file__).resolve().parent.parent / "web" / "themes")
-
-ORDER_ACTIONS = ("theme.apply", "theme.save", "allowedCommands.update",
-                 "bridge.restart")
-
-# Agent-requested backend restarts (bridge.restart): an agent can only
-# *propose* one — a human's ordersDecide runs it, because restarting
-# drops every browser connection and interrupts running turns. Params
-# are optional: {"reason": "...", "delaySeconds": 2}.
-RESTART_REASON_MAX = 500
-RESTART_DELAY_DEFAULT = 2
-RESTART_DELAY_MIN = 0
-RESTART_DELAY_MAX = 30
-
-# Theme value formats, per key shape in web/theme.js (pinned by
-# tests/test_orders.py): hex roles take #rgb / #rrggbb / #rrggbbaa,
-# `glow` takes an "r, g, b" triplet (0-255 each, applied verbatim into
-# CSS), and `scrim` takes an rgba(...) color. Anything else is rejected
-# with the expected shape in the reason so the agent can fix and resend.
-HEX_COLOR_RE = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\Z")
-GLOW_RE = re.compile(
-    r"\s*(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])"
-    r"\s*,\s*(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])"
-    r"\s*,\s*(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])\s*\Z")
-SCRIM_RE = re.compile(r"rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,"
-                      r"\s*(?:0|1|0?\.\d+)\s*\)\Z")
-
-
-def theme_color_error(key, value):
-    """Reason string when a theme value has the wrong shape; None when ok.
-
-    Pure: `glow`/`scrim` are non-hex roles (see web/theme.js), everything
-    else is a hex role.
-    """
-    if key == "glow":
-        if isinstance(value, str) and GLOW_RE.match(value):
-            return None
-        return (f"bad color value for 'glow': want an \"r, g, b\" triplet "
-                f"(0-255 each), e.g. \"174, 172, 120\"; got {value!r}")
-    if key == "scrim":
-        if isinstance(value, str) and SCRIM_RE.match(value):
-            return None
-        return (f"bad color value for 'scrim': want rgba(r, g, b, a), e.g. "
-                f"\"rgba(241, 230, 209, 0.4)\"; got {value!r}")
-    if isinstance(value, str) and HEX_COLOR_RE.match(value):
-        return None
-    return (f"bad color value for {key!r}: want #rgb, #rrggbb or "
-            f"#rrggbbaa, e.g. \"#AEAC78\"; got {value!r}")
-
-
-# Saved-theme names the bridge writes (web/themes/<name>.json via an
-# approved theme.save order): lowercase stems so they are safe path
-# segments and stable under the /theme command's case-insensitive match.
-THEME_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
-
-# Theme color names the bridge accepts (must match web/theme.js COLORS;
-# tests/test_orders.py pins parity both ways).
-THEME_KEYS = frozenset({
-    "bg", "panel", "panel2", "line", "fg", "dim", "faint",
-    "accent", "focus", "ok", "warn", "err", "user", "agent",
-    "select", "warnBg", "warnFg", "errFg", "codeBg", "cardBg",
-    "pickedBg", "onOk", "onAccent", "chipInk", "light",
-    "glow", "scrim", "star", "starBg0", "starBg1",
-})
-
-
-def seed_orders_skill(root):
-    """Write the orders skill doc into one workspace (best-effort).
-
-    Every session workspace gets `.web-muse/ORDERS.md` once; an existing
-    file is never overwritten. Never raises: seeding must not fail a
-    session start. Returns (seeded, path).
-    """
-    if not root:
-        return False, ""
-    target = Path(root) / ORDERS_DIRNAME / ORDERS_SKILL_FILE
-    try:
-        if target.is_file():
-            return False, str(target)
-        text = ORDERS_TEMPLATE.read_text()
-    except OSError:
-        return False, str(target)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text)
-    except OSError:
-        LOG.warning("orders skill unwritable at %s", target)
-        return False, str(target)
-    return True, str(target)
-
-
-def _read_receipt(odir):
-    """Processed-id map from the receipt file; {} when absent/broken."""
-    try:
-        raw = json.loads((Path(odir) / ORDERS_RECEIPT).read_text())
-    except (OSError, ValueError):
-        return {}
-    processed = raw.get("processed") if isinstance(raw, dict) else None
-    if not isinstance(processed, dict):
-        return {}
-    return {k: v for k, v in processed.items()
-            if isinstance(k, str) and isinstance(v, dict)}
-
-
-def _write_receipt(odir, processed):
-    """Merge new statuses into the receipt file (best-effort, capped)."""
-    merged = dict(_read_receipt(odir))
-    merged.update(processed)
-    while len(merged) > ORDERS_RECEIPT_CAP:
-        merged.pop(next(iter(merged)))
-    try:
-        Path(odir).mkdir(parents=True, exist_ok=True)
-        (Path(odir) / ORDERS_RECEIPT).write_text(
-            json.dumps({"processed": merged}, indent=2))
-    except OSError:
-        LOG.warning("orders receipt unwritable in %s", odir)
-
-
-def _validate_allowed_update(raw):
-    """Strict-validate an allowedCommands.update payload.
-
-    Same shapes as the config file, but any invalid entry rejects the
-    whole order (file loading instead drops entries with warnings).
-    Returns ({"allow": [...], "deny": [...]}, None) or (None, reason).
-    """
-    if not isinstance(raw, dict):
-        return None, "params must be an object with allow and/or deny"
-    if "allow" not in raw and "deny" not in raw:
-        return None, "params needs allow and/or deny"
-    out = {}
-    if "allow" in raw:
-        if not isinstance(raw["allow"], list):
-            return None, "'allow' must be a list of regex strings"
-        w = []
-        compiled = _compile_patterns(raw["allow"], w, "allow")
-        if raw["allow"] and (w or not compiled):
-            return None, f"unusable 'allow' entries: {'; '.join(w)}"
-        out["allow"] = [p for p in raw["allow"]
-                        if isinstance(p, str) and p
-                        and len(p) <= MAX_PATTERN_LEN]
-    if "deny" not in raw:
-        return out, None
-    if not isinstance(raw["deny"], list):
-        return None, "'deny' must be a list of {commands, patterns}"
-    rules = []
-    for entry in raw["deny"]:
-        if not isinstance(entry, dict) \
-                or not isinstance(entry.get("patterns"), list):
-            return None, f"malformed deny entry {entry!r}"
-        commands = entry.get("commands") or []
-        if not isinstance(commands, list) or not all(
-                isinstance(c, str) and SAFE_COMMAND_NAME.fullmatch(c)
-                for c in commands):
-            return None, f"bad 'commands' in deny entry {entry!r}"
-        w = []
-        compiled = _compile_patterns(entry["patterns"], w, "deny")
-        if entry["patterns"] and (w or not compiled):
-            return None, (f"unusable patterns in deny entry {entry!r}: "
-                           f"{'; '.join(w)}")
-        rules.append({"commands": list(commands),
-                      "patterns": [p for p in entry["patterns"]
-                                   if isinstance(p, str) and p
-                                   and len(p) <= MAX_PATTERN_LEN]})
-    out["deny"] = rules
-    return out, None
-
-
-def _validate_restart(raw):
-    """Strict-validate a bridge.restart payload.
-
-    Both params are optional: `reason` (short human-readable why,
-    shown on the approval card) and `delaySeconds` (grace between the
-    human's approval reply and the actual restart, so the reply and the
-    bridgeRestarting event flush first). Returns (params, None) or
-    (None, reason).
-    """
-    if not isinstance(raw, dict):
-        return None, "params must be an object"
-    out = {}
-    reason = raw.get("reason", "")
-    if reason is None:
-        reason = ""
-    if not isinstance(reason, str):
-        return None, "'reason' must be a string"
-    if len(reason) > RESTART_REASON_MAX:
-        return None, (f"'reason' must be at most {RESTART_REASON_MAX} "
-                       f"chars")
-    out["reason"] = reason
-    delay = raw.get("delaySeconds", RESTART_DELAY_DEFAULT)
-    if isinstance(delay, bool) or not isinstance(delay, int):
-        return None, ("'delaySeconds' must be an integer "
-                      f"{RESTART_DELAY_MIN}-{RESTART_DELAY_MAX}")
-    if not RESTART_DELAY_MIN <= delay <= RESTART_DELAY_MAX:
-        return None, ("'delaySeconds' must be between "
-                      f"{RESTART_DELAY_MIN} and {RESTART_DELAY_MAX}")
-    out["delaySeconds"] = delay
-    return out, None
-
-
-HEX_COLOR = re.compile(r"#[0-9a-fA-F]{3}([0-9a-fA-F]{3}([0-9a-fA-F]{2})?)?")
-
-
-def _rgb_triplet(value):
-    """Parse an "r, g, b" triplet (each part 0-255) into [r, g, b], else None."""
-    if not isinstance(value, str):
-        return None
-    parts = [p.strip() for p in value.split(",")]
-    if len(parts) != 3:
-        return None
-    nums = []
-    for p in parts:
-        if re.fullmatch(r"\d{1,3}", p) is None:
-            return None
-        n = int(p)
-        if n > 255:
-            return None
-        nums.append(n)
-    return nums
-
-
-def _valid_theme_value(key, value):
-    """True when a theme.apply value has the shape its role needs.
-
-    Every role takes #rgb, #rrggbb or #rrggbbaa, except glow (an
-    "r, g, b" triplet with each part 0-255) and scrim (an rgba(...)
-    color). Mirrors the shapes documented in server/orders_skill.md.
-    """
-    if not isinstance(value, str) or not value \
-            or len(value) > MAX_PATTERN_LEN:
-        return False
-    if key == "glow":
-        return _rgb_triplet(value) is not None
-    if key == "scrim":
-        m = re.fullmatch(r"rgba\((.*)\)", value.strip(), re.S)
-        if not m:
-            return False
-        parts = [p.strip() for p in m.group(1).split(",")]
-        if len(parts) != 4 \
-                or _rgb_triplet(",".join(parts[:3])) is None:
-            return False
-        try:
-            alpha = float(parts[3])
-        except ValueError:
-            return False
-        return 0.0 <= alpha <= 1.0
-    return HEX_COLOR.fullmatch(value) is not None
-
-
-def validate_orders(payload, seen_ids):
-    """Split an orders payload into (valid, rejected).
-
-    valid: [(id, action, params)]; rejected: {id: reason}. Unknown
-    actions, bad shapes, duplicate ids (in-file or already receipted),
-    and invalid action params are all rejected, never raised.
-    """
-    valid, rejected = [], {}
-    if not isinstance(payload, dict) or not isinstance(
-            payload.get("orders"), list):
-        return valid, rejected
-    seen = set(seen_ids or ())
-    for entry in payload["orders"]:
-        if not isinstance(entry, dict):
-            continue
-        oid = entry.get("id")
-        if not isinstance(oid, str) or not oid or len(oid) > 128:
-            continue
-        if oid in seen:
-            rejected[oid] = "duplicate order id (already processed)"
-            continue
-        seen.add(oid)
-        action = entry.get("action")
-        params = entry.get("params") or {}
-        if action not in ORDER_ACTIONS:
-            rejected[oid] = (f"unknown action {action!r}; want one of "
-                             f"{sorted(ORDER_ACTIONS)}")
-            continue
-        if not isinstance(params, dict):
-            rejected[oid] = "params must be an object"
-            continue
-        if action in ("theme.apply", "theme.save"):
-            colors = params.get("colors")
-            if not isinstance(colors, dict) or not colors:
-                rejected[oid] = "'colors' must be a non-empty object"
-                continue
-            bad_keys = [k for k in colors if k not in THEME_KEYS]
-            if bad_keys:
-                rejected[oid] = (f"unknown color names {sorted(bad_keys)}; "
-                                 f"want: {sorted(THEME_KEYS)}")
-                continue
-            bad_vals = [k for k, v in colors.items()
-                        if not _valid_theme_value(k, v)]
-            if bad_vals:
-                rejected[oid] = (f"bad color values for {sorted(bad_vals)}: "
-                                 "hex #rgb/#rrggbb/#rrggbbaa, except glow "
-                                 "('r, g, b' with each part 0-255) and "
-                                 "scrim (rgba(r, g, b, alpha))")
-                continue
-            if action == "theme.apply":
-                valid.append((oid, action, {"colors": dict(colors)}))
-                continue
-            name = params.get("name")
-            if not isinstance(name, str) or not THEME_NAME_RE.match(name):
-                rejected[oid] = ("'name' must match [a-z0-9-]{1,64}, "
-                                 "starting with [a-z0-9] "
-                                 "(e.g. \"harbor-dusk\")")
-                continue
-            valid.append((oid, action,
-                          {"name": name, "colors": dict(colors)}))
-        elif action == "allowedCommands.update":
-            update, reason = _validate_allowed_update(params)
-            if reason is not None:
-                rejected[oid] = reason
-                continue
-            valid.append((oid, action, update))
-        elif action == "bridge.restart":
-            restart, reason = _validate_restart(params)
-            if reason is not None:
-                rejected[oid] = reason
-                continue
-            valid.append((oid, action, restart))
-    return valid, rejected
-
-
-def pick_approve_once_choice(choices):
-    """ChoiceId of the narrowest approve choice, or None.
-
-    Prefers a one-shot `approved` choice; falls back to any non-amendment
-    approve decision (`approvedForSession`). Amendment decisions (which
-    would persist a policy rule) and denials are never picked, and None
-    means "leave it to the UI card".
-    """
-    if not isinstance(choices, list):
-        return None
-    cands = [c for c in choices
-             if isinstance(c, dict) and c.get("choiceId")
-             and c.get("decision") in ("approved", "approvedForSession")]
-    if not cands:
-        return None
-    for c in cands:
-        if c.get("decision") == "approved" and c.get("scope") == "once":
-            return c["choiceId"]
-    return cands[0]["choiceId"]
-
-# Offered reasoning-effort tiers: the middle six of the MSP ReasoningEffort
-# vocabulary (schema $defs/ReasoningEffort). The `none` and `ultra`
-# extremes are deliberately excluded — `none` silently degrades answer
-# quality and `ultra` burns budget with little return.
-VALID_REASONING_EFFORTS = {"minimal", "low", "medium", "high",
-                           "xhigh", "max"}
-
-# MSP view/page directions (schema $defs/ViewPageDirection).
-VALID_PAGE_DIRECTIONS = {"forward", "backward"}
-
-# Default session-name length: the web panel names a session from the
-# first few characters of its initial prompt (same convention as the
-# muse TUI), as a fallback until an explicit rename takes precedence.
-DEFAULT_SESSION_NAME_LEN = 40
-
-
-def default_session_name(text, limit=DEFAULT_SESSION_NAME_LEN):
-    """Initial-prompt prefix used as a session's default (fallback) name.
-
-    Whitespace (including newlines) collapses to single spaces and the
-    result hard-slices to `limit` characters. Returns "" when there is
-    no usable text (blank prompt, images-only turn), so callers skip
-    the rename instead of setting an empty name.
-    """
-    if not isinstance(text, str):
-        return ""
-    collapsed = " ".join(text.split())
-    return collapsed[:limit]
-
-
-def build_turn_input(text, images=None, skills=None):
-    """WS prompt payload -> MSP TurnInputPart list.
-
-    skills: optional list of {selector, arguments?} dicts, each becoming
-    a {type: skill} part (selector required, arguments optional free
-    text — the wire twin of what the TUI accepts after the shortcut
-    token). Skill parts come first so "/selector args" reads as the
-    skill invocation with args, not as plain user text.
-    """
-    parts = []
-    for sk in skills or []:
-        if not isinstance(sk, dict):
-            raise ValueError("skill entries must be {selector, arguments?}")
-        selector = sk.get("selector", "")
-        if not isinstance(selector, str) or not selector.strip():
-            raise ValueError("skill entries need a non-empty selector")
-        arguments = sk.get("arguments", "")
-        if arguments is None:
-            arguments = ""
-        if not isinstance(arguments, str):
-            raise ValueError("skill arguments must be text")
-        part = {"type": "skill", "selector": selector.strip()}
-        if arguments.strip():
-            part["arguments"] = arguments.strip()
-        parts.append(part)
-    if text:
-        parts.append({"type": "text", "text": text})
-    for img in images or []:
-        parts.append({
-            "type": "image",
-            "mediaType": img.get("mediaType", "image/png"),
-            "base64Data": img.get("base64Data", ""),
-        })
-    if not parts:
-        raise ValueError("prompt needs text, images, or a skill")
-    return parts
-
-
-def notification_session_id(method, params):
-    """Route key for an MSP notification/request; None => broadcast."""
-    if not isinstance(params, dict):
-        return None
-    sid = params.get("sessionId")
-    if sid:
-        return sid
-    if method in ("session/started", "session/listChanged", "session/closed"):
-        sess = params.get("session")
-        if isinstance(sess, dict) and sess.get("sessionId"):
-            return sess["sessionId"]
-        # session/closed carries sessionId at top level; listChanged is global.
-        return params.get("sessionId")
-    return None
-
-
-def map_notification_to_ws(method, params):
-    """MSP notification -> WS server->client frame (thin envelope)."""
-    return {"type": "event", "method": method, "params": params}
-
-
-def map_server_request_to_ws(method, params):
-    """MSP server-initiated request -> WS frame (receipt already sent)."""
-    if method == "approval/request":
-        return {"type": "approval", "approval": params}
-    if method == "userInput/request":
-        return {"type": "userInput", "prompt": params}
-    return {"type": "event", "method": method, "params": params}
-
-
-def settings_path():
-    """User settings file where `mcpServers` entries live (per muse mcp help)."""
-    return Path(os.path.expanduser("~")) / ".config" / "muse" / "settings.json"
-
-
-def read_mcp_servers(path=None):
-    """Local MCP server inventory.
-
-    MSP v1 (stable AND experimental schema exports, verified against the
-    `muse schema` bundle) exposes no mcp/* methods, so /mcp is served from
-    the same settings.json the `muse mcp login` command uses. Returns a
-    JSON-able dict; never raises on missing/unparseable files.
-    """
-    p = Path(path) if path else settings_path()
-    try:
-        raw = json.loads(p.read_text())
-    except FileNotFoundError:
-        return {"servers": [], "source": str(p), "configured": False,
-                "hint": "no settings.json yet; run `muse login` or add an "
-                        "mcpServers entry, then `muse mcp login <server>`"}
-    except (OSError, ValueError) as e:
-        return {"servers": [], "source": str(p), "configured": False,
-                "hint": f"settings unreadable: {e}"}
-    entries = raw.get("mcpServers") or {}
-    servers = []
-    for name, cfg in entries.items() if isinstance(entries, dict) else []:
-        if not isinstance(cfg, dict):
-            continue
-        # Never echo secrets: report shape only (transport/url/command names
-        # are config diagnostics-safe; headers/env values are not).
-        servers.append({
-            "name": name,
-            "transport": cfg.get("transport", "streamableHttp"),
-            "url": cfg.get("url"),
-            "command": cfg.get("command"),
-            "hasHeaders": bool(cfg.get("headers")),
-            "hasEnv": bool(cfg.get("env")),
-        })
-    return {"servers": servers, "source": str(p),
-            "configured": bool(servers),
-            "hint": "" if servers else
-                    "no mcpServers entries; add one under mcpServers in "
-                    "settings.json, or attach one to a new session with "
-                    "`/new --mcp <name>`"}
-
-
-def read_settings_raw(path=None):
-    """Parsed settings.json; {} when missing/unparseable (never raises)."""
-    p = Path(path) if path else settings_path()
-    try:
-        raw = json.loads(p.read_text())
-    except (OSError, ValueError):
-        return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-# SessionMcpServerMode + SessionMcpStdioFraming closed enums: invalid optional
-# values are dropped with a warning (the host would reject the whole start).
-VALID_MCP_MODES = {"required", "optional"}
-VALID_MCP_FRAMINGS = {"auto", "contentLength", "lineDelimitedJson"}
-
-
-def build_session_mcp_config(names, path=None):
-    """settings.json entries -> wire SessionConfig {"mcpServers": {...}}.
-
-    Secrets (headers/env values) are resolved here, bridge-side, so they
-    never cross the browser boundary. Returns (config, warnings).
-    Raises ValueError on unknown names (with the known-name list).
-    """
-    entries = read_settings_raw(path).get("mcpServers") or {}
-    if not isinstance(entries, dict):
-        entries = {}
-    servers = {}
-    warnings = []
-    for name in names or []:
-        cfg = entries.get(name)
-        if not isinstance(cfg, dict):
-            known = sorted(entries) or ["(none configured)"]
-            raise ValueError(f"unknown MCP server {name!r}; known: "
-                             + ", ".join(known))
-        if cfg.get("command"):
-            arm = {"transport": "stdio", "command": cfg["command"]}
-            if isinstance(cfg.get("args"), list):
-                arm["args"] = [str(a) for a in cfg["args"]]
-            if isinstance(cfg.get("env"), dict):
-                arm["env"] = {str(k): str(v)
-                              for k, v in cfg["env"].items()}
-            if cfg.get("framing") in VALID_MCP_FRAMINGS:
-                arm["framing"] = cfg["framing"]
-            elif cfg.get("framing") is not None:
-                warnings.append(f"{name}: dropping invalid framing "
-                                f"{cfg['framing']!r}")
-            if cfg.get("mode") in VALID_MCP_MODES:
-                arm["mode"] = cfg["mode"]
-            elif cfg.get("mode") is not None:
-                warnings.append(f"{name}: dropping invalid mode "
-                                f"{cfg['mode']!r}")
-        elif cfg.get("url"):
-            arm = {"transport": "streamableHttp", "url": cfg["url"]}
-            if isinstance(cfg.get("headers"), dict):
-                arm["headers"] = {str(k): str(v)
-                                  for k, v in cfg["headers"].items()}
-            if cfg.get("mode") in VALID_MCP_MODES:
-                arm["mode"] = cfg["mode"]
-            elif cfg.get("mode") is not None:
-                warnings.append(f"{name}: dropping invalid mode "
-                                f"{cfg['mode']!r}")
-        else:
-            warnings.append(f"{name}: skipped (entry has neither "
-                            "command nor url)")
-            continue
-        servers[name] = arm
-    return ({"mcpServers": servers} if servers else {}), warnings
-
-
-# Client-supplied sessionIds become directory names: strict charset, no
-# leading dot, bounded length. Anything else is rejected, never remapped
-# (silent remapping could park two sessions in one workspace).
-SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_.-]{1,128}")
-
-
-def session_workspace_dir(base, session_id):
-    """Directory for one session under `base`; created, absolute, contained.
-
-    Raises ValueError on unsafe ids or containment failure. Never raises
-    on pre-existing directories.
-    """
-    sid = session_id or ""
-    if not SAFE_SESSION_ID.fullmatch(sid) or sid.startswith(".") \
-            or sid in (".", ".."):
-        raise ValueError(f"unsafe sessionId for workspace dir: {sid!r}")
-    root = Path(base).resolve()
-    target = (root / sid).resolve()
-    if target != root and root not in target.parents:
-        raise ValueError(f"workspace dir escapes base: {sid!r}")
-    target.mkdir(parents=True, exist_ok=True)
-    return str(target)
-
-
-def validate_manual_root(path):
-    """Check a client-supplied session directory: absolute, existing dir.
-
-    Manual roots may point anywhere on the device (first-use confirm
-    happens in the UI), but the bridge creates nothing outside its own
-    workspace base — so the directory must already exist. Raises
-    ValueError, which the caller turns into an error reply.
-    """
-    p = path if isinstance(path, str) else ""
-    if not p.strip():
-        raise ValueError("workspaceRoot must be a non-empty path")
-    if not os.path.isdir(p):
-        raise ValueError(f"workspaceRoot is not an existing directory: {p!r}")
-    return str(Path(p).resolve())
-
-
-def browse_home():
-    """Default explorer root: the server's $HOME, falling back to /."""
-    home = os.path.expanduser("~")
-    if home and os.path.isdir(home):
-        return str(Path(home).resolve())
-    return "/"
-
-
-def browse_dir(path=None):
-    """List one directory for the new-session explorer.
-
-    Any on-device path may be listed (manual roots may point anywhere);
-    nothing is created. Returns a JSON-able dict:
-    {path, parent, home, entries:[{name, path, isDir, isHidden}]} sorted
-    dirs-first, alphabetical (case-insensitive). Raises ValueError on a
-    missing/non-directory path or an unreadable directory.
-    """
-    raw = path if isinstance(path, str) else ""
-    raw = raw.strip() or browse_home()
-    if raw.startswith("~"):
-        raw = os.path.expanduser(raw)
-    target = Path(raw)
-    if not target.is_absolute():
-        raise ValueError(f"browse path must be absolute: {raw!r}")
-    if not os.path.isdir(target):
-        raise ValueError(f"not an existing directory: {raw!r}")
-    resolved = str(target.resolve())
-    try:
-        with os.scandir(resolved) as it:
-            rows = [(e.name, e.path, e.is_dir(follow_symlinks=True))
-                    for e in it]
-    except OSError as e:
-        raise ValueError(f"directory unreadable: {resolved!r} ({e})")
-    entries = [{
-        "name": name,
-        "path": str(Path(resolved) / name),
-        "isDir": bool(is_dir),
-        "isHidden": name.startswith("."),
-    } for name, _, is_dir in rows]
-    entries.sort(key=lambda e: (not e["isDir"], e["name"].lower(), e["name"]))
-    parent = str(Path(resolved).parent)
-    return {"path": resolved, "parent": parent, "home": browse_home(),
-            "entries": entries}
-
-
-def muse_sessions_base():
-    """On-disk MSP session store root (~/.local/share/muse/sessions)."""
-    return Path(os.path.expanduser("~")) / ".local" / "share" / "muse" \
-        / "sessions"
-
-
-def delete_session_files(session_id, base=None):
-    """Remove one session's on-disk store dirs (rm -rf semantics).
-
-    Deletes the dated main dir (sessions/YYYY/MM/DD/<sessionId>/) and the
-    view-store dir (sessions/.msp-view-v1/<sessionId>/), and nothing else.
-    The host is never called: its deletion registry admits one deletion
-    at a time and rejects back-to-back deletes with Store(Busy), so file
-    removal is the reliable path (verified live: with both dirs gone the
-    host answers resume with -32020 "was not found", and a restarted host
-    no longer lists the session).
-
-    Raises ValueError on unsafe ids or containment failure. Missing dirs
-    are success (already gone — rm -f semantics). Returns the removed
-    path strings.
-    """
-    sid = session_id or ""
-    if not SAFE_SESSION_ID.fullmatch(sid) or sid.startswith(".") \
-            or sid in (".", ".."):
-        raise ValueError(f"unsafe sessionId for session delete: {sid!r}")
-    root = Path(base).resolve() if base else muse_sessions_base().resolve()
-    targets = [root / ".msp-view-v1" / sid]
-    # Dated layout is YYYY/MM/DD/<sid>; glob only (the safe charset holds
-    # no glob metacharacters) instead of a full-tree walk.
-    targets += [p for p in root.glob(f"????/??/??/{sid}")]
-    removed = []
-    for target in targets:
-        if target.is_symlink():
-            # Lexical location is inside the store by construction; drop
-            # the link itself, never its target.
-            target.unlink()
-            removed.append(str(target))
-            continue
-        resolved = target.resolve()
-        if resolved != root and root not in resolved.parents:
-            raise ValueError(
-                f"refusing to delete outside session store: {sid!r}")
-        if resolved.is_dir():
-            shutil.rmtree(resolved)
-            removed.append(str(resolved))
-        elif resolved.exists():
-            raise ValueError(
-                f"refusing to delete non-directory session path: {resolved}")
-        # else: already gone — still success.
-    return sorted(removed)
-
-
-def _workspace_under_base(workspace_root, base):
-    """True when workspace_root is contained under base (both resolved)."""
-    if not base or not isinstance(workspace_root, str) or not workspace_root:
-        return False
-    try:
-        resolved_base = Path(base).resolve()
-        resolved_root = Path(workspace_root).resolve()
-        return resolved_base in resolved_root.parents or resolved_root == resolved_base
-    except (OSError, ValueError):
-        return False
-
-
-# -- Seeded instructions (AGENTS.md) --------------------------------------
-# Every bridge-owned session workspace gets an AGENTS.md at its root:
-# plain sessions get a short orientation + orders pointer, repo sessions
-# get the same plus "work in ./<leaf>/". The clone leaf itself gets the
-# GitHub instructions below as its own AGENTS.md — but only when the repo
-# ships none of its own (the seed never overwrites, so a repo's rules
-# always win and both files coexist via the session root).
-GITHUB_INSTRUCTIONS_FILENAME = "AGENTS.md"
-# Pre-rename name: recognized (never written) so sessions cloned before
-# the rename keep their gh auto-approve and instruction detection.
-LEGACY_GITHUB_INSTRUCTIONS_FILENAME = "WEB-MUSE.md"
-GITHUB_INSTRUCTIONS_MARKER = (
-    "# web-muse: instructions for GitHub-cloned sessions "
-    "(do not commit this file)")
-GITHUB_INSTRUCTIONS_TEMPLATE = (
-    Path(__file__).resolve().parent / "github_instructions.md")
-SESSION_AGENTS_MARKER = (
-    "# web-muse: session workspace (bridge-owned)")
-
-
-def github_preapproved_section():
-    """Explicit pre-approved command list, generated from the matchers.
-
-    Appended to every seeded instruction file so agents see exactly what
-    runs without prompting. Built from AUTO_ALLOW_* (never hand-copied),
-    so the doc tracks the bridge's real policy.
-    """
-    inspect = ", ".join(f"`{c}`" for c in AUTO_ALLOW_INSPECT)
-    chains = ", ".join(f"`{c}`" for c in AUTO_ALLOW_TOOLCHAINS)
-    return (
-        "## Pre-approved commands (exact list — no prompt in this session)\n"
-        "\n"
-        "These run WITHOUT prompting. Anything else raises an approval card\n"
-        "a human must click, and while it waits you are BLOCKED — stay\n"
-        "inside this list whenever you can.\n"
-        "\n"
-        "- `gh` — every subcommand.\n"
-        "- `git` — every subcommand EXCEPT: " + GIT_DENY_SUMMARY + ".\n"
-        "- Shell inspection: " + inspect + ".\n"
-        "- Build/test runners: " + chains + ".\n"
-        "- Still asks a human: shell file writes (`rm`, `mv`, `cp`,\n"
-        "  `find -delete`), network fetchers (`curl`, `wget`, `ssh`), and\n"
-        "  `sudo` / interactive / installer commands.\n"
-    )
-
-
-def render_github_instructions(full_name, template=None):
-    """Render the instruction template for one repo (pure)."""
-    text = template
-    if text is None:
-        text = GITHUB_INSTRUCTIONS_TEMPLATE.read_text()
-    text = text.replace("__FULL_NAME__", full_name)
-    return text.rstrip() + "\n\n" + github_preapproved_section()
-
-
-def render_session_agents(repo_leaf=None, full_name=None):
-    """Render the session-root AGENTS.md (pure).
-
-    Plain sessions get orientation + orders pointer; repo sessions also
-    name their clone leaf so the agent works in ./<leaf>/ and never at
-    the session root. Starts with SESSION_AGENTS_MARKER.
-    """
-    lines = [SESSION_AGENTS_MARKER, ""]
-    if repo_leaf:
-        where = (f"This directory is your session workspace. The repo "
-                 f"{full_name or repo_leaf} lives in `./{repo_leaf}/` — "
-                 f"do all repo work (git, gh, edits, builds, tests) there, "
-                 f"never at the session root.")
-    else:
-        where = ("This directory is your session workspace. Do all work "
-                 "here.")
-    lines += [where, "",
-              "App orders: to change the app itself (theme, bridge policy), "
-              "read `.web-muse/ORDERS.md` and send an order file — "
-              "that doc is the full protocol.",
-              "Skills load from this workspace root; a repo clone's own "
-              "AGENTS.md governs inside the clone when one exists."]
-    return "\n".join(lines) + "\n"
-
-
-def seed_session_agents(root, repo_leaf=None, full_name=None):
-    """Write the session-root AGENTS.md into one workspace (best-effort).
-
-    An existing file is never overwritten (a repo checkout or an older
-    seed always wins). Never raises: seeding must not fail a session
-    start. Returns (seeded, path).
-    """
-    if not root:
-        return False, ""
-    target = Path(root) / GITHUB_INSTRUCTIONS_FILENAME
-    try:
-        if target.is_file():
-            return False, str(target)
-    except OSError:
-        return False, str(target)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(render_session_agents(repo_leaf, full_name))
-    except OSError:
-        LOG.warning("session agents file unwritable at %s", target)
-        return False, str(target)
-    return True, str(target)
-
-
-def seed_github_instructions(dest, full_name):
-    """Write the bridge-owned instruction file into a fresh clone leaf.
-
-    The file is AGENTS.md, seeded only when the repo ships none of its
-    own: an existing file (repo rules or an earlier seed) is never
-    overwritten, so repo-authored rules always win. Returns (seeded,
-    path). Raises OSError on write failure (the caller logs and
-    continues — seeding must never fail the open).
-    """
-    target = Path(dest) / GITHUB_INSTRUCTIONS_FILENAME
-    if target.exists():
-        return False, str(target)
-    target.write_text(render_github_instructions(full_name))
-    return True, str(target)
-
-
-def _read_marker_first_line(path):
-    """First line of a file, or "" when unreadable (never raises)."""
-    try:
-        with open(path, "r", errors="replace") as f:
-            return f.readline().rstrip("\n")
-    except (OSError, ValueError):
-        return ""
-
-
-def has_seeded_instructions(root):
-    """True when root holds a bridge-seeded instruction file.
-
-    Recognizes the session-root AGENTS.md (SESSION_AGENTS_MARKER), the
-    clone-leaf AGENTS.md (GITHUB_INSTRUCTIONS_MARKER), and the pre-rename
-    WEB-MUSE.md leaf file — so sessions from before the rename keep
-    their gh auto-approve. A repo's own AGENTS.md never matches (no
-    marker), so it is never mistaken for a seed.
-    """
-    if not root:
-        return False
-    try:
-        first = _read_marker_first_line(
-            Path(root) / GITHUB_INSTRUCTIONS_FILENAME)
-    except (OSError, ValueError):
-        return False
-    if first.startswith((SESSION_AGENTS_MARKER,
-                         GITHUB_INSTRUCTIONS_MARKER)):
-        return True
-    legacy = _read_marker_first_line(
-        Path(root) / LEGACY_GITHUB_INSTRUCTIONS_FILENAME)
-    return legacy.startswith(GITHUB_INSTRUCTIONS_MARKER)
 
 
 class SessionRouter:
@@ -1267,6 +101,21 @@ class SessionRouter:
         # parks on an unanswered prompt). Scoped here — not global — so
         # other sessions keep prompting as before.
         self._gh_auto_sids = set()
+        # Subagent auto-approve (Settings toggle, default off): when
+        # enabled, a child approval projected onto a parent session
+        # whose effective mode is allowAll is decided bridge-side with
+        # the one-shot approve choice instead of opening a card. The
+        # host never propagates the parent's mode to children (each
+        # spawn resolves its own profile), so without this an allowAll
+        # session still parks on every subagent prompt. Memory-only and
+        # global: every client re-syncs its (persisted) pick on
+        # (re)connect, so the last writer wins across tabs.
+        self._subagent_auto_approve = False
+        # Last-known effective approval mode per sessionId (session/start
+        # request, setApprovalMode results, resume/read/list rows, and
+        # session/approvalModeChanged events). Missing means unknown —
+        # never assumed allowAll.
+        self._approval_modes = {}
         self._subs = {}   # sessionId -> set of ClientConnection
         # Sessions this bridge created while still unnamed: the first
         # prompt names them from its initial text (default fallback).
@@ -1366,6 +215,10 @@ class SessionRouter:
                 # land minutes before completion, so poll it here too —
                 # gated on change, so idle streams cost one stat each.
                 self._poll_orders(sid)
+        if method == "session/approvalModeChanged" \
+                and isinstance(params, dict):
+            self._note_approval_mode(params.get("sessionId"),
+                                     params.get("mode"))
         frame = map_notification_to_ws(method, params)
         sid = notification_session_id(method, params)
         targets = self._targets_for(sid)
@@ -1374,6 +227,9 @@ class SessionRouter:
 
     def on_server_request(self, method, params):
         if method == "approval/request" and self._auto_approve_gh_pr(params):
+            return
+        if method == "approval/request" \
+                and self._auto_approve_subagent(params):
             return
         frame = map_server_request_to_ws(method, params)
         sid = notification_session_id(method, params)
@@ -1438,6 +294,88 @@ class SessionRouter:
         else:
             LOG.info("gh auto-approved in session %s: %s",
                      decide.get("sessionId"), command)
+
+    def _note_approval_mode(self, session_id, mode):
+        """Record one session's effective approval mode (never raises).
+
+        Unknown modes (and missing ids) are ignored: only a mode the
+        host actually folded is ever trusted by _auto_approve_subagent.
+        """
+        if session_id and mode in VALID_APPROVAL_MODES:
+            self._approval_modes[session_id] = mode
+
+    def _note_session_obj(self, sess):
+        """Record the mode a Session object carries, when it carries one.
+
+        Index-derived session/list rows may omit approvalMode; loaded
+        sessions (resume/read) fold {mode, source, lastCommandId}.
+        Anything else is ignored (never raises).
+        """
+        if not isinstance(sess, dict):
+            return
+        folded = sess.get("approvalMode")
+        if isinstance(folded, dict):
+            self._note_approval_mode(sess.get("sessionId"),
+                                     folded.get("mode"))
+
+    def _auto_approve_subagent(self, params):
+        """Decide a child approval on an allowAll parent (no UI card).
+
+        Returns True when the approval was consumed: the toggle is on,
+        the params carry subagentOrigin (parent-own approvals omit it),
+        the parent's last-known effective mode is allowAll, and a
+        one-shot approve choice exists — so the decide was queued and a
+        notice event fanned out instead of the approval card. Anything
+        else returns False and the caller forwards the card unchanged.
+        """
+        if not isinstance(params, dict):
+            return False
+        if not self._subagent_auto_approve:
+            return False
+        origin = params.get("subagentOrigin")
+        if not isinstance(origin, dict):
+            return False
+        sid = params.get("sessionId")
+        if not sid or self._approval_modes.get(sid) != "allowAll":
+            return False
+        choice_id = pick_approve_once_choice(params.get("availableChoices"))
+        if choice_id is None:
+            LOG.warning("subagent auto-approve: no approve choice for %s",
+                        params.get("approvalId"))
+            return False
+        tool = params.get("toolName") or "tool"
+        decide = {"sessionId": sid,
+                  "approvalId": params.get("approvalId"),
+                  "choiceId": choice_id,
+                  # Race guard: must equal the request's current stage.
+                  "requirementId": params.get("currentRequirementId")}
+        try:
+            asyncio.create_task(
+                self._subagent_auto_decide(decide, tool))
+        except RuntimeError:
+            return False  # no running loop: fall through to the UI card
+        notice = {"type": "event", "method": "subagentAutoApproved",
+                  "params": {"sessionId": sid,
+                             "approvalId": params.get("approvalId"),
+                             "tool": tool,
+                             "subagent": origin.get("subagentId")}}
+        targets = self._targets_for(sid)
+        if not targets:
+            targets = list(self._conns)
+        for conn in targets:
+            conn.queue_frame(notice)
+        return True
+
+    async def _subagent_auto_decide(self, decide, tool):
+        """Send the queued approval/decide (all failures are logged)."""
+        try:
+            await self._msp.command("approval/decide", decide)
+        except Exception:
+            LOG.warning("subagent auto-approve decide failed for %s (%s)",
+                        decide.get("approvalId"), tool, exc_info=True)
+        else:
+            LOG.info("subagent auto-approved in session %s: %s",
+                     decide.get("sessionId"), tool)
 
     # -- Agent orders ------------------------------------------------------
     def _emit_orders_event(self, sid, method, params):
@@ -1829,6 +767,7 @@ class SessionRouter:
                         if isinstance(s, dict) \
                                 and s.get("sessionId") in self._bridge_sids:
                             s["bridgeCreated"] = True
+                        self._note_session_obj(s)
                 # Sessions removed from disk read as gone even though the
                 # running host still lists them from memory.
                 rows = result.get("sessions") \
@@ -1860,30 +799,36 @@ class SessionRouter:
                     else:
                         raise
                 self._attach(conn, msg.get("sessionId"))
+                self._note_session_obj(result.get("session"))
                 return reply(True, result=result)
             if mtype == "read":
                 if msg.get("sessionId") in self._deleted_sids:
                     raise MspError(-32000,
                                    f"unknown session {msg.get('sessionId')}")
                 try:
-                    return reply(True, result=await self._msp.call(
+                    result = await self._msp.call(
                         "session/read",
-                        _pick(msg, ("sessionId", "excludeItems"))))
+                        _pick(msg, ("sessionId", "excludeItems")))
                 except MspError as e:
                     if e.code == METHOD_NOT_FOUND:
                         # Read-only fallback: same metadata, no attach.
-                        return reply(True, result=await self._resume_fallback(
-                            msg.get("sessionId")))
-                    if _retained_refused(e):
-                        return reply(True, result=await self._resume_fallback(
+                        result = await self._resume_fallback(
+                            msg.get("sessionId"))
+                    elif _retained_refused(e):
+                        result = await self._resume_fallback(
                             msg.get("sessionId"),
                             none_reason="resume_refused_by_host",
-                            fallback="resume_refused_by_host"))
-                    raise
+                            fallback="resume_refused_by_host")
+                    else:
+                        raise
+                self._note_session_obj(result.get("session"))
+                return reply(True, result=result)
             if mtype == "fork":
                 result = await self._msp.command(
                     "session/fork",
                     _pick(msg, ("sessionId", "cutPoint", "excludeItems")))
+                if isinstance(result, dict):
+                    self._note_session_obj(result.get("session"))
                 return reply(True, result=result)
             if mtype == "rename":
                 result = await self._msp.command(
@@ -1988,9 +933,23 @@ class SessionRouter:
                     return reply(False, error={
                         "message": f"unknown approval mode {mode!r}; "
                                    f"want one of {sorted(VALID_APPROVAL_MODES)}"})
-                return reply(True, result=await self._msp.command(
+                result = await self._msp.command(
                     "session/setApprovalMode",
-                    {"sessionId": msg["sessionId"], "mode": mode}))
+                    {"sessionId": msg["sessionId"], "mode": mode})
+                eff = result.get("effectiveMode") \
+                    if isinstance(result, dict) else None
+                if isinstance(eff, dict):
+                    self._note_approval_mode(msg["sessionId"],
+                                             eff.get("mode"))
+                return reply(True, result=result)
+            if mtype == "setSubagentAutoApprove":
+                enabled = msg.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled must be true or false")
+                self._subagent_auto_approve = enabled
+                LOG.info("subagent auto-approve %s",
+                         "enabled" if enabled else "disabled")
+                return reply(True, result={"enabled": enabled})
             if mtype == "setEffort":
                 effort = msg.get("reasoningEffort", "")
                 if effort not in VALID_REASONING_EFFORTS:
@@ -2205,6 +1164,11 @@ class SessionRouter:
                 p["config"]["mcpServers"] = merged
                 attached = sorted(merged)
         result = await self._msp.command("session/start", p)
+        new_sid = result["session"]["sessionId"]
+        if p.get("approvalMode") in VALID_APPROVAL_MODES:
+            self._note_approval_mode(new_sid, p["approvalMode"])
+        # Folded truth wins when the host echoes it (same value normally).
+        self._note_session_obj(result.get("session"))
         if effort is not None:
             try:
                 await self._msp.command(
@@ -2579,6 +1543,7 @@ class SessionRouter:
         self._turns.pop(session_id, None)
         self._auto_name_pending.discard(session_id)
         self._gh_auto_sids.discard(session_id)
+        self._approval_modes.pop(session_id, None)
         if session_id in self._bridge_sids:
             self._bridge_sids.discard(session_id)
             self._save_bridge_sids()

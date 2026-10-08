@@ -7,7 +7,7 @@ Nothing GitHub-shaped — repo names aside — ever crosses the WS boundary
 to the browser, and `gh` stderr is redacted before it reaches any frame
 or log line.
 
-Conventions (matching `server/sessions.py`):
+Conventions (matching `server/sessions/`):
 - `validate_fullname` rejects anything outside `owner/repo` charset before
   it can reach `exec` — no shell, no remapping, no silent fixes.
 - Failures raise `GithubError`, which carries a machine-readable `code`
