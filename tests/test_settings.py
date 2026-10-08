@@ -73,6 +73,17 @@ class TestSettingsIcon(unittest.TestCase):
         self.assertIsNotNone(m, "gear size rule missing")
         self.assertIn("font-size:", m.group(1))
 
+    def test_gear_spins_like_refresh(self):
+        # Same one-shot 360° as the session refresh: shared keyframes,
+        # reflow-restarted on every toggle press, class cleared after the
+        # 650ms one-shot, and disabled under reduced motion.
+        self.assertIn("#btn-settings.spin svg", STYLE_CSS)
+        self.assertIn("sess-spin-once 0.65s", STYLE_CSS)
+        body = body_of("toggleSettings")
+        self.assertIn('el("btn-settings")', body)
+        self.assertIn("void g.offsetWidth", body)
+        self.assertIn('setTimeout(() => g.classList.remove("spin"), 650)', body)
+
 
 class TestSettingsOpenClose(unittest.TestCase):
     def test_panel_markup(self):

@@ -6,7 +6,8 @@ turn/completed, retraction, and an idle status flip clear it.
 Intermediate agent messages land mid-turn and must NOT clear it; new
 lines re-pin (and restore) the row without resetting the turn clock.
 Sending a new task restarts the clock optimistically; a queued
-follow-up keeps the current turn's row. The timer interval is always
+follow-up keeps the current turn's row. Settled turns clear the active
+turn id so the restart cannot derive off the previous turn. The timer interval is always
 cleared, including on transcript reset. A turn already active when the
 session opens (reload, late join) or started elsewhere (TUI, other
 client) never fires turn/started here, so opening a session and
@@ -110,6 +111,23 @@ class TestThinkingStatus(unittest.TestCase):
         self.assertIn("showThinking();", body)
         # A queued follow-up keeps the current turn's row and clock.
         self.assertIn("queued", body)
+
+    def test_settled_turn_clears_active_turn(self):
+        # Otherwise the next optimistic send derives the clock off the
+        # previous turn's first item and restarts at its elapsed time.
+        for marker in ("turn/completed", "turn/retracted"):
+            body = case_body(marker)
+            self.assertIn("activeTurnId", body)
+            self.assertIn("= null", body)
+
+    def test_turn_started_adopts_active_turn(self):
+        self.assertIn("activeTurnId", case_body("turn/started"))
+
+    def test_send_adopts_new_turn_before_show(self):
+        body = fn_body("sendPromptText")
+        self.assertIn("activeTurnId", body)
+        self.assertLess(body.index("activeTurnId"),
+                        body.index("showThinking();"))
 
     def test_ensure_preserves_clock(self):
         body = fn_body("ensureThinking")
