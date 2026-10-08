@@ -1025,6 +1025,7 @@ function clearTranscript() {
   el("tab-tools").innerHTML = "";
   state.items.clear(); state.tools.clear();
   state.running = false; state.turnId = null; state.turnBlock = null;
+  thinkingStartedAt = 0; thinkingRequestAt = 0;
   state.workflow = null; state.todos = null; renderWorkflow();
   // A fresh transcript reads unfiltered; the chip row reflects it.
   state.txFilter = "all";
@@ -1137,6 +1138,10 @@ function placeStarsToggle() {
    ensureThinking() re-shows mid-turn without resetting the clock. */
 let thinkingTimer = null;
 let thinkingStartedAt = 0;
+// Local send time of the current turn: a freshly derived clock for a
+// locally-initiated turn never predates it (stale session timestamps
+// must not restart the row at an old turn's elapsed time).
+let thinkingRequestAt = 0;
 // Derive the active turn's start time for late-join/new-browser cases:
 // the server keeps running but this browser never saw turn/started, so
 // Date.now() would reset the clock. Use the earliest recordedAt for the
@@ -1199,6 +1204,7 @@ function showThinking(reset = true) {
   if (reset || !thinkingStartedAt) {
     const derived = thinkingStartForActiveTurn();
     thinkingStartedAt = (derived !== null && derived <= Date.now()) ? derived : Date.now();
+    if (thinkingRequestAt && thinkingStartedAt < thinkingRequestAt) thinkingStartedAt = thinkingRequestAt;
   }
   const tick = () => {
     const s = Math.max(0, Math.round((Date.now() - thinkingStartedAt) / 1000));
@@ -2436,6 +2442,7 @@ function onEvent(method, p) {
       // (There are no turn/cancelled or turn/failed notifications on MSP v1.)
       state.running = false; state.turnId = null;
       if (state.session) state.session.activeTurnId = null;
+      thinkingRequestAt = 0;
       updateRunChip();
       document.querySelectorAll(".tline.streaming").forEach((d) => {
         d.classList.remove("streaming");
@@ -2472,6 +2479,7 @@ function onEvent(method, p) {
     case "turn/retracted":
       hideThinking();
       if (state.session) state.session.activeTurnId = null;
+      thinkingRequestAt = 0;
       dissolveTurnBlock();
       sysLine("turn retracted — prompt restored to the composer.");
       if (p.promptText) { el("input").value = p.promptText; autosize(); }
@@ -4356,6 +4364,7 @@ async function sendPromptText(text, alreadyEchoed, extra) {
       state.queuedTurnId = null;
     }
     state.running = true; updateRunChip();
+    thinkingRequestAt = Date.now();
     // Optimistic status: the new turn's clock restarts on send, not when
     // turn/started lands. A queued follow-up keeps the current turn's row.
     // Adopt the new turn id first: deriving the clock off the previous
