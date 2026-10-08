@@ -67,6 +67,19 @@
     };
   }
 
+  // Base scatter box the default counts are tuned for. Viewports
+  // needing a bigger box (zoomed-out windows, very wide/tall screens)
+  // scale counts up proportionally so density holds instead of
+  // thinning; smaller ones keep the tuned counts (floor 1, never
+  // thinner). MAX_SCALE caps the growth so extreme zoom-outs stay
+  // cheap instead of spawning unbounded shadows.
+  var BASE_AREA = 4000 * 4000;
+  var MAX_SCALE = 4;
+  function countScale(bounds) {
+    var area = (bounds.x1 - bounds.x0) * (bounds.y1 - bounds.y0);
+    return Math.min(MAX_SCALE, Math.max(1, area / BASE_AREA));
+  }
+
   function generateStars(count, starColor, bounds) {
     if (starColor === undefined) starColor = themeColor('star', '#4C4541');
     if (!bounds) bounds = { x0: -2000, x1: 2000, y0: -2000, y1: 2000 };
@@ -197,7 +210,8 @@
     const background =
       options.background !== undefined ? options.background : defaultBackground();
     const pointerEvents = options.pointerEvents !== undefined ? options.pointerEvents : true;
-    const bounds = scatterBounds(container);
+    let bounds = scatterBounds(container);
+    let scale = countScale(bounds);
 
     const previous = {
       overflow: container.style.overflow,
@@ -215,15 +229,18 @@
     container.prepend(parallax);
 
     // Far -> near: 1px, 2px, 3px dots looping over speed, speed*2, speed*3.
-    const layers = [0, 1, 2].map((i) =>
-      createStarLayer(parallax, {
-        count: counts[i] !== undefined ? counts[i] : DEFAULT_COUNTS[i],
-        size: i + 1,
-        duration: speed * (i + 1),
-        starColor,
-        bounds,
-      }),
-    );
+    function buildLayers() {
+      return [0, 1, 2].map((i) =>
+        createStarLayer(parallax, {
+          count: Math.round((counts[i] !== undefined ? counts[i] : DEFAULT_COUNTS[i]) * scale),
+          size: i + 1,
+          duration: speed * (i + 1),
+          starColor,
+          bounds,
+        }),
+      );
+    }
+    let layers = buildLayers();
 
     // Spring state. Motion values start at 1, so the field does too.
     const stateX = { x: 1, v: 0 };
@@ -239,6 +256,26 @@
     // fullscreen backdrop behind the app UI, so mouse events over the app
     // never reach it; coordinates are identical for a fullscreen field.
     window.addEventListener('mousemove', handleMouseMove);
+
+    // Zooming out (or growing the window) after creation would leave the
+    // new area empty: the scatter box only covered the size at creation.
+    // Re-scatter — with density-held counts — once the viewport outgrows
+    // it. Shrinking needs no rebuild (still covered, just denser).
+    var resizeTimer = 0;
+    function handleResize() {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        resizeTimer = 0;
+        var fresh = scatterBounds(container);
+        if (fresh.x1 - fresh.x0 <= bounds.x1 - bounds.x0 &&
+            fresh.y1 - fresh.y0 <= bounds.y1 - bounds.y0) return;
+        bounds = fresh;
+        scale = countScale(bounds);
+        for (const layer of layers) layer.destroy();
+        layers = buildLayers();
+      }, 150);
+    }
+    window.addEventListener('resize', handleResize);
 
     let raf = 0;
     let last = -1;
@@ -257,6 +294,8 @@
     return function destroy() {
       cancelAnimationFrame(raf);
       window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('resize', handleResize);
+      if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = 0; }
       for (const layer of layers) layer.destroy();
       parallax.remove();
       container.style.overflow = previous.overflow;
@@ -268,6 +307,7 @@
   root.Stars = {
     generateStars,
     springStep,
+    countScale,
     createStarLayer,
     createStarsBackground,
   };
