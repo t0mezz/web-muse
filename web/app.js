@@ -4844,6 +4844,15 @@ function syncSettingsGear() {
 function toggleSettings() {
   const S = window.WebMuseSettings;
   if (!S) return;
+  // Restart the one-shot 360° on every press, even mid-tail of a prior
+  // spin (same effect as the session refresh button).
+  const g = el("btn-settings");
+  if (g) {
+    g.classList.remove("spin");
+    void g.offsetWidth;
+    g.classList.add("spin");
+    setTimeout(() => g.classList.remove("spin"), 650);
+  }
   if (S.isOpen()) {
     S.close();
   } else {
