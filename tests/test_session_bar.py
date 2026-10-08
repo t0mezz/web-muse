@@ -228,7 +228,7 @@ class TestSessionBarUI(unittest.TestCase):
     def test_composer_typing_placeholder(self):
         import json
         hints = json.loads((ROOT / "web" / "composer-hints.json").read_text())
-        self.assertEqual(len(hints), 100)
+        self.assertEqual(len(hints), 120)
         self.assertTrue(all(isinstance(h, str) and h.strip() for h in hints))
         self.assertIn("startComposerHints()", APP_JS)
         self.assertIn("composer-hints.json", APP_JS)

@@ -18,6 +18,7 @@
     <select id="effort-picker" title="Reasoning effort (default for new chats)" aria-label="Reasoning effort"><option value="">effort…</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select>
     <select id="model-picker" title="Model" aria-label="Model"><option value="">model…</option></select>
     <button id="btn-inspector" title="Toggle inspector (Ctrl+.)" aria-label="Inspector">ⓘ</button>
+    <button id="btn-settings" title="Settings (Ctrl+,)" aria-label="Settings" aria-pressed="false">⚙</button>
     <a id="btn-progress" href="/progress.html" title="Live bridge status page" aria-label="Progress">⏱</a>
     <button id="btn-new" title="New session (/new)" aria-label="New session">＋</button>
   </header>
@@ -103,6 +104,23 @@
             <button type="submit" id="btn-send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8.791045833333332 0.4881416666666667c-0.437525 -0.437525 -1.1480666666666666 -0.437525 -1.5855916666666667 0L1.6051416666666667 6.088454166666666c-0.437525 0.437525 -0.437525 1.1480666666666666 0 1.5855916666666667s1.1480666666666666 0.43752083333333336 1.5855916666666667 0l3.6892041666666664 -3.692708333333333v10.7386c0 0.6195333333333333 0.5005291666666667 1.1200625 1.1200625 1.1200625s1.1200625 -0.5005291666666667 1.1200625 -1.1200625V3.9813374999999995l3.6892041666666664 3.689208333333333c0.437525 0.43752083333333336 1.1480666666666666 0.43752083333333336 1.5855916666666667 0s0.43752083333333336 -1.1480666666666666 0 -1.5855916666666667L8.794545833333332 0.48464166666666664Z"/></svg></button>
           </div>
         </form>
+        <section id="workflow-panel" class="open" hidden aria-label="Workflow progress">
+          <button id="workflow-head" aria-expanded="true" aria-controls="workflow-body" title="Toggle workflow progress">
+            <span id="workflow-caret" aria-hidden="true">▾</span>
+            <span id="workflow-title">Workflow</span>
+            <span id="workflow-count" role="status"></span>
+          </button>
+          <div id="workflow-meta" hidden>
+            <span id="workflow-status" class="wf-pill"></span>
+            <span id="workflow-def" class="wf-meta" title=""></span>
+            <span id="workflow-runid" class="wf-meta" title=""></span>
+            <span id="workflow-trigger" class="wf-meta"></span>
+            <time id="workflow-started" class="wf-meta"></time>
+            <span id="workflow-elapsed" class="wf-meta"></span>
+          </div>
+          <div id="workflow-annotations" hidden></div>
+          <ol id="workflow-body"></ol>
+        </section>
         <div id="hintbar">
           <span id="status">connecting…</span>
           <span id="sess-usage" title="Session tokens"></span>
@@ -144,6 +162,17 @@
         <pre id="session-detail" class="detail"></pre>
       </div>
     </aside>
+
+    <aside id="settings" aria-label="Settings" role="dialog" aria-modal="true">
+      <div class="settings-box">
+        <div class="settings-head">
+          <strong>Settings</strong>
+          <button id="btn-close-settings" title="Close settings (Esc)" aria-label="Close settings">✕</button>
+        </div>
+        <nav id="settings-nav" aria-label="Settings groups"></nav>
+        <div id="settings-body" class="settings-body" role="tabpanel" tabindex="0"></div>
+      </div>
+    </aside>
   </div>
 </div>
 <div id="dir-dialog" hidden role="dialog" aria-modal="true" aria-label="Choose session directory">
@@ -177,6 +206,7 @@
 <button id="stars-toggle" role="switch" aria-checked="false" aria-label="Toggle starfield" title="Toggle starfield"><span class="stars-thumb" aria-hidden="true"></span></button>
 <script src="/theme.js"></script>
 <script src="/stars.js"></script>
+<script src="/settings.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

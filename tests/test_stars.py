@@ -6,6 +6,7 @@ No JS harness in this repo, so the contract is guarded at the source
 level, following tests/test_panel_persist.py.
 """
 
+import re
 import unittest
 from pathlib import Path
 
@@ -140,6 +141,81 @@ class TestStarsToggle(unittest.TestCase):
             'el("stars-toggle").addEventListener("click", () => { toggleStarsFx(); });',
             APP_JS,
         )
+
+
+class TestStarsToggleMobile(unittest.TestCase):
+    """Narrow screens dock the switch into the hintbar status row: the
+    floating corner toggle crowds the composer send/stop buttons there."""
+
+    def test_docks_into_hintbar_on_narrow(self):
+        self.assertIn("function placeStarsToggle() {", APP_JS)
+        self.assertIn('el("hintbar").appendChild(', APP_JS)
+
+    def test_restores_corner_on_wide(self):
+        m = re.search(r"function placeStarsToggle\(\) \{(.*?)\n\}",
+                      APP_JS, re.S)
+        self.assertIsNotNone(m, "placeStarsToggle missing")
+        self.assertIn("isNarrow()", m.group(1))
+        self.assertIn("insertBefore(", m.group(1))
+
+    def test_repositioned_on_resize_and_boot(self):
+        m = re.search(r'window\.addEventListener\("resize", \(\) => \{(.*?)\n\}\);',
+                      APP_JS, re.S)
+        self.assertIsNotNone(m, "resize handler missing")
+        self.assertIn("placeStarsToggle();", m.group(1))
+        self.assertIn("\nplaceStarsToggle();\n", APP_JS)
+
+    def test_hintbar_docking_rule(self):
+        m = re.search(r"@media \(max-width: 899px\) \{\n  #hintbar #stars-toggle \{(.*?)\n  \}",
+                      STYLE_CSS, re.S)
+        self.assertIsNotNone(m, "mobile hintbar docking rule missing")
+        self.assertIn("position: relative", m.group(1))
+
+    def test_docked_touch_target(self):
+        self.assertIn("#hintbar #stars-toggle::before", STYLE_CSS)
+
+
+class TestStarsScaling(unittest.TestCase):
+    """Zoom-out / window-growth coverage: counts scale with the scatter
+    box to hold density, and the field re-scatters when the viewport
+    outgrows the box it was built for."""
+
+    def test_counts_scale_with_scatter_area(self):
+        self.assertIn("function countScale(bounds)", STARS_JS)
+        self.assertIn("bounds.x1 - bounds.x0", STARS_JS)
+        self.assertIn("bounds.y1 - bounds.y0", STARS_JS)
+        self.assertIn("4000 * 4000", STARS_JS)
+
+    def test_scale_floored_and_capped(self):
+        # Smaller viewports keep the tuned counts; extreme zoom-outs
+        # cap instead of spawning unbounded shadows.
+        self.assertIn(
+            "return Math.min(MAX_SCALE, Math.max(1, area / BASE_AREA));",
+            STARS_JS)
+
+    def test_layers_use_scaled_counts(self):
+        # Definition + creation + rebuild.
+        self.assertEqual(STARS_JS.count("countScale(bounds)"), 3)
+        self.assertIn("* scale)", STARS_JS)
+
+    def test_rescatters_when_viewport_outgrows_box(self):
+        self.assertIn("window.addEventListener('resize'", STARS_JS)
+        # Definition + creation + resize recompute.
+        self.assertEqual(STARS_JS.count("scatterBounds(container)"), 3)
+        self.assertIn("fresh.x1 - fresh.x0 <= bounds.x1 - bounds.x0", STARS_JS)
+        self.assertIn("fresh.y1 - fresh.y0 <= bounds.y1 - bounds.y0", STARS_JS)
+        self.assertEqual(STARS_JS.count("buildLayers()"), 3)
+        self.assertEqual(STARS_JS.count("layer.destroy()"), 2)
+
+    def test_rebuild_debounced_and_cleaned_up(self):
+        self.assertIn("}, 150);", STARS_JS)
+        self.assertIn("window.removeEventListener('resize'", STARS_JS)
+        self.assertIn("clearTimeout(resizeTimer)", STARS_JS)
+
+    def test_scale_helper_exported(self):
+        m = re.search(r"root\.Stars = \{(.*?)\}", STARS_JS, re.S)
+        self.assertIsNotNone(m, "Stars export missing")
+        self.assertIn("countScale", m.group(1))
 
 
 if __name__ == "__main__":

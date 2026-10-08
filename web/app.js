@@ -48,6 +48,12 @@ const state = {
   // Shift+click extends from anchor. Ticker + trash appear only while active.
   selectedIds: new Set(),
   selectionAnchor: null,
+  // Workflow panel: latest workflow item for this session (null until
+  // the first kind:"workflow" item event) and latest todo snapshot
+  // (null until session/todoListChanged lands or the list is cleared).
+  workflow: null, todos: null,
+  // Panel expanded (persisted across reloads, default open).
+  workflowOpen: true,
 };
 
 /* ---------- tiny helpers ---------- */
@@ -664,7 +670,7 @@ async function openSession(sessionId) {
     const snapItems = histEnv.snapshot && histEnv.snapshot.state && histEnv.snapshot.state.items;
     const hist = mode === "inline" ? (histEnv.items || r.items || [])
       : (snapItems || []);
-    for (const it of hist) renderItem(it, false);
+    for (const it of hist) { renderItem(it, false); trackWorkflowItem(it); }
     if (mode === "snapshot" || mode === "anchoredSnapshot") {
       if (!hist.length) sysLine("Compacted session: snapshot state has no inline items — /older pages the full view.");
       else sysLine(`Compacted session (${mode}): showing ${hist.length} snapshot items — /older pages more.`);
@@ -734,7 +740,7 @@ function handleSubscribeResult(r) {
   const evs = r.events || r.missed || [];
   for (const e of evs) {
     if (e.method) onEvent(e.method, e.params || {});
-    else if (e.item) renderItem(e.item, false);
+    else if (e.item) { renderItem(e.item, false); trackWorkflowItem(e.item); }
   }
   if (r.viewCursor) { state.cursor = r.viewCursor; updateCursorChip(); }
 }
@@ -898,6 +904,8 @@ const isNarrow = () => matchMedia("(max-width: 899px)").matches;
 function syncScrim() {
   // Scrim shows for the sessions drawer, and on mobile also for the
   // inspector overlay (which otherwise covers its own toggle: a trap).
+  // Settings is a centered overlay with its own backdrop, so it never
+  // uses the scrim.
   el("scrim").hidden = !(el("sessions").classList.contains("open") ||
     (isNarrow() && el("inspector").classList.contains("open")));
 }
@@ -918,7 +926,7 @@ function toggleSessions() {
     closeRowMenus();
     p.classList.remove("open");
   } else {
-    if (isNarrow()) el("inspector").classList.remove("open");
+    if (isNarrow()) { el("inspector").classList.remove("open"); }
     p.classList.add("open");
     refreshSessions().catch(() => {});
     el("session-filter").focus();
@@ -990,6 +998,7 @@ function restorePanelState() {
 // Shrinking from desktop (both panels docked) to a narrow viewport would
 // stack both overlay drawers: keep the inspector, shut the sessions drawer.
 window.addEventListener("resize", () => {
+  placeStarsToggle();
   if (!isNarrow()) return;
   if (el("sessions").classList.contains("open") &&
       el("inspector").classList.contains("open")) {
@@ -1007,6 +1016,7 @@ function clearTranscript() {
   el("tab-tools").innerHTML = "";
   state.items.clear(); state.tools.clear();
   state.running = false; state.turnId = null; state.turnBlock = null;
+  state.workflow = null; state.todos = null; renderWorkflow();
   // A fresh transcript reads unfiltered; the chip row reflects it.
   state.txFilter = "all";
   document.querySelectorAll("#tx-filters button").forEach((b) => {
@@ -1029,8 +1039,9 @@ function updateWelcome() {
 
 /* Welcome starfield (web/stars.js): fullscreen backdrop behind the app,
  * shown on the empty welcome view until the first message is sent.
- * Opening a session leaves it running: the bottom-right switch owns it,
- * and the choice persists per browser. */
+ * Opening a session leaves it running: the switch owns it (a corner
+ * toggle on desktop, docked into the hintbar row on mobile), and the
+ * choice persists per browser. */
 const STARS_KEY = "web-muse:stars";
 // Locked-in look: dimmed, thinned-out, gentle parallax. The star hue
 // and backdrop gradient are NOT baked here: stars.js resolves the live
@@ -1075,14 +1086,15 @@ function stopStarsFxNow() {
   if (bg) bg.remove();
   syncStarsToggle();
 }
-// Bottom-right switch: reflects whether the field is up; flipping it
-// shows/hides the field at once and remembers the choice.
+// Switch: reflects whether the field is up; flipping it shows/hides
+// the field at once and remembers the choice.
 function syncStarsToggle() {
   // Star mode drives panel translucency (desktop only, see CSS).
   document.body.classList.toggle("stars-on", !!stopStarsFx);
   const t = el("stars-toggle");
   if (!t) return;
   t.setAttribute("aria-checked", stopStarsFx ? "true" : "false");
+  if (window.WebMuseSettings) WebMuseSettings.sync();
 }
 function toggleStarsFx() {
   if (stopStarsFx) {
@@ -1092,6 +1104,21 @@ function toggleStarsFx() {
     try { localStorage.setItem(STARS_KEY, "1"); } catch (_) {}
     startStarsFx();
     syncStarsToggle();
+  }
+}
+// Narrow screens dock the switch into the hintbar status row: the
+// floating corner toggle crowds the composer send/stop buttons there.
+// Desktop restores the corner (starsHome remembers the exact slot).
+let starsHome = null;
+function placeStarsToggle() {
+  const t = el("stars-toggle");
+  if (!t) return;
+  if (!starsHome) starsHome = { parent: t.parentNode, next: t.nextSibling };
+  const inBar = t.parentNode === el("hintbar");
+  if (isNarrow()) {
+    if (!inBar) el("hintbar").appendChild(t);
+  } else if (inBar) {
+    starsHome.parent.insertBefore(t, starsHome.next);
   }
 }
 
@@ -2016,6 +2043,341 @@ function renderItemPrepend(it) {
   updateWelcome();
 }
 
+/* ---------- workflow panel ----------
+ * Collapsible progress below the composer, driven strictly by published
+ * events: kind:"workflow" items via item/started|delta|updated|completed
+ * (Item.children/status/label/objective/workflowRunId/entryId/scriptId/
+ * triggerSource/recordedAt/durationMs) and the todo list
+ * via session/todoListChanged (items[{status,text,activeForm?}]).
+ * A live run wins over the todo list; both render synchronously in the
+ * event path, so the first progress shows with the start event itself —
+ * a started workflow never sits without progress. Field names pinned
+ * against the `muse schema` bundle (MSP v1, stable surface). */
+const WORKFLOW_OPEN_KEY = "webmuse.workflowOpen";
+// Terminal vocabularies are wire-open: unknown values stay pending.
+const WF_ACTIVE_STATUSES = new Set(["inprogress", "running", "started"]);
+const WF_BAD_STATUSES = new Set(["failed", "cancelled", "timedout", "rejected", "error"]);
+function wfStepState(status, terminal) {
+  const t = String(terminal || "").toLowerCase();
+  if (t === "completed" || t === "failed" || t === "cancelled") return t;
+  const s = String(status || "").toLowerCase();
+  if (s === "completed") return "completed";
+  if (WF_BAD_STATUSES.has(s)) return s === "cancelled" ? "cancelled" : "failed";
+  if (WF_ACTIVE_STATUSES.has(s)) return "active";
+  return "pending";
+}
+function wfIsTerminal(status) {
+  const s = String(status || "").toLowerCase();
+  return s === "completed" || s === "failed" || s === "cancelled";
+}
+function wfStepKey(c) {
+  return `${(c && c.childId) || ""}#${(c && c.attempt) || 0}`;
+}
+function trackWorkflowItem(it) {
+  if (!it || it.kind !== "workflow") return;
+  const prev = state.workflow && state.workflow.itemId === it.itemId ? state.workflow : null;
+  // A terminal update for a superseded run must not clobber the live one.
+  if (!prev && state.workflow && wfIsTerminal(it.status)) return;
+  const kids = Array.isArray(it.children) ? it.children.slice() : (prev && prev.children) || [];
+  // Per-step client clocks: the wire carries no child timestamps, so the
+  // first/last re-emission times are observed here, keyed by the same
+  // (childId, attempt) identity the schema folds children on.
+  const seen = Object.assign({}, prev && prev.stepSeen);
+  const now = Date.now();
+  for (const c of kids) {
+    const k = wfStepKey(c);
+    seen[k] = { first: seen[k] ? seen[k].first : now, last: now };
+  }
+  state.workflow = {
+    itemId: it.itemId,
+    runId: it.workflowRunId || (prev && prev.runId) || "",
+    label: it.label || it.objective || (prev && prev.label) || "",
+    entryId: it.entryId || (prev && prev.entryId) || "",
+    scriptId: it.scriptId || (prev && prev.scriptId) || "",
+    status: it.status || (prev && prev.status) || "",
+    children: kids,
+    stepSeen: seen,
+    triggerSource: it.triggerSource || (prev && prev.triggerSource) || "",
+    startedAt: it.recordedAt || (prev && prev.startedAt) || "",
+    // durationMs lands only on the settling item/completed: keep the
+    // previous value while later updates omit it.
+    durationMs: it.durationMs != null ? it.durationMs : (prev ? prev.durationMs : null),
+  };
+  renderWorkflow();
+}
+function onTodoListChanged(p) {
+  const items = Array.isArray(p.items) ? p.items.slice() : [];
+  // Replace wholesale: an empty items array is a cleared list, not a
+  // no-op — drop the state so the panel hides (unless a run shows).
+  state.todos = items.length
+    ? { items, revision: p.revision, sourceTool: p.sourceTool || "" }
+    : null;
+  renderWorkflow();
+}
+const WF_GLYPH = { completed: "✓", active: "●", failed: "✕", cancelled: "○", pending: "○" };
+// Run elapsed: the settled durationMs once it lands, else a live clock
+// off the run's recordedAt ("" when the wire gave us no start yet).
+function wfElapsedText(run) {
+  if (!run) return "";
+  if (run.durationMs != null) return `${(run.durationMs / 1000).toFixed(1)}s`;
+  const ts = Date.parse(run.startedAt || "");
+  if (Number.isNaN(ts)) return "";
+  return `${Math.max(0, Math.round((Date.now() - ts) / 1000))}s`;
+}
+function wfClockText(ms) {
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("en-US", { hour12: false });
+}
+function wfUsageText(u) {
+  if (!u || u.totalTokens == null) return "";
+  return `${u.totalTokens} tok`;
+}
+// Expandable per-step body: status text, timestamps, streamed output.
+// Null when the row carries nothing beyond its summary line (the
+// zero-step placeholder renders flat).
+function wfStepDetail(s) {
+  if (!s || (!s.status && !s.phase && !s.terminal && s.durMs == null && !s.seen &&
+      !s.fail && !s.failKind && !s.resultRef && !wfUsageText(s.usage))) return null;
+  const box = document.createElement("div");
+  box.className = "wf-info";
+  const statusBits = [`status: ${s.status || "—"}`];
+  if (s.terminal) statusBits.push(`terminal: ${s.terminal}`);
+  if (s.phase) statusBits.push(`phase: ${s.phase}`);
+  if (s.attempt > 1) statusBits.push(`attempt ${s.attempt}`);
+  if (s.failKind) statusBits.push(`kind: ${s.failKind}`);
+  const st = document.createElement("div");
+  st.className = "wf-line";
+  st.textContent = statusBits.join(" · ");
+  box.append(st);
+  const timeBits = [];
+  if (s.durMs != null) timeBits.push(`${(s.durMs / 1000).toFixed(1)}s`);
+  if (s.seen) {
+    timeBits.push(`first seen ${wfClockText(s.seen.first)}`);
+    timeBits.push(`updated ${wfClockText(s.seen.last)}`);
+  }
+  if (s.childId) timeBits.push(`id: ${s.childId}`);
+  if (timeBits.length) {
+    const tm = document.createElement("div");
+    tm.className = "wf-line";
+    tm.textContent = timeBits.join(" · ");
+    box.append(tm);
+  }
+  if (s.resultRef) {
+    const rr = document.createElement("div");
+    rr.className = "wf-line";
+    rr.textContent = `result: ${s.resultRef}`;
+    box.append(rr);
+  }
+  const usage = wfUsageText(s.usage);
+  if (usage) {
+    const ug = document.createElement("div");
+    ug.className = "wf-line";
+    ug.textContent = usage;
+    box.append(ug);
+  }
+  // The step's output: full failure text (the summary row keeps only
+  // the hover title), refreshed live with every re-emission.
+  if (s.fail) {
+    const pre = document.createElement("pre");
+    pre.className = "wf-log";
+    pre.textContent = s.fail;
+    box.append(pre);
+  }
+  return box;
+}
+function renderWorkflow() {
+  const panel = el("workflow-panel");
+  const run = state.workflow;
+  const todos = !run ? state.todos : null;
+  const steps = run
+    ? run.children.map((c) => ({
+        key: wfStepKey(c),
+        text: c.label || c.childId || "step",
+        sub: [c.phase, c.attempt > 1 ? `attempt ${c.attempt}` : "",
+          c.durationMs != null ? `${(c.durationMs / 1000).toFixed(1)}s` : ""].filter(Boolean).join(" · "),
+        state: wfStepState(c.status, c.terminal),
+        status: c.status || "",
+        terminal: c.terminal || "",
+        phase: c.phase || "",
+        childId: c.childId || "",
+        attempt: c.attempt || 0,
+        durMs: c.durationMs,
+        failKind: c.failureKind || "",
+        fail: c.failureReason || "",
+        resultRef: c.resultRef || "",
+        usage: c.usage,
+        seen: (run.stepSeen && run.stepSeen[wfStepKey(c)]) || null,
+      }))
+    : (todos ? todos.items.map((t) => ({
+        key: `todo:${t.text || ""}`,
+        text: t.text || "",
+        sub: (t.status === "inProgress" && t.activeForm) ? t.activeForm : "",
+        state: wfStepState(t.status, ""),
+        status: t.status || "",
+        terminal: "", phase: "", childId: "", attempt: 0,
+        durMs: null, failKind: "", fail: "",
+        resultRef: "", usage: null, seen: null,
+      })) : []);
+  panel.hidden = !run && !todos;
+  if (panel.hidden) return;
+  const total = steps.length;
+  const done = steps.filter((s) => s.state === "completed").length;
+  const bad = steps.filter((s) => s.state === "failed" || s.state === "cancelled").length;
+  el("workflow-title").textContent = run
+    ? (run.label || run.entryId || run.scriptId ||
+      (run.runId ? `run ${shortId(run.runId)}` : "Workflow"))
+    : "Plan";
+  // Overall progress lives in the header: counts whenever steps exist,
+  // else the run status — never a started state with no progress.
+  const statusWord = run ? String(run.status || "") : "";
+  el("workflow-count").textContent = total
+    ? `${done}/${total} done${bad ? ` · ${bad} failed` : ""}`
+    : (statusWord || "starting…");
+  // Run-setup row: status pill + definition, run id, trigger source,
+  // start time, elapsed. Run-only (a todo plan has no run to describe);
+  // it stays visible while collapsed so the status survives the fold.
+  el("workflow-meta").hidden = !run;
+  if (run) {
+    const rs = wfStepState(run.status, "");
+    const pill = el("workflow-status");
+    pill.textContent = run.status || "starting…";
+    pill.className = `wf-pill wf-${rs === "completed" ? "done" : rs}`;
+    // Definition identity: the file-like scriptId first, else the entry
+    // name — skipped when the title already shows it, so the header
+    // reads "name · #run · Triggered via source" without repeating.
+    const def = el("workflow-def");
+    const titleText = el("workflow-title").textContent;
+    const defText = [run.scriptId, run.entryId].find((v) => v && v !== titleText) || "";
+    def.textContent = defText;
+    def.title = defText;
+    def.hidden = !defText;
+    const rid = el("workflow-runid");
+    rid.textContent = run.runId ? `#${shortId(run.runId)}` : "";
+    rid.title = run.runId || "";
+    rid.hidden = !run.runId;
+    const trg = el("workflow-trigger");
+    trg.textContent = run.triggerSource ? `Triggered via ${run.triggerSource}` : "";
+    trg.hidden = !run.triggerSource;
+    const st = el("workflow-started");
+    const started = Date.parse(run.startedAt || "");
+    if (Number.isNaN(started)) {
+      st.hidden = true; st.textContent = ""; st.removeAttribute("dateTime");
+    } else {
+      st.hidden = false;
+      st.dateTime = new Date(started).toISOString();
+      st.title = new Date(started).toLocaleString();
+      st.textContent = new Date(started).toLocaleString("en-US", {
+        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+      });
+    }
+    el("workflow-elapsed").textContent = wfElapsedText(run);
+  }
+  // Run-level annotations rollup: per-step failureKind/failureReason
+  // aggregated above the step list (the run page's always-visible
+  // "N warnings and M notices" idiom), so failures stay visible while
+  // the panel body or individual steps are collapsed. It lives outside
+  // #workflow-body, which is the only node the collapse rule hides.
+  const ann = el("workflow-annotations");
+  const annFails = steps.filter((s) => s.fail || s.failKind);
+  ann.hidden = !annFails.length;
+  ann.innerHTML = "";
+  if (annFails.length) {
+    const head = document.createElement("div");
+    head.className = "wf-ann-head";
+    head.textContent = `Annotations: ${annFails.length} failure${annFails.length > 1 ? "s" : ""}`;
+    ann.append(head);
+    for (const s of annFails) {
+      const row = document.createElement("div");
+      row.className = "wf-ann";
+      const bits = [s.text];
+      if (s.failKind) bits.push(`(${s.failKind})`);
+      if (s.fail) bits.push(s.fail);
+      row.textContent = bits.join(" ");
+      ann.append(row);
+    }
+  }
+  const body = el("workflow-body");
+  // Live re-renders rebuild the list wholesale: carry the user's open
+  // disclosures across the rebuild so an expanded step survives the
+  // next event.
+  const openKeys = new Set();
+  body.querySelectorAll("details[data-key][open]").forEach((d) => openKeys.add(d.dataset.key));
+  body.innerHTML = "";
+  const rows = total ? steps : [{ text: statusWord ? `status: ${statusWord}` : "starting…", sub: "", state: "pending", fail: "" }];
+  for (const s of rows) {
+    const li = document.createElement("li");
+    li.className = `wf-step wf-${s.state === "completed" ? "done" : s.state}`;
+    const g = document.createElement("span");
+    g.className = "g";
+    g.setAttribute("aria-hidden", "true");
+    g.textContent = WF_GLYPH[s.state] || "○";
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = s.text;
+    let sub = null;
+    if (s.sub) {
+      sub = document.createElement("span");
+      sub.className = "s";
+      sub.textContent = s.sub;
+    }
+    // Per-step live detail in the transcript details-group idiom: the
+    // summary keeps the glyph+label row; the body carries status text,
+    // timestamps, and the step's streamed output (children re-emit
+    // whole on every change, so each event refreshes an open detail
+    // in place). Detail-less rows render flat, as before.
+    const info = wfStepDetail(s);
+    if (!info) {
+      li.append(g, t);
+      if (sub) li.append(sub);
+    } else {
+      const det = document.createElement("details");
+      det.className = "wf-detail";
+      if (s.key) det.dataset.key = s.key;
+      const sum = document.createElement("summary");
+      sum.className = "wf-sum";
+      sum.append(g, t);
+      if (sub) sum.append(sub);
+      det.append(sum, info);
+      // A failed step forces itself open (see refreshToolGroup); any
+      // other step keeps whatever toggle state the user left it in.
+      if (s.state === "failed") det.open = true;
+      else if (s.key && openKeys.has(s.key)) det.open = true;
+      li.append(det);
+    }
+    if (s.fail) li.title = s.fail;
+    body.append(li);
+  }
+  syncWorkflowOpen();
+}
+function syncWorkflowOpen() {
+  el("workflow-panel").classList.toggle("open", state.workflowOpen);
+  el("workflow-head").setAttribute("aria-expanded", String(state.workflowOpen));
+  el("workflow-caret").textContent = state.workflowOpen ? "▾" : "▸";
+}
+function toggleWorkflow() {
+  state.workflowOpen = !state.workflowOpen;
+  try {
+    localStorage.setItem(WORKFLOW_OPEN_KEY, state.workflowOpen ? "1" : "0");
+  } catch (_) { /* storage unavailable: lasts the session */ }
+  syncWorkflowOpen();
+}
+function restoreWorkflowOpen() {
+  try {
+    const v = localStorage.getItem(WORKFLOW_OPEN_KEY);
+    state.workflowOpen = v === null ? true : v === "1";
+  } catch (_) {}
+  syncWorkflowOpen();
+}
+// Elapsed goes stale between events: refresh the visible run's clock
+// once a second (settled runs carry durationMs and stay put).
+setInterval(() => {
+  if (document.hidden || !state.workflow) return;
+  if (state.workflow.durationMs != null) return;
+  const meta = el("workflow-meta");
+  if (!meta || meta.hidden) return;
+  el("workflow-elapsed").textContent = wfElapsedText(state.workflow);
+}, 1000);
+
 /* ---------- MSP event fan-in ---------- */
 function onEvent(method, p) {
   p = p || {};
@@ -2029,9 +2391,10 @@ function onEvent(method, p) {
   switch (method) {
     case "item/started":
       renderItem(p.item, true);
+      trackWorkflowItem(p.item);
       break;
     case "item/delta": {
-      if (p.item) renderItem(p.item, true);
+      if (p.item) { renderItem(p.item, true); trackWorkflowItem(p.item); }
       else if (p.itemId && !state.items.has(p.itemId)) {
         renderItem({ itemId: p.itemId, kind: p.kind || "agentMessage", text: "" }, true);
       }
@@ -2045,6 +2408,7 @@ function onEvent(method, p) {
       // row — the running turn's status lives until turn/completed.
       if (p.item && itemKind(p.item) === "agent" && !state.running) hideThinking();
       renderItem(p.item || { itemId: p.itemId, kind: p.kind, text: p.text }, false);
+      trackWorkflowItem(p.item);
       break;
     case "turn/started":
       state.running = true; state.turnId = p.turnId || null; updateRunChip();
@@ -2211,6 +2575,7 @@ function onEvent(method, p) {
       sysLine(`approval mode → ${p.mode || p.approvalMode || "?"} (host).`);
       break;
     case "session/todoListChanged":
+      onTodoListChanged(p);
       break;
     default:
       break;
@@ -2939,6 +3304,7 @@ function syncEffortPicker() {
   const sel = el("effort-picker");
   if (!sel) return;
   sel.value = state.pickedEffort || "";
+  if (window.WebMuseSettings) WebMuseSettings.sync();
 }
 // The approval-mode pick survives reloads (localStorage) like the model
 // and effort picks: changing it anywhere saves it, startup restores it
@@ -2968,6 +3334,19 @@ function syncApprovalSelect() {
   sel.value = state.pickedApprovalMode || "onRequest";
   sel.dataset.prev = sel.value;
   syncApprovalWarn();
+  if (window.WebMuseSettings) WebMuseSettings.sync();
+}
+// Topbar model picker follows the canonical pick (settings rows and
+// /model change state without touching this select). A pick the current
+// options lack (stale catalog) falls back to a full refresh.
+function syncModelPicker() {
+  const sel = el("model-picker");
+  if (!sel) return;
+  const want = (state.pickedModel && state.pickedModel.modelId) || "";
+  const has = want && Array.from(sel.options).some((o) => o.value === want);
+  if (has) sel.value = want;
+  else refreshModels().catch(() => {});
+  if (window.WebMuseSettings) WebMuseSettings.sync();
 }
 async function refreshModels() {
   const r = await send({ type: "models", sessionId: state.sessionId || undefined });
@@ -2989,6 +3368,7 @@ async function refreshModels() {
     if (want ? m.modelId === want : m.isActive) o.selected = true;
     sel.append(o);
   }
+  if (window.WebMuseSettings) WebMuseSettings.sync();
 }
 
 function fmtUsage(u) {
@@ -3959,6 +4339,7 @@ function selectTab(name) {
 
 /* ---------- wiring ---------- */
 el("stars-toggle").addEventListener("click", () => { toggleStarsFx(); });
+el("workflow-head").addEventListener("click", () => { toggleWorkflow(); });
 el("composer").addEventListener("submit", (ev) => { ev.preventDefault(); submitComposer(); });
 el("input").addEventListener("focus", () => {
   // Let the keyboard finish opening, then bring the composer into view.
@@ -4022,6 +4403,11 @@ document.addEventListener("keydown", (ev) => {
       }
       return;
     }
+    if (window.WebMuseSettings && WebMuseSettings.isOpen()) {
+      closeSettings();
+      el("btn-settings").focus();
+      return;
+    }
     if (state.running) cmdCancel();
     return;
   }
@@ -4033,11 +4419,24 @@ document.addEventListener("keydown", (ev) => {
     } else if (k === ".") {
       ev.preventDefault();
       toggleInspector();
+    } else if (k === ",") {
+      ev.preventDefault();
+      toggleSettings();
     }
   }
 });
 el("btn-close-sessions").onclick = closeDrawer;
-el("scrim").onclick = () => { closeDrawer(); closeInspector(); };
+el("scrim").onclick = () => {
+  // Drawers only: settings is a centered overlay with its own backdrop
+  // (the #settings click handler below), so one backdrop owns each close.
+  closeDrawer(); closeInspector();
+};
+el("settings").addEventListener("click", (ev) => {
+  if (ev.target === el("settings")) {
+    closeSettings();
+    el("btn-settings").focus();
+  }
+});
 /* ---------- new-session directory explorer ---------- */
 // Filesystem explorer for the + button: lists server-side directories via
 // the bridge `browse` method. Current directory is the selection; files
@@ -4224,14 +4623,22 @@ el("terminal").addEventListener("scroll", () => {
   state.stick = t.scrollHeight - t.scrollTop - t.clientHeight < 80;
   updateJumpBtn();
 });
-el("effort-picker").onchange = (ev) => {
-  const v = ev.target.value || "";
+// Canonical setters: the single write path for default picks, shared by
+// the topbar controls and the settings rows (via the WebMuseSettings
+// registry). Either surface calls these; neither scrapes the other's DOM.
+function applyEffortPick(v) {
+  v = v || "";
   if (!v) {
     // Placeholder (effort…): back to the medium default.
     state.pickedEffort = "medium";
     savePickedEffort();
     syncEffortPicker();
     toast("default effort → medium");
+    return;
+  }
+  if (!EFFORT_TIERS.includes(v)) {
+    toast("unknown effort: " + v, true);
+    syncEffortPicker();
     return;
   }
   // Remembered as the default for created chats, not just this one.
@@ -4245,25 +4652,32 @@ el("effort-picker").onchange = (ev) => {
   send({ type: "setEffort", sessionId: state.sessionId, reasoningEffort: v })
     .then(() => toast("effort → " + v))
     .catch((e) => toast("setEffort failed: " + e.message, true));
-};
-el("model-picker").onchange = (ev) => {
-  const o = ev.target.selectedOptions[0];
-  if (!o || !o.value) return;
+}
+el("effort-picker").onchange = (ev) => applyEffortPick(ev.target.value || "");
+function applyModelPick(value, provider) {
+  if (!value) return;
   // Remembered as the default for created chats, not just this one.
-  state.pickedModel = { modelId: o.value,
-    providerId: o.dataset.provider || undefined };
+  state.pickedModel = { modelId: value,
+    providerId: provider || undefined };
   savePickedModel();
+  syncModelPicker();
   if (!state.sessionId) {
-    toast("default model → " + o.value);
+    toast("default model → " + value);
     return;
   }
   send({ type: "setModel", sessionId: state.sessionId,
-    model: { modelId: o.value, providerId: o.dataset.provider || undefined } })
-    .then(() => toast("model → " + o.value))
+    model: { modelId: value, providerId: provider || undefined } })
+    .then(() => toast("model → " + value))
     .catch((e) => toast("setModel failed: " + e.message, true));
+}
+el("model-picker").onchange = (ev) => {
+  const o = ev.target.selectedOptions[0];
+  if (!o || !o.value) return;
+  applyModelPick(o.value, o.dataset.provider || undefined);
 };
 el("btn-inspector").onclick = toggleInspector;
 el("btn-close-inspector").onclick = closeInspector;
+el("btn-settings").onclick = toggleSettings;
 document.querySelectorAll(".tab").forEach((t) => { t.onclick = () => selectTab(t.dataset.tab); });
 el("btn-compact").onclick = () => cmdCompact();
 el("btn-usage").onclick = () => cmdUsage();
@@ -4281,8 +4695,17 @@ function setApprovalDefault(mode) {
   savePickedApprovalMode();
   el("approval-mode").dataset.prev = mode;
 }
-el("approval-mode").onchange = (ev) => {
-  const mode = ev.target.value;
+function applyApprovalPick(mode) {
+  if (!APPROVAL_MODES.includes(mode)) {
+    toast("unknown approval mode: " + mode, true);
+    syncApprovalSelect();
+    return;
+  }
+  // The Session-panel select is a pure view of the attempt: settings
+  // rows pick without touching it, so reflect the attempt first — the
+  // allowAll confirm panel below keys off this select's value.
+  const sel = el("approval-mode");
+  if (sel && sel.value !== mode) sel.value = mode;
   if (!state.sessionId) {
     // No session loaded: the pick becomes the default for new sessions
     // (allowAll still confirms first via the panel below).
@@ -4291,6 +4714,7 @@ el("approval-mode").onchange = (ev) => {
       toast("default approval mode → " + mode + " (new sessions)");
     }
     syncApprovalWarn();
+    if (window.WebMuseSettings) WebMuseSettings.sync();
     return;
   }
   syncApprovalWarn();
@@ -4298,16 +4722,17 @@ el("approval-mode").onchange = (ev) => {
   send({ type: "setApprovalMode", sessionId: state.sessionId, mode })
     .then(() => {
       setApprovalDefault(mode);
-      syncApprovalWarn();
+      syncApprovalSelect();
       toast("approval mode → " + mode);
     })
     .catch((e) => toast("setApprovalMode failed: " + e.message, true));
-};
+}
+el("approval-mode").onchange = (ev) => applyApprovalPick(ev.target.value);
 el("approval-confirm-yes").onclick = () => {
   if (!state.sessionId) {
     // No session loaded: confirm the default, send nothing.
     setApprovalDefault("allowAll");
-    syncApprovalWarn();
+    syncApprovalSelect();
     toast("default approval mode → allowAll (new sessions)");
     return;
   }
@@ -4315,16 +4740,201 @@ el("approval-confirm-yes").onclick = () => {
          mode: "allowAll" })
     .then(() => {
       setApprovalDefault("allowAll");
-      syncApprovalWarn();
+      syncApprovalSelect();
       toast("approval mode → allowAll");
     })
     .catch((e) => toast("setApprovalMode failed: " + e.message, true));
 };
 el("approval-confirm-no").onclick = () => {
-  el("approval-mode").value =
-    el("approval-mode").dataset.prev || "onRequest";
-  syncApprovalWarn();
+  // Revert to the last confirmed mode (sync covers the select, the
+  // warn panel, and the settings mirror).
+  syncApprovalSelect();
 };
+
+/* ---------- settings panel ---------- */
+// Expandable group system (shell in settings.js): the topbar gear button
+// opens a centered overlay window showing one lightweight group at a
+// time. A new
+// group stays one registerGroup call — no markup, CSS, or wiring changes.
+function syncSettingsGear() {
+  const g = el("btn-settings");
+  const open = window.WebMuseSettings && WebMuseSettings.isOpen();
+  if (g) {
+    g.setAttribute("aria-pressed", open ? "true" : "false");
+    g.classList.toggle("active", !!open);
+  }
+}
+function toggleSettings() {
+  const S = window.WebMuseSettings;
+  if (!S) return;
+  if (S.isOpen()) {
+    S.close();
+  } else {
+    // Centered overlay: independent of the side drawers, so opening it
+    // leaves sessions/inspector untouched underneath.
+    S.open();
+  }
+  syncScrim();
+  syncSettingsGear();
+  savePanelState();
+}
+function closeSettings() {
+  const S = window.WebMuseSettings;
+  if (S) S.close();
+  syncScrim();
+  syncSettingsGear();
+}
+// Settings rows and outside controls share the canonical setters above
+// (applyEffortPick/applyModelPick/applyApprovalPick, toggleStarsFx,
+// applySettingsTheme) through the WebMuseSettings value registry: one
+// write path per setting, no DOM scraping, no fake events. Registered
+// once here; rows call getSetting/setSetting, the topbar calls the
+// setters directly, and both stay in sync through the sync* functions.
+function defineAppSettings() {
+  const S = window.WebMuseSettings;
+  if (!S || S.hasSetting("effort")) return;
+  S.defineSetting("effort", {
+    get: () => state.pickedEffort || "medium",
+    set: (v) => applyEffortPick(v),
+  });
+  S.defineSetting("model", {
+    get: () => (state.pickedModel && state.pickedModel.modelId) || "",
+    set: (v) => applyModelPick(v),
+  });
+  S.defineSetting("approvalMode", {
+    get: () => state.pickedApprovalMode || "onRequest",
+    set: (v) => applyApprovalPick(v),
+  });
+  S.defineSetting("theme", {
+    get: () => activeThemeName() || "",
+    set: (v) => applySettingsTheme(v),
+  });
+  S.defineSetting("starfield", {
+    get: () => !!stopStarsFx,
+    set: (on) => { if (!!on !== !!stopStarsFx) toggleStarsFx(); },
+  });
+}
+// Theme pick for the Appearance group: "" is the default palette (clears
+// the stored override + name, like theme.js with no overrides), otherwise
+// a named file from web/themes via the /theme machinery.
+function applySettingsTheme(name) {
+  const T = window.WebMuseTheme;
+  if (!T) { toast("theme support missing", true); return; }
+  if (!name) {
+    try {
+      localStorage.removeItem(T.storageKey);
+      localStorage.removeItem(THEME_NAME_KEY);
+    } catch (_) { /* storage unavailable: memory-only */ }
+    T.apply();
+    if (stopStarsFx) { stopStarsFxNow(); startStarsFx(); }
+    toast("theme → default");
+    return;
+  }
+  fetchThemeColors(name)
+    .then((colors) => {
+      const n = applyThemeColors(name, colors);
+      if (!n) toast(`Theme ${name} has no known color keys.`, true);
+      else { sysLine(`Theme → ${name} (${n} colors).`); toast(`theme → ${name}`); }
+    })
+    .catch((e) => toast("theme load failed: " + e.message, true));
+}
+// Theme name list: cached briefly and shared across renders, so every
+// Appearance render (open, group switch, outside sync) does not hit the
+// bridge. In-flight requests dedupe; a stale select (re-rendered away)
+// is left alone via isConnected.
+let themeNamesCache = { at: 0, names: null, promise: null };
+const THEME_LIST_TTL_MS = 30000;
+function getThemeNames() {
+  const now = Date.now();
+  if (themeNamesCache.names && now - themeNamesCache.at < THEME_LIST_TTL_MS) {
+    return Promise.resolve(themeNamesCache.names.slice());
+  }
+  if (themeNamesCache.promise) return themeNamesCache.promise;
+  themeNamesCache.promise = fetch("themes", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error("themes " + r.status))))
+    .then((j) => {
+      const names = j && Array.isArray(j.themes) ? j.themes.map(String) : [];
+      themeNamesCache = { at: Date.now(), names, promise: null };
+      return names.slice();
+    })
+    .catch((e) => { themeNamesCache.promise = null; throw e; });
+  return themeNamesCache.promise;
+}
+function fillSettingsThemeOptions(sel) {
+  // Async: the row renders with Default first; saved names append when
+  // the bridge lists them (same /themes source as /theme).
+  getThemeNames()
+    .then((names) => {
+      if (!sel.isConnected) return;
+      const active = activeThemeName();
+      for (const n of names) {
+        const o = document.createElement("option");
+        o.value = n; o.textContent = n;
+        if (n === active) o.selected = true;
+        sel.append(o);
+      }
+      if (active && !names.includes(active)) {
+        // Stored name with no file (deleted since): show it rather than
+        // silently displaying Default.
+        const o = document.createElement("option");
+        o.value = active; o.textContent = active + " (missing)";
+        o.selected = true;
+        sel.append(o);
+      }
+    })
+    .catch(() => { /* Default stays the only option */ });
+}
+if (window.WebMuseSettings) {
+  defineAppSettings();
+  WebMuseSettings.registerGroup({
+    id: "appearance",
+    title: "Appearance",
+    render(body, h) {
+      const S = window.WebMuseSettings;
+      const t = h.row("Theme", "Named palette from web/themes, or the default.");
+      const tsel = h.makeSelect([{ value: "", label: "Default" }],
+        S.getSetting("theme"), (v) => S.setSetting("theme", v), "Theme");
+      t.control.appendChild(tsel);
+      body.appendChild(t.wrap);
+      fillSettingsThemeOptions(tsel);
+      const s = h.row("Starfield", "Animated welcome backdrop behind the app.");
+      s.control.appendChild(h.makeToggle(S.getSetting("starfield"), (btn) => {
+        S.setSetting("starfield", !S.getSetting("starfield"));
+        btn.setAttribute("aria-checked", S.getSetting("starfield") ? "true" : "false");
+      }, "Starfield"));
+      body.appendChild(s.wrap);
+    },
+  });
+  WebMuseSettings.registerGroup({
+    id: "defaults",
+    title: "Defaults",
+    render(body, h) {
+      const S = window.WebMuseSettings;
+      const e = h.row("Effort", "Default reasoning effort for new chats.");
+      e.control.appendChild(h.makeSelect(
+        EFFORT_TIERS.map((v) => ({ value: v, label: v })),
+        S.getSetting("effort"),
+        (v) => S.setSetting("effort", v), "Default effort"));
+      body.appendChild(e.wrap);
+      const m = h.row("Model", "Default model for new chats.");
+      const opts = state.models.length ? state.models.map((mo) => ({
+        value: mo.modelId,
+        label: (mo.isActive ? "● " : "") + (mo.displayLabel || mo.modelId),
+      })) : [{ value: "", label: "Loading…", disabled: true }];
+      const active = state.models.find((mo) => mo.isActive);
+      const want = S.getSetting("model") || (active && active.modelId) || "";
+      m.control.appendChild(h.makeSelect(opts, want,
+        (v) => { if (v) S.setSetting("model", v); }, "Default model"));
+      body.appendChild(m.wrap);
+      const a = h.row("Approval mode", "Default approval mode for new sessions.");
+      a.control.appendChild(h.makeSelect(
+        APPROVAL_MODES.map((v) => ({ value: v, label: v })),
+        S.getSetting("approvalMode"),
+        (v) => S.setSetting("approvalMode", v), "Default approval mode"));
+      body.appendChild(a.wrap);
+    },
+  });
+}
 document.addEventListener("click", (ev) => {
   if (!el("slash-popup").hidden && !el("slash-popup").contains(ev.target) && ev.target !== el("input")) {
     el("slash-popup").hidden = true;
@@ -4404,8 +5014,18 @@ function startComposerHints() {
 
 // Stored UI prefs win; first run falls back to hidden bars, no model/effort pick.
 restorePanelState();
+if (window.WebMuseSettings) {
+  WebMuseSettings.init();
+  // The gear mirrors the shell itself: the X button closes inside the
+  // shell, bypassing closeSettings(), so event-driven sync is the only
+  // wiring that covers every open/close route.
+  WebMuseSettings.on("open", syncSettingsGear);
+  WebMuseSettings.on("close", syncSettingsGear);
+}
+restoreWorkflowOpen();
 updateWelcome();
 syncStarsToggle();
+placeStarsToggle();
 updateRepoBar();
 loadPickedModel();
 loadPickedEffort();

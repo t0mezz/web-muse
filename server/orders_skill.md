@@ -2,8 +2,8 @@
 
 Some changes live outside this workspace, where you cannot write: the
 app theme, the bridge's own policy files, and the backend process
-itself. For those, write an order file here and the app carries it out
-after your turn.
+itself. For those, write an order file here and the app carries it
+out, usually within seconds while your turn is still running.
 
 ## Steps
 
@@ -12,11 +12,14 @@ after your turn.
      "params": {"colors": {"accent": "#AEAC78"}}}]}
    Done when: the file is valid JSON and every order has a unique `id`,
    a listed action below, and a `params` object.
-2. End your turn, then read `.web-muse/orders.receipt.json`.
+2. Read `.web-muse/orders.receipt.json`.
    Done when: every `id` you sent appears under `processed` with a
    `status`. `applied` means done. `needsConfirm` means a human decides
    in the app UI — nothing further for you to do. `rejected` names the
-   `reason` — fix it, use a fresh `id`, and send again.
+   `reason` — fix it, use a fresh `id`, and send again. If an `id` is
+   still missing after a minute, end your turn (no more tool calls)
+   and read the receipt again on your next turn: the app re-checks
+   after every turn.
 3. After a `theme.apply` reports `applied`, describe the visible result
    for the human so they can confirm it. Done when: you stated what
    changed and where to look.
