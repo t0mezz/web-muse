@@ -4028,13 +4028,33 @@ function repoDimRow(label) {
   d.className = "repo-opt dim"; d.textContent = label;
   return d;
 }
+function repoLoadingRow(text) {
+  // Bars in front, status text behind: while `gh` lists repos/branches
+  // (Uiverse aryamitra06 bars, theme-matched in style.css at half size).
+  const d = document.createElement("div");
+  d.className = "repo-opt dim repo-loading";
+  d.setAttribute("role", "status");
+  const loader = document.createElement("span");
+  loader.className = "loader";
+  loader.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 3; i++) {
+    const bar = document.createElement("span");
+    bar.className = "bar";
+    loader.append(bar);
+  }
+  const label = document.createElement("span");
+  label.className = "repo-loading-label";
+  label.textContent = text || "loading repos…";
+  d.append(loader, label);
+  return d;
+}
 
 async function toggleRepoMenu() {
   const m = el("repo-menu");
   if (!m.hidden) { m.hidden = true; return; }
   closeRepoMenus();
   m.innerHTML = "";
-  m.append(repoDimRow("loading…"));
+  m.append(repoLoadingRow());
   m.hidden = false;
   try {
     const r = await send({ type: "githubRepos" });
@@ -4076,7 +4096,7 @@ async function toggleBranchMenu(onlyOpen) {
   if (!m.hidden) { if (!onlyOpen) m.hidden = true; return; }
   closeRepoMenus();
   m.innerHTML = "";
-  m.append(repoDimRow("loading…"));
+  m.append(repoLoadingRow("loading branches…"));
   m.hidden = false;
   let branches = [];
   try {
