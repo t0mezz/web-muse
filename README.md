@@ -10,6 +10,8 @@ Your existing `muse login` subscription passes straight through to the `muse ser
 
 ## Screenshots
 
+Live demo: [web-muse.kortec.me](https://web-muse.kortec.me)
+
 ![Desktop start screen in dark theme with centered Ask Muse composer](docs/gallery/preview01.png)
 
 ![Desktop start screen in light theme](docs/gallery/preview02.png)
