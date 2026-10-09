@@ -10,7 +10,7 @@ Your existing `muse login` subscription passes straight through to the `muse ser
 
 ## Screenshots
 
-Live demo: [web-muse.kortec.me](https://web-muse.kortec.me)
+Live demo mockup: [web-muse.kortec.me](https://web-muse.kortec.me)
 
 ![Desktop start screen in dark theme with centered Ask Muse composer](docs/gallery/preview01.png)
 
