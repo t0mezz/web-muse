@@ -8,6 +8,14 @@ browser  ⇄  web-muse bridge (HTTP + WebSocket, 127.0.0.1:8000)  ⇄  muse serv
 
 Your existing `muse login` subscription passes straight through to the `muse serve` child. No API keys are accepted or stored anywhere in this project.
 
+## Screenshots
+
+![Desktop start screen in dark theme with centered Ask Muse composer](docs/gallery/preview01.png)
+![Desktop start screen in light theme](docs/gallery/preview02.png)
+![Desktop session list with transcript](docs/gallery/preview03.png)
+![Mobile composer in light theme](docs/gallery/mobile01.jpg)
+![Mobile composer in dark theme](docs/gallery/mobile02.jpg)
+
 ## Features
 
 - Chat UI with live streaming transcripts, session list, and inspector (approvals, input requests, models, usage)
