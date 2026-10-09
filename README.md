@@ -11,10 +11,15 @@ Your existing `muse login` subscription passes straight through to the `muse ser
 ## Screenshots
 
 ![Desktop start screen in dark theme with centered Ask Muse composer](docs/gallery/preview01.png)
+
 ![Desktop start screen in light theme](docs/gallery/preview02.png)
+
 ![Desktop session list with transcript](docs/gallery/preview03.png)
-![Mobile composer in light theme](docs/gallery/mobile01.jpg)
-![Mobile composer in dark theme](docs/gallery/mobile02.jpg)
+
+<p>
+  <img src="docs/gallery/mobile01.jpg" alt="Mobile composer in light theme" width="300">
+  <img src="docs/gallery/mobile02.jpg" alt="Mobile composer in dark theme" width="300">
+</p>
 
 ## Features
 
