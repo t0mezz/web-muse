@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>web-muse — frontend demo (no backend)</title>
+<meta name="description" content="Standalone playaround demo of the web-muse UI. No backend, no network.">
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --bg:#0C0C0C; --panel:#15171A; --panel2:#1E2126; --line:#33363A;
+  --fg:#CCD3DB; --dim:#935B6C; --faint:#A2717F;
+  --accent:#D25380; --focus:#D25380; --ok:#98614A; --warn:#FB3D18; --err:#ED1C24;
+  --user:#1E2126; --agent:#15171A; --codeBg:#0a0b0c; --cardBg:#1E2126;
+  --chipInk:#742E46; --onAccent:#0C0C0C;
+}
+html[data-theme="light"]{
+  --bg:#F4EFE6; --panel:#FFFFFF; --panel2:#EFE7D8; --line:#D8CFC0;
+  --fg:#2A2620; --dim:#8A7A68; --faint:#A89880;
+  --accent:#B03A5E; --focus:#B03A5E; --ok:#4A7A5B; --warn:#C25400; --err:#C22020;
+  --user:#EFE7D8; --agent:#FFFFFF; --codeBg:#2A2620; --cardBg:#FFFFFF;
+  --chipInk:#FFFFFF; --onAccent:#FFFFFF;
+}
+html[data-theme="midnight"]{
+  --bg:#05070C; --panel:#0B0F18; --panel2:#131A2A; --line:#26314A;
+  --fg:#C9D6F2; --dim:#7A8DB0; --faint:#93A5C4;
+  --accent:#6EA8FF; --focus:#6EA8FF; --ok:#4AA08A; --warn:#F2994A; --err:#F25656;
+  --user:#131A2A; --agent:#0B0F18; --codeBg:#030409; --cardBg:#131A2A;
+  --chipInk:#0B0F18; --onAccent:#05070C;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+#app{display:flex;flex-direction:column;min-height:100dvh}
+#demo-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  padding:8px 14px;background:var(--panel2);border-bottom:1px solid var(--line);
+  font-size:13px;color:var(--dim)}
+#demo-bar strong{color:var(--fg)}
+#demo-bar .pill{border:1px solid var(--line);border-radius:999px;
+  padding:2px 10px;color:var(--fg);background:var(--panel)}
+#demo-bar a{color:var(--accent)}
+#topbar{display:flex;align-items:center;gap:6px;padding:8px 10px;
+  border-bottom:1px solid var(--line);background:var(--panel)}
+#topbar button,#topbar select{font:inherit}
+.icon-btn{width:32px;height:32px;display:inline-flex;align-items:center;
+  justify-content:center;background:none;border:1px solid transparent;
+  border-radius:999px;color:var(--dim);cursor:pointer;font-size:15px}
+.icon-btn:hover{color:var(--fg);border-color:var(--line)}
+#brand{flex:1;min-width:0;display:flex;align-items:center;gap:8px;
+  font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:8px;height:8px;border-radius:35%;flex:none;background:var(--warn);
+  box-shadow:0 0 6px var(--warn)}
+#pickers{display:flex;gap:6px;align-items:center}
+#pickers select{background:var(--panel2);color:var(--dim);
+  border:1px solid var(--line);border-radius:999px;padding:5px 8px;font-size:13px}
+#layout{flex:1;min-height:0;display:flex}
+#sessions{width:280px;flex:none;border-right:1px solid var(--line);
+  background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.side-head{display:flex;gap:6px;padding:10px;align-items:center}
+#session-filter{flex:1;min-width:0;background:var(--panel2);color:var(--fg);
+  border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;font-size:13px}
+#session-list{overflow:auto;padding:0 10px 12px;display:flex;flex-direction:column;gap:6px}
+.sess{text-align:left;background:none;border:1px solid transparent;
+  border-radius:10px;padding:8px 10px;color:var(--fg);cursor:pointer}
+.sess:hover{border-color:var(--line)}
+.sess.active{background:var(--panel2);border-color:var(--line)}
+.sess .t{font-weight:600;font-size:14px}
+.sess .s{font-size:12px;color:var(--dim)}
+#center{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+#toolbar{display:flex;gap:8px;align-items:center;padding:8px 12px;
+  border-bottom:1px solid var(--line);font-size:13px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);border-radius:999px;padding:2px 10px;
+  font-size:12px;color:var(--dim)}
+.chip.working{color:var(--warn);border-color:var(--warn)}
+.chip.idle{color:var(--ok)}
+#tx-filters{display:flex;gap:4px}
+#tx-filters button{background:none;border:1px solid transparent;border-radius:999px;
+  color:var(--dim);padding:3px 10px;cursor:pointer;font-size:12px}
+#tx-filters button[aria-pressed="true"]{color:var(--fg);border-color:var(--line);
+  background:var(--panel2)}
+#terminal{flex:1;overflow:auto;padding:14px 12px;display:flex;
+  flex-direction:column;gap:10px;min-height:200px}
+.msg{max-width:70ch;border:1px solid var(--line);border-radius:12px;
+  padding:8px 12px;background:var(--agent)}
+.msg.user{align-self:flex-end;background:var(--user)}
+.msg.agent{align-self:flex-start}
+.msg .who{font-size:12px;color:var(--dim);margin-bottom:4px}
+.msg pre{background:var(--codeBg);color:#E8E2D4;border-radius:8px;
+  padding:8px 10px;overflow:auto;font-size:13px}
+.msg code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.tag{display:inline-block;font-size:11px;border:1px solid var(--line);
+  border-radius:999px;padding:0 8px;margin-right:6px;color:var(--dim)}
+#cards{display:flex;flex-direction:column;gap:8px;padding:0 12px}
+.card{background:var(--cardBg);border:1px solid var(--warn);border-radius:12px;
+  padding:10px 12px}
+.card h3{margin:0 0 6px;font-size:14px}
+.card .row{display:flex;gap:8px;margin-top:8px}
+.btn{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+  border-radius:10px;padding:7px 14px;cursor:pointer;font:inherit;font-size:14px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--onAccent);
+  font-weight:600}
+.btn:hover{filter:brightness(1.08)}
+#composer-wrap{border-top:1px solid var(--line);background:var(--panel);padding:10px 12px}
+#composer{display:flex;gap:8px}
+#input{flex:1;min-width:0;resize:none;background:var(--panel2);color:var(--fg);
+  border:1px solid var(--line);border-radius:10px;padding:9px 12px;
+  font:inherit;max-height:30vh}
+#input:focus{outline:2px solid var(--focus);outline-offset:1px}
+#hintbar{display:flex;gap:10px;font-size:12px;color:var(--dim);
+  padding-top:6px;flex-wrap:wrap}
+#inspector{width:270px;flex:none;border-left:1px solid var(--line);
+  background:var(--panel);padding:12px;overflow:auto}
+#inspector h2{font-size:13px;margin:0 0 8px;color:var(--dim);font-weight:600}
+.kv{font-size:13px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px}
+.kv dt{color:var(--dim)} .kv dd{margin:0}
+@media (max-width:900px){
+  #inspector{display:none}
+  #sessions{position:fixed;top:0;left:0;bottom:0;z-index:30;width:min(84vw,320px);
+    display:none}
+  #sessions.open{display:flex}
+  .msg{max-width:100%}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="demo-bar">
+    <span class="pill">demo — no backend</span>
+    <span><strong>web-muse</strong> playaround: everything below runs locally in this file. No WebSocket, no fetch.</span>
+    <span style="flex:1"></span>
+    <label>theme
+      <select id="theme-sel" aria-label="Demo theme">
+        <option value="dark">dark</option>
+        <option value="light">light</option>
+        <option value="midnight">midnight</option>
+      </select>
+    </label>
+  </div>
+  <header id="topbar">
+    <button class="icon-btn" id="btn-sessions" title="Toggle sessions" aria-label="Toggle sessions">◧</button>
+    <div id="brand"><span class="dot" title="demo mode — not connected"></span><span id="session-title">web-muse demo</span></div>
+    <div id="pickers">
+      <select id="effort-picker" aria-label="Reasoning effort">
+        <option>minimal</option><option>low</option><option selected>medium</option>
+        <option>high</option><option>xhigh</option><option>max</option>
+      </select>
+      <select id="model-picker" aria-label="Model">
+        <option>default</option><option>opus</option><option>sonnet</option><option>haiku</option>
+      </select>
+    </div>
+    <button class="icon-btn" id="btn-approval-demo" title="Show an approval card" aria-label="Show approval demo">✓</button>
+    <button class="icon-btn" id="btn-new" title="New session" aria-label="New session">＋</button>
+  </header>
+  <div id="layout">
+    <aside id="sessions" class="open" aria-label="Sessions">
+      <div class="side-head">
+        <input id="session-filter" type="search" placeholder="Filter sessions…" aria-label="Filter sessions">
+      </div>
+      <div id="session-list" role="listbox" aria-label="Demo sessions"></div>
+    </aside>
+    <main id="center">
+      <div id="toolbar">
+        <span id="run-chip" class="chip idle">idle</span>
+        <span id="tx-filters" role="group" aria-label="Transcript filter">
+          <button data-txf="all" aria-pressed="true">all</button>
+          <button data-txf="edits" aria-pressed="false">edits</button>
+          <button data-txf="commands" aria-pressed="false">commands</button>
+          <button data-txf="errors" aria-pressed="false">errors</button>
+        </span>
+        <span style="flex:1"></span>
+        <span id="sess-meta"></span>
+      </div>
+      <section id="terminal" aria-label="Session transcript"></section>
+      <section id="cards" aria-label="Approvals"></section>
+      <footer id="composer-wrap">
+        <form id="composer">
+          <textarea id="input" rows="1" placeholder="Ask Muse… (demo: replies are canned, nothing leaves your browser)" aria-label="Prompt input"></textarea>
+          <button class="btn primary" type="submit" id="btn-send">Send</button>
+        </form>
+        <div id="hintbar"><span>demo mode</span><span id="tok">0 messages</span><span>/new /theme /approve are simulated below</span></div>
+      </footer>
+    </main>
+    <aside id="inspector" aria-label="Inspector">
+      <h2>Session</h2>
+      <dl class="kv"><dt>id</dt><dd id="insp-id">—</dd><dt>model</dt><dd id="insp-model">default</dd>
+      <dt>effort</dt><dd id="insp-effort">medium</dd><dt>backend</dt><dd>none (static demo)</dd></dl>
+      <h2 style="margin-top:14px">Try it</h2>
+      <p style="font-size:13px;color:var(--dim)">Send a message, switch the transcript filter, trigger an approval card, change theme. All state is in-memory.</p>
+      <button class="btn" id="btn-compact" type="button">Simulate /compact</button>
+    </aside>
+  </div>
+</div>
+<script>
+"use strict";
+var $ = function(id){ return document.getElementById(id); };
+var sessions = [
+  { id: "demo1", name: "Getting started", sub: "3 messages · demo data" },
+  { id: "demo2", name: "Theme review", sub: "edits + commands sample" },
+  { id: "demo3", name: "Error handling", sub: "error filter sample" }
+];
+var transcripts = {
+  demo1: [
+    { who: "you", kind: "chat", html: "How do I run web-muse locally?" },
+    { who: "muse", kind: "chat", html: "Run <code>python3 -m server.main --port 8000</code> and open <code>http://127.0.0.1:8000/</code>. This demo is the static look-alike — no server behind it." },
+    { who: "muse", kind: "commands", html: '<span class="tag">command</span><code>python3 -m server.main --port 8000</code>' }
+  ],
+  demo2: [
+    { who: "you", kind: "chat", html: "Show me an edit and a command." },
+    { who: "muse", kind: "edits", html: '<span class="tag">edit</span><code>web/style.css</code> — adjusted topbar contrast' },
+    { who: "muse", kind: "commands", html: '<span class="tag">command</span><code>pytest tests/test_theme.py -q</code> — 12 passed' }
+  ],
+  demo3: [
+    { who: "you", kind: "chat", html: "What does a failure look like?" },
+    { who: "muse", kind: "errors", html: '<span class="tag">error</span>bridge unreachable (simulated) — retrying…<br>This is canned demo text.' }
+  ]
+};
+var current = "demo1";
+var filter = "all";
+var canned = [
+  "Demo reply: I understood “{q}”. In the real app this would stream from your local bridge; here it is canned and stays in your browser.",
+  "Demo reply: good prompt. Try the <b>edits</b> filter above, or hit ✓ for an approval card. Nothing leaves this page.",
+  "Demo reply: noted. Switch sessions on the left — each has its own in-memory transcript."
+];
+var cannedIdx = 0;
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function renderSessions(f){
+  var box = $("session-list"); box.textContent = "";
+  var q = (f || "").toLowerCase();
+  sessions.forEach(function(s){
+    if (q && s.name.toLowerCase().indexOf(q) < 0) return;
+    var b = document.createElement("button");
+    b.className = "sess" + (s.id === current ? " active" : "");
+    b.setAttribute("role", "option");
+    b.setAttribute("aria-selected", s.id === current ? "true" : "false");
+    var t = document.createElement("div"); t.className = "t"; t.textContent = s.name;
+    var u = document.createElement("div"); u.className = "s"; u.textContent = s.sub;
+    b.appendChild(t); b.appendChild(u);
+    b.addEventListener("click", function(){ openSession(s.id); });
+    box.appendChild(b);
+  });
+}
+function renderTranscript(){
+  var term = $("terminal"); term.textContent = "";
+  var items = transcripts[current] || [];
+  var shown = items.filter(function(m){ return filter === "all" || m.kind === filter; });
+  if (!shown.length){
+    var empty = document.createElement("div");
+    empty.className = "msg agent";
+    empty.innerHTML = '<div class="who">muse · demo</div><div>No <b></b> items in this view — switch the filter back to <b>all</b>.</div>';
+    empty.querySelector("b").textContent = filter;
+    term.appendChild(empty);
+  }
+  shown.forEach(function(m){
+    var d = document.createElement("div");
+    d.className = "msg " + (m.who === "you" ? "user" : "agent");
+    d.innerHTML = '<div class="who"></div><div class="body"></div>';
+    d.querySelector(".who").textContent = m.who === "you" ? "you" : "muse · demo";
+    d.querySelector(".body").innerHTML = m.html;
+    term.appendChild(d);
+  });
+  term.scrollTop = term.scrollHeight;
+  var s = sessions.filter(function(x){ return x.id === current; })[0];
+  $("session-title").textContent = s ? s.name + " (demo)" : "web-muse demo";
+  $("sess-meta").textContent = shown.length + " shown";
+  $("tok").textContent = items.length + " messages";
+  $("insp-id").textContent = current;
+}
+function setChip(mode){
+  var c = $("run-chip");
+  c.className = "chip " + mode;
+  c.textContent = mode === "working" ? "working…" : "idle";
+}
+function openSession(id){
+  current = id;
+  if (!transcripts[id]) transcripts[id] = [];
+  renderSessions($("session-filter").value);
+  renderTranscript();
+  if (window.innerWidth <= 900) $("sessions").classList.remove("open");
+}
+function fakeReply(q){
+  setChip("working");
+  var id = current;
+  var box = $("terminal");
+  var d = document.createElement("div");
+  d.className = "msg agent";
+  d.innerHTML = '<div class="who">muse · demo</div><div class="body"></div>';
+  box.appendChild(d);
+  var body = d.querySelector(".body");
+  var full = canned[cannedIdx % canned.length].replace("{q}", esc(q).slice(0, 120));
+  cannedIdx++;
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function done(){
+    if (id !== current) { setChip("idle"); return; }
+    body.innerHTML = full;
+    if (transcripts[id]) transcripts[id].push({ who: "muse", kind: "chat", html: full });
+    setChip("idle"); box.scrollTop = box.scrollHeight; renderTranscriptCounts();
+  }
+  if (reduced){ done(); return; }
+  var i = 0;
+  var plain = full.replace(/<[^>]*>/g, "");
+  (function step(){
+    if (id !== current) { setChip("idle"); return; }
+    i += 3;
+    body.textContent = plain.slice(0, i);
+    if (i < plain.length){ box.scrollTop = box.scrollHeight; setTimeout(step, 12); }
+    else { done(); }
+  })();
+}
+function renderTranscriptCounts(){
+  var items = transcripts[current] || [];
+  $("tok").textContent = items.length + " messages";
+}
+function showApproval(){
+  var cards = $("cards");
+  cards.textContent = "";
+  var c = document.createElement("div");
+  c.className = "card";
+  c.innerHTML = "<h3>Approval requested (demo)</h3><div><code>rm -rf /tmp/demo-scratch</code></div><div style='font-size:13px;color:var(--dim)'>Nothing will execute — Approve / Deny only writes to the transcript.</div>";
+  var row = document.createElement("div"); row.className = "row";
+  var ok = document.createElement("button"); ok.className = "btn primary"; ok.textContent = "Approve";
+  var no = document.createElement("button"); no.className = "btn"; no.textContent = "Deny";
+  ok.addEventListener("click", function(){
+    transcripts[current].push({ who: "muse", kind: "chat", html: "Approval <b>granted</b> (demo — no command ran)." });
+    cards.textContent = ""; renderTranscript();
+  });
+  no.addEventListener("click", function(){
+    transcripts[current].push({ who: "muse", kind: "chat", html: "Approval <b>denied</b> (demo)." });
+    cards.textContent = ""; renderTranscript();
+  });
+  row.appendChild(ok); row.appendChild(no); c.appendChild(row); cards.appendChild(c);
+}
+$("composer").addEventListener("submit", function(e){
+  e.preventDefault();
+  var ta = $("input");
+  var q = ta.value.trim();
+  if (!q) return;
+  if (q === "/new"){ newSession(); ta.value = ""; return; }
+  if (q.indexOf("/theme") === 0){
+    var parts = q.split(/\s+/);
+    if (parts[1] && ["dark","light","midnight"].indexOf(parts[1]) >= 0){
+      document.documentElement.setAttribute("data-theme", parts[1]);
+      $("theme-sel").value = parts[1];
+    }
+    ta.value = ""; return;
+  }
+  if (q === "/approve"){ showApproval(); ta.value = ""; return; }
+  transcripts[current].push({ who: "you", kind: "chat", html: esc(q) });
+  ta.value = ""; ta.style.height = "auto"; renderTranscript(); fakeReply(q);
+});
+function newSession(){
+  var n = sessions.length + 1;
+  var id = "demo" + Date.now().toString(36);
+  sessions.unshift({ id: id, name: "Untitled " + n, sub: "new demo session" });
+  transcripts[id] = [{ who: "muse", kind: "chat", html: "New demo session. Ask anything — replies are canned." }];
+  openSession(id);
+}
+$("btn-new").addEventListener("click", newSession);
+$("btn-approval-demo").addEventListener("click", showApproval);
+$("btn-sessions").addEventListener("click", function(){ $("sessions").classList.toggle("open"); });
+$("session-filter").addEventListener("input", function(e){ renderSessions(e.target.value); });
+$("tx-filters").addEventListener("click", function(e){
+  var b = e.target.closest("button"); if (!b) return;
+  filter = b.getAttribute("data-txf");
+  var all = $("tx-filters").querySelectorAll("button");
+  for (var i = 0; i < all.length; i++) all[i].setAttribute("aria-pressed", all[i] === b ? "true" : "false");
+  renderTranscript();
+});
+$("theme-sel").addEventListener("change", function(e){
+  document.documentElement.setAttribute("data-theme", e.target.value);
+});
+$("model-picker").addEventListener("change", function(e){ $("insp-model").textContent = e.target.value; });
+$("effort-picker").addEventListener("change", function(e){ $("insp-effort").textContent = e.target.value; });
+$("btn-compact").addEventListener("click", function(){
+  transcripts[current].push({ who: "muse", kind: "chat", html: "Transcript compacted (demo) — older messages summarized, nothing deleted server-side because there is no server." });
+  renderTranscript();
+});
+$("input").addEventListener("input", function(){
+  this.style.height = "auto";
+  this.style.height = Math.min(this.scrollHeight, window.innerHeight * 0.3) + "px";
+});
+renderSessions("");
+renderTranscript();
+setChip("idle");
+</script>
+</body>
+</html>
