@@ -37,27 +37,33 @@ class TestIdleGlowToggle(unittest.TestCase):
 
 
 class TestSlashPopupLayout(unittest.TestCase):
-    def test_popup_is_in_flow(self):
-        # In-flow (not absolute) so the open preview reserves its own
-        # space above the composer and pushes the transcript up instead
-        # of overlapping it; hiding restores the layout by itself.
+    def test_popup_floats_above_composer(self):
+        # Overlay (not in-flow) anchored to the positioned #composer-wrap:
+        # opening the preview must never move the input box. The old
+        # in-flow contract pushed the composer and is retired.
         m = re.search(r"^#slash-popup \{(.*?)\n\}$", STYLE_CSS,
                       re.S | re.M)
         self.assertIsNotNone(m, "#slash-popup missing")
-        self.assertNotIn("position: absolute", m.group(1))
+        self.assertIn("position: absolute", m.group(1))
+        self.assertIn("bottom: calc(100%", m.group(1))
+        anchor = re.search(r"^#composer-wrap \{([^}]*)\}", STYLE_CSS,
+                           re.M)
+        self.assertIsNotNone(anchor, "#composer-wrap missing")
+        self.assertIn("position: relative", anchor.group(1))
 
 
 class TestSlashPopupBackdrop(unittest.TestCase):
-    def test_running_toggle(self):
+    def test_backdrop_always_on(self):
+        # The overlay floats over the transcript, so the opaque panel
+        # backdrop is permanent — the running-only toggle is retired.
         body = fn_body("updateRunChip")
-        self.assertIn('el("slash-popup").classList.toggle("running", '
-                      'state.running)', body)
-
-    def test_backdrop_styling_present(self):
-        m = re.search(r"#slash-popup\.running \{(.*?)\n\}", STYLE_CSS,
-                      re.S)
-        self.assertIsNotNone(m, "#slash-popup.running missing")
+        self.assertNotIn('slash-popup").classList.toggle("running"',
+                         body)
+        m = re.search(r"^#slash-popup \{(.*?)\n\}$", STYLE_CSS,
+                      re.S | re.M)
+        self.assertIsNotNone(m, "#slash-popup missing")
         self.assertIn("background: var(--panel)", m.group(1))
+        self.assertNotIn("#slash-popup.running", STYLE_CSS)
 
 
 class TestIdleGlowStyling(unittest.TestCase):

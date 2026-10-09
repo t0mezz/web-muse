@@ -802,19 +802,19 @@ body {
 .wf-ann-head { color: var(--errFg); font-weight: 600; white-space: nowrap; }
 .wf-ann { color: var(--dim); overflow-wrap: break-word; }
 
-/* slash popup: in-flow above the composer so it pushes the transcript
-   up instead of overlapping it; transparent, '/' above input text */
+/* slash popup: overlay floating above the composer (anchored to the
+   positioned #composer-wrap) so opening the preview never moves the input
+   box; always opaque, since it floats over the transcript instead of
+   pushing it up. '/' text aligns above input text via the left padding. */
 #slash-popup {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 5;
   width: min(760px, 100%); box-sizing: border-box;
-  margin: 0 auto; padding: 4px 12px 0 35px;
-  background: none; border: none; border-radius: 0; box-shadow: none;
+  margin: 0 auto; padding: 6px 12px 6px 35px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
   max-height: 240px; overflow-y: auto;
 }
 #center.is-welcome #slash-popup { width: min(680px, 100%); }
-#slash-popup.running {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 12px; padding: 6px 12px 6px 35px;
-}
 .slash-item { padding: 3px 0; cursor: pointer; display: flex; gap: 10px; font-size: 13px; background: none; min-width: 0; }
 .slash-item .cmd { font-family: var(--mono); color: var(--dim); font-weight: 400; flex: none; min-width: 96px; white-space: pre; }
 .slash-item .desc { color: var(--faint); flex: 1; min-width: 0; overflow-wrap: break-word; }
@@ -1120,6 +1120,10 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab,
   #effort-picker { max-width: 22vw; }
   #sess-meta { display: none; }
   #cursor-chip { max-width: 30vw; }
+  /* narrow phones: slash rows stack (usage above, description below) —
+   * the padded usage column no longer fits beside the description. */
+  .slash-item { flex-direction: column; gap: 2px; padding: 6px 0; }
+  .slash-item .cmd { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 }
 /* mobile: effort + model pickers leave the crowded topbar for a full-width
  * second row below, freeing the first row for the title and icon buttons. */

@@ -137,6 +137,25 @@ class TestMobileRendering(unittest.TestCase):
         self.assertTrue(any("flex-wrap" in b for b in tops),
                         "no wrapping #topbar rule on mobile")
 
+    def test_hint_wrap_grows_input(self):
+        # Long rotating placeholder hints wrap on narrow screens while the
+        # value is empty (autosize only measured the value), clipping the
+        # hint: autosize must mirror the placeholder and grow the box.
+        m = re.search(r"function hintLineCount\(\) \{(.*?)\n\}",
+                      APP_JS, re.S)
+        self.assertIsNotNone(m, "hintLineCount missing")
+        self.assertIn("box.placeholder", m.group(1))
+        self.assertIn("scrollHeight", m.group(1))
+        auto = re.search(r"function autosize\(\) \{(.*?)\n\}",
+                         APP_JS, re.S)
+        self.assertIsNotNone(auto, "autosize missing")
+        self.assertIn("hintLineCount()", auto.group(1))
+        self.assertIn("minHeight", auto.group(1))
+        hints = re.search(r"function startComposerHints\(\) \{(.*?)\n\}",
+                          APP_JS, re.S)
+        self.assertIsNotNone(hints, "startComposerHints missing")
+        self.assertIn("autosize();", hints.group(1))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,7 @@ const state = {
   tools: new Map(), // itemId -> tool summary row
   running: false, turnId: null, queuedTurnId: null,
   stick: true, history: [], hidx: -1,
-  models: [], modelsMeta: null, slashSel: 0, slashList: [],
+  models: [], modelsMeta: null, slashSel: 0, slashList: [], slashKey: "",
   // Live skill selectors for the current session (skill/list rows):
   // cached per sessionId so the / preview can merge static commands
   // with typed-invocable skills. Refreshed on open + skill/changed.
@@ -1026,6 +1026,8 @@ function restorePanelState() {
 // stack both overlay drawers: keep the inspector, shut the sessions drawer.
 window.addEventListener("resize", () => {
   placeStarsToggle();
+  // A width change re-wraps the rotating placeholder hint: re-fit the box.
+  autosize();
   if (!isNarrow()) return;
   if (el("sessions").classList.contains("open") &&
       el("inspector").classList.contains("open")) {
@@ -2006,9 +2008,6 @@ function updateRunChip() {
   el("btn-stop").disabled = !state.running;
   // Idle composer glows; a running turn drops the aura.
   el("input").classList.toggle("idle-glow", !state.running);
-  // A running turn keeps streaming transcript behind the popup: give it
-  // a backdrop so the rows stay readable.
-  el("slash-popup").classList.toggle("running", state.running);
   setConn(state.ws && state.ws.readyState === 1 ? (state.running ? "busy" : "on") : "off");
 }
 function updateCursorChip() {
@@ -4299,7 +4298,7 @@ function updateSlashPopup() {
   const box = el("input");
   const pop = el("slash-popup");
   const v = box.value;
-  if (!v.startsWith("/") || v.includes("\n")) { pop.hidden = true; state.slashList = []; return; }
+  if (!v.startsWith("/") || v.includes("\n")) { pop.hidden = true; state.slashList = []; state.slashKey = ""; return; }
   const q = v.slice(1).split(/\s+/)[0].toLowerCase();
   // Refresh the skill cache in the background when it belongs to another
   // session (or was never fetched): the re-render after fetch picks up
@@ -4327,26 +4326,51 @@ function updateSlashPopup() {
     });
   }
   state.slashList = list;
-  if (!list.length) { pop.hidden = true; return; }
+  if (!list.length) { pop.hidden = true; state.slashKey = ""; return; }
   state.slashSel = Math.min(state.slashSel, list.length - 1);
+  // Same rows as shown (arrow-key walk or a no-op re-render after a skill
+  // refresh): just move the highlight instead of tearing down the DOM —
+  // a full rebuild per keystroke flickers and janks, worst on Safari.
+  const listKey = q + "\n" + list.map((c) => c.name).join("\n");
+  if (!pop.hidden && state.slashKey === listKey) {
+    Array.prototype.forEach.call(pop.children, (row, i) =>
+      row.classList.toggle("sel", i === state.slashSel));
+    scrollSlashIntoView();
+    return;
+  }
+  state.slashKey = listKey;
   pop.innerHTML = "";
   // Pad every usage to the longest one shown so all descriptions start
   // in the same column (.cmd keeps the spaces with white-space: pre).
+  // Narrow phones stack the rows instead (see the 560px rules), where
+  // padding would only force a bogus ellipsis — keep the raw usage.
+  const narrow = window.innerWidth <= 560; // mirrors @media (max-width: 560px)
   const width = Math.max(...list.map((c) => c.usage.length));
+  const frag = document.createDocumentFragment();
   list.forEach((c, i) => {
     const d = document.createElement("div");
     d.className = "slash-item" + (i === state.slashSel ? " sel" : "");
     const cmd = document.createElement("span");
-    cmd.className = "cmd"; cmd.textContent = c.usage.padEnd(width);
+    cmd.className = "cmd"; cmd.textContent = narrow ? c.usage : c.usage.padEnd(width);
     const desc = document.createElement("span");
     desc.className = "desc"; desc.textContent = c.desc;
     d.append(cmd, desc);
     d.onclick = () => { applySlash(i); };
-    pop.append(d);
+    frag.append(d);
   });
+  pop.append(frag);
   pop.hidden = false;
-  const sel = pop.children[state.slashSel];
-  if (sel && typeof sel.scrollIntoView === "function") sel.scrollIntoView({ block: "nearest" });
+  scrollSlashIntoView();
+}
+// Popup-local scroll only: scrollIntoView climbs every scrollable ancestor
+// and jerks the whole transcript on each keystroke (Safari pays most).
+function scrollSlashIntoView() {
+  const pop = el("slash-popup");
+  const row = pop.children[state.slashSel];
+  if (!row) return;
+  const top = row.offsetTop, h = row.offsetHeight;
+  if (top < pop.scrollTop) pop.scrollTop = top;
+  else if (top + h > pop.scrollTop + pop.clientHeight) pop.scrollTop = top + h - pop.clientHeight;
 }
 function applySlash(i) {
   const c = state.slashList[i != null ? i : state.slashSel];
@@ -4360,6 +4384,39 @@ function applySlash(i) {
 }
 
 /* ---------- composer ---------- */
+// Rotating placeholder hints are long enough to wrap on narrow screens,
+// but autosize() only measures the value (empty while hinting), so a
+// wrapped hint would clip. Mirror the placeholder offscreen in the same
+// width/font and count its lines; the sizer restyles only when the box
+// width or font changes.
+let hintSizer = null, hintSizerKey = "";
+function hintLineCount() {
+  const box = el("input");
+  if (!box) return 0;
+  // The browser only renders the placeholder while the value is empty.
+  if (box.value || !box.placeholder) return 0;
+  const w = box.clientWidth;
+  if (!w) return 0;
+  const cs = getComputedStyle(box);
+  const lh = parseFloat(cs.lineHeight) || 0;
+  if (!lh) return 0;
+  if (!hintSizer) {
+    hintSizer = document.createElement("div");
+    hintSizer.setAttribute("aria-hidden", "true");
+    document.body.append(hintSizer);
+  }
+  const padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
+  const key = w + "|" + cs.font + "|" + padL + "|" + padR;
+  if (hintSizerKey !== key) {
+    hintSizerKey = key;
+    hintSizer.style.cssText = "position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;" +
+      "white-space:pre-wrap;overflow-wrap:break-word;word-break:break-word;" +
+      "width:" + Math.max(0, w - padL - padR) + "px;font:" + cs.font +
+      ";line-height:" + cs.lineHeight + ";padding:0;margin:0;border:0;";
+  }
+  hintSizer.textContent = box.placeholder;
+  return Math.max(1, Math.round(hintSizer.scrollHeight / lh));
+}
 function autosize() {
   const box = el("input");
   box.style.height = "auto";
@@ -4368,7 +4425,12 @@ function autosize() {
   const lh = parseFloat(cs.lineHeight) || 0;
   const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) +
     (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
-  box.classList.toggle("multiline", lh > 0 && box.scrollHeight > pad + lh * 1.5);
+  // A wrapped placeholder hint counts like wrapped text: the browser only
+  // shows the placeholder while the value is empty, so measure it then.
+  const hintLines = hintLineCount();
+  if (hintLines > 1 && lh > 0) box.style.minHeight = (pad + lh * hintLines) + "px";
+  else box.style.minHeight = "";
+  box.classList.toggle("multiline", lh > 0 && (box.scrollHeight > pad + lh * 1.5 || hintLines > 1));
   box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.3) + "px";
 }
 
@@ -5243,6 +5305,8 @@ function startComposerHints() {
   const render = () => {
     const text = Array.from(cur()).slice(0, ci).join("");
     input.placeholder = text + (blinkOn ? "|" : "");
+    // A longer hint can wrap mid-typing on narrow screens: grow the box.
+    autosize();
   };
   const step = () => {
     if (stopped || !input.isConnected) return;
@@ -5264,8 +5328,8 @@ function startComposerHints() {
   };
   // Once the user enters the box, the loop stops for good (until reload);
   // blurring just restores the classic static placeholder.
-  input.addEventListener("focus", () => { stopped = true; input.placeholder = ""; });
-  input.addEventListener("blur", () => { if (stopped) input.placeholder = "Ask Muse…"; });
+  input.addEventListener("focus", () => { stopped = true; input.placeholder = ""; autosize(); });
+  input.addEventListener("blur", () => { if (stopped) input.placeholder = "Ask Muse…"; autosize(); });
   render();
   setTimeout(step, START_MS);
 }
