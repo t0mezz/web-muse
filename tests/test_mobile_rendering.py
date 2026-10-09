@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CSS = (ROOT / "web" / "style.css").read_text()
 APP_JS = (ROOT / "web" / "app.js").read_text()
 PROG = (ROOT / "web" / "progress.html").read_text()
+HTML = (ROOT / "web" / "index.html").read_text()
 
 
 def block(selector, source=None):
@@ -117,6 +118,24 @@ class TestMobileRendering(unittest.TestCase):
     def test_progress_safe_area(self):
         self.assertIn("viewport-fit=cover", PROG)
         self.assertIn("env(safe-area-inset-top)", PROG)
+
+    def test_pickers_form_mobile_second_row(self):
+        # Effort + model selects live in a picker-row group inside the
+        # topbar: transparent on desktop (order preserved), a full-width
+        # second row below the topbar on mobile.
+        m = re.search(r'<header id="topbar">(.*?)</header>', HTML, re.S)
+        self.assertIsNotNone(m, "topbar missing")
+        topbar = m.group(1)
+        for needle in ('id="picker-row"', 'id="effort-picker"',
+                       'id="model-picker"'):
+            self.assertIn(needle, topbar)
+        self.assertIn("display: contents", block("#picker-row"))
+        mobile = "".join(CSS.split("@media (max-width: 899px)")[1:])
+        self.assertIn("#picker-row", mobile)
+        self.assertIn("flex: 1 1 100%", mobile)
+        tops = re.findall(r"#topbar\s*\{([^}]*)\}", mobile)
+        self.assertTrue(any("flex-wrap" in b for b in tops),
+                        "no wrapping #topbar rule on mobile")
 
 
 if __name__ == "__main__":

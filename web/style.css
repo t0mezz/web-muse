@@ -72,6 +72,10 @@ body {
 }
 #model-picker:hover, #effort-picker:hover { color: var(--fg); border-color: var(--line); }
 #effort-picker { max-width: 18vw; }
+/* picker-row: transparent wrapper on desktop so the two selects lay out
+ * exactly as before (flex items of #topbar in the original order); on
+ * mobile it becomes a full-width second row below the topbar. */
+#picker-row { display: contents; }
 
 #layout { flex: 1; min-height: 0; display: flex; position: relative; }
 
@@ -1116,6 +1120,19 @@ button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab,
   #effort-picker { max-width: 22vw; }
   #sess-meta { display: none; }
   #cursor-chip { max-width: 30vw; }
+}
+/* mobile: effort + model pickers leave the crowded topbar for a full-width
+ * second row below, freeing the first row for the title and icon buttons. */
+@media (max-width: 899px) {
+  #topbar { flex-wrap: wrap; row-gap: 6px; }
+  #picker-row {
+    display: flex; gap: 8px; flex: 1 1 100%; order: 10;
+    min-width: 0; padding: 0 2px 2px;
+  }
+  #picker-row #effort-picker, #picker-row #model-picker {
+    flex: 1 1 0; min-width: 0; max-width: none;
+    padding: 7px 10px;
+  }
 }
 
 /* desktop: persistent side panels */
