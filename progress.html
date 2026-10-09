@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>web-muse · bridge progress</title>
+<style>
+/* Palette fallback = web/theme.js defaults (applied live when theme.js
+ * loads below); edit colors there. */
+:root { --bg: #0c0e12; --panel: #0e1116; --line: #262b36; --fg: #e6e9ef;
+  --dim: #9aa3b2; --ok: #3fb950; --warn: #d29922; --err: #f85149; --accent: #6ea8fe;
+  --faint: #6b7280; --codeBg: #0a0c10;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  min-height: 100vh; min-height: 100dvh; display: flex;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+main { max-width: 760px; width: 100%; margin: auto; padding: 20px 16px 40px; text-align: center; }
+header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+h1 { font-size: 18px; margin: 0; flex: 1; }
+a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+.dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.dot.on { background: var(--ok); box-shadow: 0 0 7px var(--ok); }
+.dot.off { background: var(--err); }
+.dot.warn { background: var(--warn); box-shadow: 0 0 7px var(--warn); }
+.sub { color: var(--dim); font-size: 12px; margin: 0 0 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; }
+.tile .k { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+.tile .v { font-family: var(--mono); font-size: 15px; margin-top: 2px; word-break: break-all; }
+.tile .v.good { color: var(--ok); }
+.tile .v.bad { color: var(--err); }
+h2 { font-size: 13px; color: var(--dim); margin: 18px 0 6px; font-weight: 600; }
+#log { background: var(--codeBg); border: 1px solid var(--line); border-radius: 12px;
+  font-family: var(--mono); font-size: 12px; padding: 10px 12px; max-height: 46vh;
+  overflow-y: auto; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+#log[hidden] { display: none; }
+#log .ts { color: var(--faint); margin-right: 8px; }
+#log .ev-ok { color: var(--ok); }
+#log .ev-err { color: var(--err); }
+#log .ev-info { color: var(--dim); }
+#log .ev-live { color: var(--accent); }
+.row { display: flex; gap: 8px; margin-top: 12px; align-items: center; justify-content: center; }
+button { background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+button:hover { border-color: var(--accent); }
+#btn-poll { border-radius: 999px; }
+#age { color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span id="dot" class="dot off"></span>
+    <h1>Bridge progress</h1>
+    <a class="back" href="/">← back to chat</a>
+  </header>
+  <p class="sub">Live status of the localhost bridge + <code>muse serve</code> host. Polls <code>/health</code> every 2s; the WebSocket ticker below shows live traffic.</p>
+  <div class="grid">
+    <div class="tile"><div class="k">Bridge</div><div class="v" id="t-bridge">…</div></div>
+    <div class="tile"><div class="k">MSP host</div><div class="v" id="t-msp">…</div></div>
+    <div class="tile"><div class="k">Server</div><div class="v" id="t-server">…</div></div>
+    <div class="tile"><div class="k">Schema</div><div class="v" id="t-schema">…</div></div>
+    <div class="tile"><div class="k">Uptime</div><div class="v" id="t-uptime">…</div></div>
+    <div class="tile"><div class="k">WS conns</div><div class="v" id="t-conns">…</div></div>
+    <div class="tile"><div class="k">Sessions tracked</div><div class="v" id="t-sess">…</div></div>
+    <div class="tile"><div class="k">Usage (5h / wk)</div><div class="v" id="t-usage">…</div></div>
+  </div>
+  <div class="row">
+    <button id="btn-poll">Poll now</button>
+    <button id="btn-clear">Clear log</button>
+    <span id="age"></span>
+  </div>
+  <h2 id="log-h">Event log</h2>
+  <div id="log" aria-live="off"></div>
+</main>
+<script src="/theme.js"></script>
+<script src="demo.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const logBox = $("log");
+let lastOk = null, lastMsp = null, ws = null, wsUp = false;
+
+function line(cls, msg) {
+  const d = document.createElement("div");
+  const ts = document.createElement("span");
+  ts.className = "ts";
+  ts.textContent = new Date().toLocaleTimeString();
+  const b = document.createElement("span");
+  b.className = cls;
+  b.textContent = msg;
+  d.append(ts, b);
+  logBox.append(d);
+  while (logBox.children.length > 200) logBox.firstChild.remove();
+  logBox.scrollTop = logBox.scrollHeight;
+  syncLogVisibility();
+}
+function syncLogVisibility() {
+  const empty = logBox.children.length === 0;
+  $("btn-clear").hidden = empty;
+  $("log-h").hidden = empty;
+  logBox.hidden = empty;
+}
+function setTile(id, text, good) {
+  const t = $(id);
+  t.textContent = text;
+  t.className = "v" + (good === true ? " good" : good === false ? " bad" : "");
+}
+async function poll() {
+  try {
+    const r = await fetch("/health", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const h = await r.json();
+    if (lastOk === false) line("ev-ok", "bridge reachable again");
+    lastOk = true;
+    $("dot").className = "dot " + (h.mspAlive ? "on" : "warn");
+    setTile("t-bridge", "up", true);
+    setTile("t-msp", h.mspAlive ? "alive" : "DOWN", !!h.mspAlive);
+    if (lastMsp === true && !h.mspAlive) line("ev-err", "MSP host went DOWN");
+    if (lastMsp === false && h.mspAlive) line("ev-ok", "MSP host recovered");
+    lastMsp = !!h.mspAlive;
+    setTile("t-server", h.server && h.server.version ? `muse ${h.server.version}` : "?");
+    setTile("t-schema", h.schema && h.schema.fingerprint ? String(h.schema.fingerprint).slice(7, 15) + ` v${h.schema.version}` : "?");
+    setTile("t-uptime", h.uptimeS != null ? `${Math.floor(h.uptimeS / 60)}m ${Math.round(h.uptimeS % 60)}s` : "?");
+    setTile("t-conns", h.wsConns != null ? String(h.wsConns) : "?");
+    setTile("t-sess", h.sessionsTracked != null ? String(h.sessionsTracked) : "?");
+    $("age").textContent = "last poll " + new Date().toLocaleTimeString();
+  } catch (e) {
+    if (lastOk !== false) line("ev-err", "poll failed: " + e.message);
+    lastOk = false;
+    $("dot").className = "dot off";
+    setTile("t-bridge", "DOWN", false);
+  }
+}
+async function pollUsage() {
+  // Best-effort subscription usage via the WS bridge (falls back to silent).
+  if (!wsUp) return;
+  try {
+    const id = Math.floor(Math.random() * 1e9);
+    const p = new Promise((resolve, reject) => {
+      const h = (ev) => {
+        let f;
+        try { f = JSON.parse(ev.data); } catch { return; }
+        if (f.type === "result" && f.id === id) {
+          ws.removeEventListener("message", h);
+          f.ok ? resolve(f.result || {}) : reject(new Error((f.error || {}).message || "err"));
+        }
+      };
+      ws.addEventListener("message", h);
+      setTimeout(() => { ws.removeEventListener("message", h); reject(new Error("timeout")); }, 8000);
+    });
+    ws.send(JSON.stringify({ id, type: "usage" }));
+    const r = await p;
+    if (r.usage && r.usage.window) {
+      setTile("t-usage", `${r.usage.window.usedPercent}% / ${r.usage.weekly ? r.usage.weekly.usedPercent + "%" : "?"}`);
+    } else {
+      setTile("t-usage", "unobserved");
+    }
+  } catch (_) { /* keep last */ }
+}
+function ticker() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const s = new WebSocket(`${proto}://${location.host}/ws`);
+  ws = s;
+  s.onopen = () => { wsUp = true; line("ev-live", "ws ticker connected"); pollUsage(); };
+  s.onclose = () => {
+    wsUp = false;
+    line("ev-info", "ws ticker closed — retrying in 3s…");
+    setTimeout(ticker, 3000);
+  };
+  s.onerror = () => { try { s.close(); } catch (_) { /* onclose retries */ } };
+  let lastTick = 0;
+  s.onmessage = (ev) => {
+    let f;
+    try { f = JSON.parse(ev.data); } catch { return; }
+    if (f.type === "hello") {
+      line("ev-live", `hello: mspAlive=${f.mspAlive} server=${f.server && f.server.version}`);
+      return;
+    }
+    if (f.type === "result") return; // pollUsage handles its own
+    if (f.type === "event") {
+      const now = Date.now();
+      // Throttle chatty streams (deltas) to one line per 2s.
+      if (f.method === "item/delta" && now - lastTick < 2000) return;
+      lastTick = now;
+      const sid = f.params && f.params.sessionId ? String(f.params.sessionId).slice(0, 8) : "-";
+      line("ev-live", `${f.method} [${sid}]`);
+      return;
+    }
+    line("ev-live", f.type || "?");
+  };
+}
+$("btn-poll").onclick = () => { poll(); pollUsage(); };
+$("btn-clear").onclick = () => { logBox.innerHTML = ""; syncLogVisibility(); };
+line("ev-info", "progress page loaded — polling /health every 2s");
+poll();
+setInterval(poll, 2000);
+setInterval(pollUsage, 15000);
+ticker();
+</script>
+</body>
+</html>

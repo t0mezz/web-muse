@@ -1,388 +1,212 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>web-muse — frontend demo (no backend)</title>
-<meta name="description" content="Standalone playaround demo of the web-muse UI. No backend, no network.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>web-muse</title>
 <link rel="icon" href="data:,">
-<style>
-:root{
-  --bg:#0C0C0C; --panel:#15171A; --panel2:#1E2126; --line:#33363A;
-  --fg:#CCD3DB; --dim:#935B6C; --faint:#A2717F;
-  --accent:#D25380; --focus:#D25380; --ok:#98614A; --warn:#FB3D18; --err:#ED1C24;
-  --user:#1E2126; --agent:#15171A; --codeBg:#0a0b0c; --cardBg:#1E2126;
-  --chipInk:#742E46; --onAccent:#0C0C0C;
-}
-html[data-theme="light"]{
-  --bg:#F4EFE6; --panel:#FFFFFF; --panel2:#EFE7D8; --line:#D8CFC0;
-  --fg:#2A2620; --dim:#8A7A68; --faint:#A89880;
-  --accent:#B03A5E; --focus:#B03A5E; --ok:#4A7A5B; --warn:#C25400; --err:#C22020;
-  --user:#EFE7D8; --agent:#FFFFFF; --codeBg:#2A2620; --cardBg:#FFFFFF;
-  --chipInk:#FFFFFF; --onAccent:#FFFFFF;
-}
-html[data-theme="midnight"]{
-  --bg:#05070C; --panel:#0B0F18; --panel2:#131A2A; --line:#26314A;
-  --fg:#C9D6F2; --dim:#7A8DB0; --faint:#93A5C4;
-  --accent:#6EA8FF; --focus:#6EA8FF; --ok:#4AA08A; --warn:#F2994A; --err:#F25656;
-  --user:#131A2A; --agent:#0B0F18; --codeBg:#030409; --cardBg:#131A2A;
-  --chipInk:#0B0F18; --onAccent:#05070C;
-}
-*{box-sizing:border-box}
-html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--fg);
-  font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-#app{display:flex;flex-direction:column;min-height:100dvh}
-#demo-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
-  padding:8px 14px;background:var(--panel2);border-bottom:1px solid var(--line);
-  font-size:13px;color:var(--dim)}
-#demo-bar strong{color:var(--fg)}
-#demo-bar .pill{border:1px solid var(--line);border-radius:999px;
-  padding:2px 10px;color:var(--fg);background:var(--panel)}
-#demo-bar a{color:var(--accent)}
-#topbar{display:flex;align-items:center;gap:6px;padding:8px 10px;
-  border-bottom:1px solid var(--line);background:var(--panel)}
-#topbar button,#topbar select{font:inherit}
-.icon-btn{width:32px;height:32px;display:inline-flex;align-items:center;
-  justify-content:center;background:none;border:1px solid transparent;
-  border-radius:999px;color:var(--dim);cursor:pointer;font-size:15px}
-.icon-btn:hover{color:var(--fg);border-color:var(--line)}
-#brand{flex:1;min-width:0;display:flex;align-items:center;gap:8px;
-  font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dot{width:8px;height:8px;border-radius:35%;flex:none;background:var(--warn);
-  box-shadow:0 0 6px var(--warn)}
-#pickers{display:flex;gap:6px;align-items:center}
-#pickers select{background:var(--panel2);color:var(--dim);
-  border:1px solid var(--line);border-radius:999px;padding:5px 8px;font-size:13px}
-#layout{flex:1;min-height:0;display:flex}
-#sessions{width:280px;flex:none;border-right:1px solid var(--line);
-  background:var(--panel);display:flex;flex-direction:column;min-height:0}
-.side-head{display:flex;gap:6px;padding:10px;align-items:center}
-#session-filter{flex:1;min-width:0;background:var(--panel2);color:var(--fg);
-  border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;font-size:13px}
-#session-list{overflow:auto;padding:0 10px 12px;display:flex;flex-direction:column;gap:6px}
-.sess{text-align:left;background:none;border:1px solid transparent;
-  border-radius:10px;padding:8px 10px;color:var(--fg);cursor:pointer}
-.sess:hover{border-color:var(--line)}
-.sess.active{background:var(--panel2);border-color:var(--line)}
-.sess .t{font-weight:600;font-size:14px}
-.sess .s{font-size:12px;color:var(--dim)}
-#center{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
-#toolbar{display:flex;gap:8px;align-items:center;padding:8px 12px;
-  border-bottom:1px solid var(--line);font-size:13px;flex-wrap:wrap}
-.chip{border:1px solid var(--line);border-radius:999px;padding:2px 10px;
-  font-size:12px;color:var(--dim)}
-.chip.working{color:var(--warn);border-color:var(--warn)}
-.chip.idle{color:var(--ok)}
-#tx-filters{display:flex;gap:4px}
-#tx-filters button{background:none;border:1px solid transparent;border-radius:999px;
-  color:var(--dim);padding:3px 10px;cursor:pointer;font-size:12px}
-#tx-filters button[aria-pressed="true"]{color:var(--fg);border-color:var(--line);
-  background:var(--panel2)}
-#terminal{flex:1;overflow:auto;padding:14px 12px;display:flex;
-  flex-direction:column;gap:10px;min-height:200px}
-.msg{max-width:70ch;border:1px solid var(--line);border-radius:12px;
-  padding:8px 12px;background:var(--agent)}
-.msg.user{align-self:flex-end;background:var(--user)}
-.msg.agent{align-self:flex-start}
-.msg .who{font-size:12px;color:var(--dim);margin-bottom:4px}
-.msg pre{background:var(--codeBg);color:#E8E2D4;border-radius:8px;
-  padding:8px 10px;overflow:auto;font-size:13px}
-.msg code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.tag{display:inline-block;font-size:11px;border:1px solid var(--line);
-  border-radius:999px;padding:0 8px;margin-right:6px;color:var(--dim)}
-#cards{display:flex;flex-direction:column;gap:8px;padding:0 12px}
-.card{background:var(--cardBg);border:1px solid var(--warn);border-radius:12px;
-  padding:10px 12px}
-.card h3{margin:0 0 6px;font-size:14px}
-.card .row{display:flex;gap:8px;margin-top:8px}
-.btn{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
-  border-radius:10px;padding:7px 14px;cursor:pointer;font:inherit;font-size:14px}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--onAccent);
-  font-weight:600}
-.btn:hover{filter:brightness(1.08)}
-#composer-wrap{border-top:1px solid var(--line);background:var(--panel);padding:10px 12px}
-#composer{display:flex;gap:8px}
-#input{flex:1;min-width:0;resize:none;background:var(--panel2);color:var(--fg);
-  border:1px solid var(--line);border-radius:10px;padding:9px 12px;
-  font:inherit;max-height:30vh}
-#input:focus{outline:2px solid var(--focus);outline-offset:1px}
-#hintbar{display:flex;gap:10px;font-size:12px;color:var(--dim);
-  padding-top:6px;flex-wrap:wrap}
-#inspector{width:270px;flex:none;border-left:1px solid var(--line);
-  background:var(--panel);padding:12px;overflow:auto}
-#inspector h2{font-size:13px;margin:0 0 8px;color:var(--dim);font-weight:600}
-.kv{font-size:13px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px}
-.kv dt{color:var(--dim)} .kv dd{margin:0}
-@media (max-width:900px){
-  #inspector{display:none}
-  #sessions{position:fixed;top:0;left:0;bottom:0;z-index:30;width:min(84vw,320px);
-    display:none}
-  #sessions.open{display:flex}
-  .msg{max-width:100%}
-}
-@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-</style>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <div id="app">
-  <div id="demo-bar">
-    <span class="pill">demo — no backend</span>
-    <span><strong>web-muse</strong> playaround: everything below runs locally in this file. No WebSocket, no fetch.</span>
-    <span style="flex:1"></span>
-    <label>theme
-      <select id="theme-sel" aria-label="Demo theme">
-        <option value="dark">dark</option>
-        <option value="light">light</option>
-        <option value="midnight">midnight</option>
-      </select>
-    </label>
-  </div>
   <header id="topbar">
-    <button class="icon-btn" id="btn-sessions" title="Toggle sessions" aria-label="Toggle sessions">◧</button>
-    <div id="brand"><span class="dot" title="demo mode — not connected"></span><span id="session-title">web-muse demo</span></div>
-    <div id="pickers">
-      <select id="effort-picker" aria-label="Reasoning effort">
-        <option>minimal</option><option>low</option><option selected>medium</option>
-        <option>high</option><option>xhigh</option><option>max</option>
-      </select>
-      <select id="model-picker" aria-label="Model">
-        <option>default</option><option>opus</option><option>sonnet</option><option>haiku</option>
-      </select>
+    <button id="btn-sessions" title="Toggle sessions (Ctrl+B)" aria-label="Toggle sessions">◧</button>
+    <div id="brand" title="web-muse — localhost bridge to muse serve">
+      <span id="conn-dot" class="dot off" title="connection"></span>
+      <span id="session-title">web-muse</span>
     </div>
-    <button class="icon-btn" id="btn-approval-demo" title="Show an approval card" aria-label="Show approval demo">✓</button>
-    <button class="icon-btn" id="btn-new" title="New session" aria-label="New session">＋</button>
+    <div id="picker-row" role="group" aria-label="Model and effort">
+      <select id="effort-picker" title="Reasoning effort (default for new chats)" aria-label="Reasoning effort"><option value="">effort…</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select>
+      <select id="model-picker" title="Model" aria-label="Model"><option value="">model…</option></select>
+    </div>
+    <button id="btn-inspector" title="Toggle inspector (Ctrl+.)" aria-label="Inspector">ⓘ</button>
+    <button id="btn-settings" title="Settings (Ctrl+,)" aria-label="Settings" aria-pressed="false"><svg viewBox="0 0 1280.000000 1280.000000" width="16" height="16" fill="currentColor" aria-hidden="true"><g transform="translate(0.000000,1280.000000) scale(0.100000,-0.100000)" stroke="none"><path d="M5860 12792 c0 -4 -29 -174 -65 -377 -36 -204 -95 -541 -131 -750 -37 -209 -68 -381 -69 -383 -1 -1 -61 -14 -133 -27 -233 -45 -467 -108 -691 -187 -110 -38 -114 -39 -131 -21 -9 10 -225 268 -480 573 -255 305 -470 563 -480 573 -16 17 -38 5 -476 -248 -252 -146 -460 -269 -462 -274 -2 -5 115 -332 259 -727 l262 -717 -40 -36 c-289 -261 -333 -304 -614 -615 l-36 -39 -704 257 c-387 142 -714 258 -726 259 -19 2 -58 -61 -288 -457 -253 -438 -265 -460 -248 -476 10 -10 270 -228 578 -485 308 -257 566 -473 573 -479 10 -10 5 -35 -27 -127 -85 -249 -141 -456 -185 -688 -14 -74 -27 -135 -28 -136 -2 -1 -174 -32 -383 -69 -209 -36 -546 -95 -750 -131 -203 -36 -373 -65 -377 -65 -4 0 -8 -243 -8 -540 0 -297 4 -540 8 -540 4 0 174 -29 377 -65 204 -36 541 -95 750 -131 209 -37 381 -68 383 -69 1 -1 14 -62 28 -136 44 -232 100 -439 185 -688 32 -92 37 -117 27 -127 -7 -6 -265 -222 -573 -479 -308 -257 -568 -475 -578 -485 -17 -16 -5 -38 248 -476 230 -396 269 -459 288 -457 12 1 339 117 726 259 l704 257 36 -39 c281 -311 325 -354 614 -615 l40 -36 -262 -717 c-144 -395 -261 -722 -259 -727 2 -5 210 -128 462 -274 438 -253 460 -265 476 -248 10 10 225 268 480 573 255 305 471 563 480 573 17 18 21 17 131 -21 224 -79 458 -142 691 -187 72 -13 132 -26 133 -27 1 -2 32 -174 69 -383 36 -209 95 -546 131 -750 36 -203 65 -373 65 -377 0 -4 242 -8 538 -8 l538 0 52 292 c28 161 88 502 133 758 44 256 82 466 84 468 1 1 69 16 151 32 254 50 420 94 673 181 92 32 117 37 127 27 6 -7 222 -265 479 -573 257 -308 475 -568 485 -578 16 -17 38 -5 476 248 252 146 460 269 462 274 2 7 -163 465 -465 1290 l-57 154 65 56 c217 190 384 356 570 570 l55 64 185 -67 c708 -260 1250 -456 1257 -456 5 0 94 147 198 327 103 181 223 388 266 462 63 108 76 137 66 146 -7 7 -267 225 -578 485 -311 260 -571 478 -578 484 -10 10 -5 35 27 127 84 246 150 491 191 712 12 64 26 117 30 117 4 0 227 38 496 85 269 47 604 106 744 130 140 25 258 45 262 45 5 0 8 243 8 540 0 297 -4 540 -8 540 -4 0 -172 29 -372 64 -201 35 -539 95 -752 132 l-387 68 -21 115 c-41 219 -107 465 -191 710 -32 92 -37 117 -27 127 7 6 267 224 578 484 311 260 571 478 578 485 10 9 -3 38 -66 146 -43 74 -163 281 -266 462 -104 180 -193 327 -198 327 -7 0 -549 -196 -1257 -456 l-185 -67 -55 64 c-186 214 -353 380 -570 570 l-65 56 57 154 c302 825 467 1283 465 1290 -2 5 -210 128 -462 274 -438 253 -460 265 -476 248 -10 -10 -228 -270 -485 -578 -257 -308 -473 -566 -479 -573 -10 -10 -35 -5 -127 27 -253 87 -419 131 -673 181 -82 16 -150 31 -151 32 -2 2 -40 212 -84 468 -45 256 -105 597 -133 758 l-52 292 -538 0 c-296 0 -538 -4 -538 -8z m745 -2616 c678 -24 1405 -277 1985 -690 358 -254 675 -576 924 -936 373 -538 598 -1161 657 -1820 14 -161 14 -499 0 -660 -94 -1039 -601 -1983 -1416 -2632 -493 -393 -1095 -662 -1715 -767 -246 -42 -300 -46 -640 -46 -340 0 -394 4 -640 46 -1177 199 -2203 959 -2740 2030 -295 587 -425 1198 -398 1870 48 1199 680 2316 1688 2983 502 332 1046 531 1658 606 96 12 405 28 457 23 17 -1 98 -5 180 -7z"/></g></svg></button>
+    <a id="btn-progress" href="/progress.html" title="Live bridge status page" aria-label="Progress">⏱</a>
+    <button id="btn-new" title="New session (/new)" aria-label="New session">＋</button>
   </header>
+
   <div id="layout">
-    <aside id="sessions" class="open" aria-label="Sessions">
+    <aside id="sessions" aria-labelledby="sessions-h1">
+      <h1 class="vh" id="sessions-h1">Sessions</h1>
       <div class="side-head">
-        <input id="session-filter" type="search" placeholder="Filter sessions…" aria-label="Filter sessions">
-      </div>
-      <div id="session-list" role="listbox" aria-label="Demo sessions"></div>
-    </aside>
-    <main id="center">
-      <div id="toolbar">
-        <span id="run-chip" class="chip idle">idle</span>
-        <span id="tx-filters" role="group" aria-label="Transcript filter">
-          <button data-txf="all" aria-pressed="true">all</button>
-          <button data-txf="edits" aria-pressed="false">edits</button>
-          <button data-txf="commands" aria-pressed="false">commands</button>
-          <button data-txf="errors" aria-pressed="false">errors</button>
+        <span class="filter-box" hidden>
+          <input id="session-filter" type="search" placeholder="Filter sessions…" aria-label="Filter sessions">
+          <button id="btn-clear-filter" title="Clear filter" aria-label="Clear filter" hidden>✕</button>
         </span>
-        <span style="flex:1"></span>
-        <span id="sess-meta"></span>
+        <button id="selection-ticker" hidden type="button" class="ticker" aria-label="Selected sessions"></button>
+        <button id="btn-delete-selected" hidden aria-label="Delete item" class="delete-button" title="Delete selected sessions">
+          <svg class="trash-svg" viewBox="0 -10 64 74" xmlns="http://www.w3.org/2000/svg">
+            <g id="trash-can">
+              <rect x="16" y="24" width="32" height="30" rx="3" ry="3" fill="#e74c3c"></rect>
+              <g transform-origin="12 18" id="lid-group">
+                <rect x="12" y="12" width="40" height="6" rx="2" ry="2" fill="#c0392b"></rect>
+                <rect x="26" y="8" width="12" height="4" rx="2" ry="2" fill="#c0392b"></rect>
+              </g>
+            </g>
+          </svg>
+        </button>
+        <button id="btn-search-sessions" title="Search sessions" aria-label="Search sessions" aria-expanded="false">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+        </button>
+        <button id="btn-refresh-sessions" title="Refresh list (/list)" aria-label="Refresh sessions">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>
+        </button>
+        <button id="btn-close-sessions" title="Close" aria-label="Close sessions">✕</button>
       </div>
-      <section id="terminal" aria-label="Session transcript"></section>
-      <section id="cards" aria-label="Approvals"></section>
+      <div id="sess-count" class="session-count" role="status" hidden></div>
+      <div id="selection-bar" hidden></div>
+      <div id="session-list"></div>
+    </aside>
+    <div id="scrim" hidden></div>
+
+    <main id="center">
+      <div id="notice" hidden></div>
+      <div id="toolbar">
+        <span id="run-chip" class="chip idle" title="Turn state">idle</span>
+        <button id="btn-older" title="Load older history">↑ older</button>
+        <span id="tx-filters" role="group" aria-label="Transcript filter">
+          <button data-txf="all" aria-pressed="true" title="Show everything">all</button>
+          <button data-txf="edits" aria-pressed="false" title="Show file edits only">edits</button>
+          <button data-txf="commands" aria-pressed="false" title="Show shell commands only">commands</button>
+          <button data-txf="errors" aria-pressed="false" title="Show errors only">errors</button>
+        </span>
+        <span id="cursor-chip" class="chip dim" title="View cursor"></span>
+        <span class="spacer"></span>
+        <span id="sess-meta" class="dim"></span>
+      </div>
+
+      <section id="terminal" aria-label="Session transcript" aria-live="off"></section>
+      <button id="jump-latest" hidden title="Jump to latest">↓ latest</button>
+
+      <section id="cards" aria-label="Approvals and input requests"></section>
+
       <footer id="composer-wrap">
+        <div id="slash-popup" hidden role="listbox" aria-label="Slash commands"></div>
+        <div id="repo-bar" hidden>
+          <div class="pill-wrap">
+            <button id="repo-pill" class="repo-pill pearl" title="Attach a GitHub repo (/github)" aria-label="Select a GitHub repo" aria-haspopup="listbox">
+              <span class="pearl-wrap">
+                <span class="pearl-row">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+                  <span id="repo-pill-label">select a repo</span>
+                </span>
+              </span>
+            </button>
+            <div id="repo-menu" class="repo-menu" hidden role="listbox" aria-label="GitHub repos"></div>
+          </div>
+          <div class="pill-wrap" id="branch-wrap" hidden>
+            <button id="branch-pill" class="repo-pill pearl" title="Select a branch" aria-label="Select a branch" aria-haspopup="listbox">
+              <span class="pearl-wrap">
+                <span class="pearl-row">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="4" r="2"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="8" r="2"/><path d="M4 6v4"/><path d="M12 10c0 1.5-2 2-4.5 2H6"/></svg>
+                  <span id="branch-pill-label"></span>
+                </span>
+              </span>
+            </button>
+            <div id="branch-menu" class="repo-menu" hidden role="listbox" aria-label="Branches"></div>
+          </div>
+        </div>
         <form id="composer">
-          <textarea id="input" rows="1" placeholder="Ask Muse… (demo: replies are canned, nothing leaves your browser)" aria-label="Prompt input"></textarea>
-          <button class="btn primary" type="submit" id="btn-send">Send</button>
+          <textarea id="input" rows="1" placeholder="Ask Muse…"
+            aria-label="Prompt input" autocomplete="off" spellcheck="true"></textarea>
+          <div class="composer-btns">
+            <button type="button" id="btn-stop" title="Stop turn (/interrupt)" aria-label="Stop turn" disabled><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg></button>
+            <button type="submit" id="btn-send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8.791045833333332 0.4881416666666667c-0.437525 -0.437525 -1.1480666666666666 -0.437525 -1.5855916666666667 0L1.6051416666666667 6.088454166666666c-0.437525 0.437525 -0.437525 1.1480666666666666 0 1.5855916666666667s1.1480666666666666 0.43752083333333336 1.5855916666666667 0l3.6892041666666664 -3.692708333333333v10.7386c0 0.6195333333333333 0.5005291666666667 1.1200625 1.1200625 1.1200625s1.1200625 -0.5005291666666667 1.1200625 -1.1200625V3.9813374999999995l3.6892041666666664 3.689208333333333c0.437525 0.43752083333333336 1.1480666666666666 0.43752083333333336 1.5855916666666667 0s0.43752083333333336 -1.1480666666666666 0 -1.5855916666666667L8.794545833333332 0.48464166666666664Z"/></svg></button>
+          </div>
         </form>
-        <div id="hintbar"><span>demo mode</span><span id="tok">0 messages</span><span>/new /theme /approve are simulated below</span></div>
+        <section id="workflow-panel" class="open" hidden aria-label="Workflow progress">
+          <button id="workflow-head" aria-expanded="true" aria-controls="workflow-body" title="Toggle workflow progress">
+            <span id="workflow-caret" aria-hidden="true">▾</span>
+            <span id="workflow-title">Workflow</span>
+            <span id="workflow-count" role="status"></span>
+          </button>
+          <div id="workflow-meta" hidden>
+            <span id="workflow-status" class="wf-pill"></span>
+            <span id="workflow-def" class="wf-meta" title=""></span>
+            <span id="workflow-runid" class="wf-meta" title=""></span>
+            <span id="workflow-trigger" class="wf-meta"></span>
+            <time id="workflow-started" class="wf-meta"></time>
+            <span id="workflow-elapsed" class="wf-meta"></span>
+          </div>
+          <div id="workflow-annotations" hidden></div>
+          <ol id="workflow-body"></ol>
+        </section>
+        <div id="hintbar">
+          <span id="status">connecting…</span>
+          <span id="sess-usage" title="Session tokens"></span>
+          <span id="usage" title="Token usage"></span>
+        </div>
       </footer>
     </main>
+
     <aside id="inspector" aria-label="Inspector">
-      <h2>Session</h2>
-      <dl class="kv"><dt>id</dt><dd id="insp-id">—</dd><dt>model</dt><dd id="insp-model">default</dd>
-      <dt>effort</dt><dd id="insp-effort">medium</dd><dt>backend</dt><dd>none (static demo)</dd></dl>
-      <h2 style="margin-top:14px">Try it</h2>
-      <p style="font-size:13px;color:var(--dim)">Send a message, switch the transcript filter, trigger an approval card, change theme. All state is in-memory.</p>
-      <button class="btn" id="btn-compact" type="button">Simulate /compact</button>
+      <div class="tabs" role="tablist">
+        <button data-tab="approvals" class="tab active" role="tab">Approvals</button>
+        <button data-tab="tools" class="tab" role="tab">Tools</button>
+        <button data-tab="session" class="tab" role="tab">Session</button>
+        <button id="btn-close-inspector" title="Close panel" aria-label="Close panel">✕</button>
+      </div>
+      <div id="tab-approvals" class="tabpanel"></div>
+      <div id="tab-tools" class="tabpanel" hidden></div>
+      <div id="tab-session" class="tabpanel" hidden>
+        <div class="approval-ref">
+          <span>Approval: <strong id="sess-approval-mode">onRequest</strong></span>
+          <button id="btn-approval-settings" title="Change approval mode in Settings">Change in Settings</button>
+        </div>
+        <div class="row-btns">
+          <button id="btn-compact" title="Compact session (/compact)">Compact</button>
+          <button id="btn-usage" title="Refresh usage (/usage)">Usage</button>
+          <button id="btn-pending" title="List pending approvals (/pending)">Pending</button>
+        </div>
+        <pre id="session-detail" class="detail"></pre>
+      </div>
+    </aside>
+
+    <aside id="settings" aria-label="Settings" role="dialog" aria-modal="true">
+      <div class="settings-box">
+        <div class="settings-head">
+          <strong>Settings</strong>
+          <button id="btn-close-settings" title="Close settings (Esc)" aria-label="Close settings">✕</button>
+        </div>
+        <nav id="settings-nav" aria-label="Settings groups"></nav>
+        <div id="settings-body" class="settings-body" role="tabpanel" tabindex="0"></div>
+      </div>
     </aside>
   </div>
 </div>
-<script>
-"use strict";
-var $ = function(id){ return document.getElementById(id); };
-var sessions = [
-  { id: "demo1", name: "Getting started", sub: "3 messages · demo data" },
-  { id: "demo2", name: "Theme review", sub: "edits + commands sample" },
-  { id: "demo3", name: "Error handling", sub: "error filter sample" }
-];
-var transcripts = {
-  demo1: [
-    { who: "you", kind: "chat", html: "How do I run web-muse locally?" },
-    { who: "muse", kind: "chat", html: "Run <code>python3 -m server.main --port 8000</code> and open <code>http://127.0.0.1:8000/</code>. This demo is the static look-alike — no server behind it." },
-    { who: "muse", kind: "commands", html: '<span class="tag">command</span><code>python3 -m server.main --port 8000</code>' }
-  ],
-  demo2: [
-    { who: "you", kind: "chat", html: "Show me an edit and a command." },
-    { who: "muse", kind: "edits", html: '<span class="tag">edit</span><code>web/style.css</code> — adjusted topbar contrast' },
-    { who: "muse", kind: "commands", html: '<span class="tag">command</span><code>pytest tests/test_theme.py -q</code> — 12 passed' }
-  ],
-  demo3: [
-    { who: "you", kind: "chat", html: "What does a failure look like?" },
-    { who: "muse", kind: "errors", html: '<span class="tag">error</span>bridge unreachable (simulated) — retrying…<br>This is canned demo text.' }
-  ]
-};
-var current = "demo1";
-var filter = "all";
-var canned = [
-  "Demo reply: I understood “{q}”. In the real app this would stream from your local bridge; here it is canned and stays in your browser.",
-  "Demo reply: good prompt. Try the <b>edits</b> filter above, or hit ✓ for an approval card. Nothing leaves this page.",
-  "Demo reply: noted. Switch sessions on the left — each has its own in-memory transcript."
-];
-var cannedIdx = 0;
-function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-function renderSessions(f){
-  var box = $("session-list"); box.textContent = "";
-  var q = (f || "").toLowerCase();
-  sessions.forEach(function(s){
-    if (q && s.name.toLowerCase().indexOf(q) < 0) return;
-    var b = document.createElement("button");
-    b.className = "sess" + (s.id === current ? " active" : "");
-    b.setAttribute("role", "option");
-    b.setAttribute("aria-selected", s.id === current ? "true" : "false");
-    var t = document.createElement("div"); t.className = "t"; t.textContent = s.name;
-    var u = document.createElement("div"); u.className = "s"; u.textContent = s.sub;
-    b.appendChild(t); b.appendChild(u);
-    b.addEventListener("click", function(){ openSession(s.id); });
-    box.appendChild(b);
-  });
-}
-function renderTranscript(){
-  var term = $("terminal"); term.textContent = "";
-  var items = transcripts[current] || [];
-  var shown = items.filter(function(m){ return filter === "all" || m.kind === filter; });
-  if (!shown.length){
-    var empty = document.createElement("div");
-    empty.className = "msg agent";
-    empty.innerHTML = '<div class="who">muse · demo</div><div>No <b></b> items in this view — switch the filter back to <b>all</b>.</div>';
-    empty.querySelector("b").textContent = filter;
-    term.appendChild(empty);
-  }
-  shown.forEach(function(m){
-    var d = document.createElement("div");
-    d.className = "msg " + (m.who === "you" ? "user" : "agent");
-    d.innerHTML = '<div class="who"></div><div class="body"></div>';
-    d.querySelector(".who").textContent = m.who === "you" ? "you" : "muse · demo";
-    d.querySelector(".body").innerHTML = m.html;
-    term.appendChild(d);
-  });
-  term.scrollTop = term.scrollHeight;
-  var s = sessions.filter(function(x){ return x.id === current; })[0];
-  $("session-title").textContent = s ? s.name + " (demo)" : "web-muse demo";
-  $("sess-meta").textContent = shown.length + " shown";
-  $("tok").textContent = items.length + " messages";
-  $("insp-id").textContent = current;
-}
-function setChip(mode){
-  var c = $("run-chip");
-  c.className = "chip " + mode;
-  c.textContent = mode === "working" ? "working…" : "idle";
-}
-function openSession(id){
-  current = id;
-  if (!transcripts[id]) transcripts[id] = [];
-  renderSessions($("session-filter").value);
-  renderTranscript();
-  if (window.innerWidth <= 900) $("sessions").classList.remove("open");
-}
-function fakeReply(q){
-  setChip("working");
-  var id = current;
-  var box = $("terminal");
-  var d = document.createElement("div");
-  d.className = "msg agent";
-  d.innerHTML = '<div class="who">muse · demo</div><div class="body"></div>';
-  box.appendChild(d);
-  var body = d.querySelector(".body");
-  var full = canned[cannedIdx % canned.length].replace("{q}", esc(q).slice(0, 120));
-  cannedIdx++;
-  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  function done(){
-    if (id !== current) { setChip("idle"); return; }
-    body.innerHTML = full;
-    if (transcripts[id]) transcripts[id].push({ who: "muse", kind: "chat", html: full });
-    setChip("idle"); box.scrollTop = box.scrollHeight; renderTranscriptCounts();
-  }
-  if (reduced){ done(); return; }
-  var i = 0;
-  var plain = full.replace(/<[^>]*>/g, "");
-  (function step(){
-    if (id !== current) { setChip("idle"); return; }
-    i += 3;
-    body.textContent = plain.slice(0, i);
-    if (i < plain.length){ box.scrollTop = box.scrollHeight; setTimeout(step, 12); }
-    else { done(); }
-  })();
-}
-function renderTranscriptCounts(){
-  var items = transcripts[current] || [];
-  $("tok").textContent = items.length + " messages";
-}
-function showApproval(){
-  var cards = $("cards");
-  cards.textContent = "";
-  var c = document.createElement("div");
-  c.className = "card";
-  c.innerHTML = "<h3>Approval requested (demo)</h3><div><code>rm -rf /tmp/demo-scratch</code></div><div style='font-size:13px;color:var(--dim)'>Nothing will execute — Approve / Deny only writes to the transcript.</div>";
-  var row = document.createElement("div"); row.className = "row";
-  var ok = document.createElement("button"); ok.className = "btn primary"; ok.textContent = "Approve";
-  var no = document.createElement("button"); no.className = "btn"; no.textContent = "Deny";
-  ok.addEventListener("click", function(){
-    transcripts[current].push({ who: "muse", kind: "chat", html: "Approval <b>granted</b> (demo — no command ran)." });
-    cards.textContent = ""; renderTranscript();
-  });
-  no.addEventListener("click", function(){
-    transcripts[current].push({ who: "muse", kind: "chat", html: "Approval <b>denied</b> (demo)." });
-    cards.textContent = ""; renderTranscript();
-  });
-  row.appendChild(ok); row.appendChild(no); c.appendChild(row); cards.appendChild(c);
-}
-$("composer").addEventListener("submit", function(e){
-  e.preventDefault();
-  var ta = $("input");
-  var q = ta.value.trim();
-  if (!q) return;
-  if (q === "/new"){ newSession(); ta.value = ""; return; }
-  if (q.indexOf("/theme") === 0){
-    var parts = q.split(/\s+/);
-    if (parts[1] && ["dark","light","midnight"].indexOf(parts[1]) >= 0){
-      document.documentElement.setAttribute("data-theme", parts[1]);
-      $("theme-sel").value = parts[1];
-    }
-    ta.value = ""; return;
-  }
-  if (q === "/approve"){ showApproval(); ta.value = ""; return; }
-  transcripts[current].push({ who: "you", kind: "chat", html: esc(q) });
-  ta.value = ""; ta.style.height = "auto"; renderTranscript(); fakeReply(q);
-});
-function newSession(){
-  var n = sessions.length + 1;
-  var id = "demo" + Date.now().toString(36);
-  sessions.unshift({ id: id, name: "Untitled " + n, sub: "new demo session" });
-  transcripts[id] = [{ who: "muse", kind: "chat", html: "New demo session. Ask anything — replies are canned." }];
-  openSession(id);
-}
-$("btn-new").addEventListener("click", newSession);
-$("btn-approval-demo").addEventListener("click", showApproval);
-$("btn-sessions").addEventListener("click", function(){ $("sessions").classList.toggle("open"); });
-$("session-filter").addEventListener("input", function(e){ renderSessions(e.target.value); });
-$("tx-filters").addEventListener("click", function(e){
-  var b = e.target.closest("button"); if (!b) return;
-  filter = b.getAttribute("data-txf");
-  var all = $("tx-filters").querySelectorAll("button");
-  for (var i = 0; i < all.length; i++) all[i].setAttribute("aria-pressed", all[i] === b ? "true" : "false");
-  renderTranscript();
-});
-$("theme-sel").addEventListener("change", function(e){
-  document.documentElement.setAttribute("data-theme", e.target.value);
-});
-$("model-picker").addEventListener("change", function(e){ $("insp-model").textContent = e.target.value; });
-$("effort-picker").addEventListener("change", function(e){ $("insp-effort").textContent = e.target.value; });
-$("btn-compact").addEventListener("click", function(){
-  transcripts[current].push({ who: "muse", kind: "chat", html: "Transcript compacted (demo) — older messages summarized, nothing deleted server-side because there is no server." });
-  renderTranscript();
-});
-$("input").addEventListener("input", function(){
-  this.style.height = "auto";
-  this.style.height = Math.min(this.scrollHeight, window.innerHeight * 0.3) + "px";
-});
-renderSessions("");
-renderTranscript();
-setChip("idle");
-</script>
+<div id="dir-dialog" hidden role="dialog" aria-modal="true" aria-label="Choose session directory">
+  <div class="dir-box">
+    <div class="dir-head">
+      <strong>New session directory</strong>
+      <button id="dir-cancel-x" title="Close" aria-label="Close">✕</button>
+    </div>
+    <div class="dir-pathrow">
+      <input id="dir-path" type="text" spellcheck="false" autocomplete="off"
+        placeholder="/absolute/path — paste to jump" aria-label="Directory path">
+      <button id="dir-go" title="Go to typed path">Go</button>
+    </div>
+    <div id="dir-error" class="dir-error" hidden></div>
+    <div class="dir-navrow">
+      <button id="dir-up" title="Parent directory">↑ Up</button>
+      <button id="dir-home" title="Server home directory">Home</button>
+      <button id="dir-root" title="Filesystem root">/</button>
+    </div>
+    <div id="dir-crumbs" class="dir-crumbs" aria-label="Breadcrumb"></div>
+    <div id="dir-list" class="dir-list" role="listbox" aria-label="Directory entries"></div>
+    <div class="dir-foot">
+      <button id="dir-default" title="Use the default per-session workspace">Use default workspace</button>
+      <span class="spacer"></span>
+      <button id="dir-cancel">Cancel</button>
+      <button id="dir-use" class="primary" title="Start session in this folder">Use this folder</button>
+    </div>
+  </div>
+</div>
+<div id="toast" hidden role="status"></div>
+<button id="stars-toggle" role="switch" aria-checked="false" aria-label="Toggle starfield" title="Toggle starfield"><span class="stars-thumb" aria-hidden="true"></span></button>
+<script src="/theme.js"></script>
+<script src="/stars.js"></script>
+<script src="/settings.js"></script>
+<script src="demo.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,1368 @@
+/* Palette fallback = web/theme.js defaults (the single source of truth).
+ * theme.js applies the same values to :root at load and overrides them
+ * from localStorage["web-muse:theme"], so edit colors there. */
+:root {
+  --bg: #0C0C0C; --panel: #15171A; --panel2: #1E2126; --line: #33363A;
+  --fg: #CCD3DB; --dim: #935B6C; --faint: #A2717F;
+  --accent: #D25380; --focus: #D25380; --ok: #98614A; --warn: #FB3D18; --err: #ED1C24;
+  --user: #1E2126; --agent: #15171A; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --select: #3A2029; --warnBg: #2A1C12; --warnFg: #8A9098;
+  --errFg: #ED1C24; --codeBg: #15171A; --cardBg: #1E2126;
+  --pickedBg: #2A2E34; --onOk: #FFFAF4; --onAccent: #0C0C0C;
+  --chipInk: #742E46; --light: #fff; --glow-color: 210, 83, 128;
+  --scrim: rgba(12, 12, 12, 0.55);
+  --star: #F6E3C2; --starBg0: #0C0C0C; --starBg1: #050607;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+html { scrollbar-gutter: stable; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Safari keyboard: keep the page pinned so the visualViewport
+   * offset doesn't shift the whole site up. */
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+}
+#app {
+  display: flex; flex-direction: column;
+  height: 100vh; height: 100dvh; height: var(--app-height, 100dvh);
+  overflow: hidden;
+}
+/* welcome starfield backdrop: negative z-index keeps it below ALL app
+ * content (even non-positioned blocks like the topbar), above only the
+ * body canvas background; pointer-transparent so it never eats input */
+#stars-bg { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+
+/* topbar: quiet icon buttons + a subtle model picker */
+#topbar {
+  display: flex; align-items: center; gap: 4px;
+  padding: calc(6px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) 6px calc(8px + env(safe-area-inset-left));
+  background: var(--scrim); border-bottom: 1px solid var(--line);
+  flex: none;
+}
+#topbar button, #btn-progress {
+  width: 32px; height: 32px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 1px solid transparent; border-radius: 999px;
+  color: var(--dim); font-size: 15px; cursor: pointer; text-decoration: none;
+}
+#topbar button:hover, #btn-progress:hover { color: var(--fg); border-color: var(--line); }
+/* 44px touch targets without widening the crowded mobile topbar */
+#topbar button, #btn-progress { position: relative; }
+#topbar button::before, #btn-progress::before {
+  content: ""; position: absolute; inset: -6px;
+}
+#brand { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+#session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.dot { width: 6px; height: 6px; border-radius: 35%; flex: none; }
+.dot.off { background: var(--err); }
+.dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.dot.busy { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+#model-picker, #effort-picker {
+  max-width: 24vw; background: var(--panel); color: var(--dim);
+  border: 1px solid transparent; border-radius: 999px; padding: 5px; font-size: 13px;
+  flex: none;
+}
+/* Desktop dropdown rows: best-effort theming (mobile native pickers ignore page CSS). */
+#model-picker option, #effort-picker option, #approval-mode option {
+  background: var(--panel); color: var(--fg);
+}
+#model-picker:hover, #effort-picker:hover { color: var(--fg); border-color: var(--line); }
+#effort-picker { max-width: 18vw; }
+/* picker-row: transparent wrapper on desktop so the two selects lay out
+ * exactly as before (flex items of #topbar in the original order); on
+ * mobile it becomes a full-width second row below the topbar. */
+#picker-row { display: contents; }
+
+#layout { flex: 1; min-height: 0; display: flex; position: relative; }
+
+/* sessions sidebar / drawer */
+#sessions {
+  position: fixed; top: 0; left: 0; bottom: 0; width: min(84vw, 320px); z-index: 30;
+  background: var(--panel); border-right: 1px solid var(--line);
+  display: none; flex-direction: column;
+  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+#sessions.open { display: flex; }
+.vh { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.filter-box[hidden] { display: none; }
+.side-head { display: flex; gap: 6px; padding: 8px 10px 4px; align-items: center; }
+#session-filter {
+  flex: 1; background: var(--panel2); color: var(--fg);
+  border: 1px solid transparent; border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px;
+}
+#session-filter:focus { outline: none; border-color: var(--accent); }
+.side-head button { background: none; border: none; color: var(--fg); font-size: 15px; cursor: pointer; }
+.filter-box { position: relative; flex: 1; display: flex; min-width: 0; }
+.filter-box #session-filter { flex: 1; width: 100%; padding-right: 30px; }
+#btn-clear-filter {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  padding: 6px; min-width: 32px; min-height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+#session-filter::-webkit-search-cancel-button { display: none; }
+@media (pointer: coarse) { #btn-clear-filter { min-width: 44px; min-height: 44px; } }
+#btn-search-sessions {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; margin-left: auto; padding: 6px; border-radius: 8px; color: var(--dim); font-size: 14px;
+}
+#btn-search-sessions:hover { color: var(--fg); }
+#btn-search-sessions svg { display: block; }
+#btn-refresh-sessions {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; padding: 6px; border-radius: 8px; color: var(--dim); font-size: 14px;
+}
+#btn-refresh-sessions:hover { color: var(--fg); }
+#btn-refresh-sessions svg { display: block; }
+#btn-refresh-sessions.spin { opacity: .55; }
+#btn-refresh-sessions[aria-busy="true"] { opacity: .55; }
+#btn-refresh-sessions.spin svg { animation: sess-spin-once 0.65s cubic-bezier(0.34, 1.4, 0.64, 1); }
+@keyframes sess-spin-once { to { transform: rotate(360deg); } }
+#session-list { flex: 1; overflow-y: auto; padding: 2px 0 12px; }
+#selection-bar { padding: 4px 10px 0; }
+#selection-ticker {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12px; line-height: 1.2; cursor: pointer;
+}
+#selection-ticker[hidden] { display: none; }
+#selection-ticker:hover:not(:disabled) { border-color: var(--accent); }
+#selection-ticker:disabled { opacity: 0.45; cursor: default; }
+/* keep class selectors for backwards compat (tests + old bar) */
+.ticker { font: inherit; font-size: 12px; }
+.ticker:disabled { opacity: 0.45; cursor: default; }
+.ticker:hover:not(:disabled) { border-color: var(--accent); }
+/* checkbox below checkmark — theme-driven, based on provided HTML */
+.sess-icon-col { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; margin-top: 2px; }
+.sess-icon-col .checkbox {
+  position: relative;
+  display: none;
+  height: 1.6em;
+  width: 1.6em;
+  font-size: 12px;
+  border-radius: 0.55em;
+  background: var(--panel2);
+  box-shadow:
+    inset -1px 1px 4px 0px var(--light),
+    inset 1px -1px 4px 0px var(--accent),
+    -1px 1px 2px 0px var(--line);
+  cursor: pointer;
+  flex: none;
+}
+.session-row:hover .checkbox, .session-row:focus-within .checkbox, .checkbox.checked, .checkbox:has(input:checked) { display: block; }
+.checkbox input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.checkbox .inner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 1.15em;
+  width: 1.15em;
+  transform: translate(-50%, -50%);
+  border-radius: 0.4em;
+  background: var(--bg);
+  box-shadow:
+    inset -1px 1px 3px 0px var(--light),
+    inset 1px -1px 3px 0px var(--accent),
+    -1px 1px 2px 0px var(--line);
+  transition: box-shadow 200ms;
+}
+.checkbox input:checked ~ .inner {
+  box-shadow:
+    inset 1px -1px 3px 0px var(--light),
+    inset -1px 1px 3px 0px var(--accent);
+}
+.checkbox svg {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 1.15em;
+  width: 1.15em;
+  transform: translate(-50%, -50%);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.checkbox .icon-check { opacity: 0; }
+.checkbox .icon-cross { opacity: 0; }
+.checkbox input:checked ~ .icon-check { opacity: 1; }
+.checkbox input:checked ~ .icon-cross { opacity: 0; }
+.checkbox.checked { background: var(--select); }
+@media (prefers-reduced-motion: reduce) {
+  .checkbox .inner { transition: none; }
+}
+#btn-delete-selected[hidden] { display: none; }
+/* From Uiverse.io by philipo30 — animated trash */
+.delete-button {
+  position: relative;
+  padding: 0.2em;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1em;
+  transition: transform 0.2s ease;
+  flex: none;
+}
+#btn-delete-selected .trash-svg {
+  width: 1.33em;
+  height: 1.33em;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+  overflow: visible;
+}
+#btn-delete-selected #lid-group {
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.delete-button:hover #lid-group {
+  transform: rotate(-28deg) translateY(2px);
+}
+.delete-button:active #lid-group {
+  transform: rotate(-12deg) scale(0.98);
+}
+.delete-button:hover .trash-svg {
+  transform: scale(1.08) rotate(3deg);
+}
+.delete-button:active .trash-svg {
+  transform: scale(0.96) rotate(-1deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .delete-button, .trash-svg, #lid-group { transition: none; }
+  .delete-button:hover #lid-group, .delete-button:active #lid-group,
+  .delete-button:hover .trash-svg, .delete-button:active .trash-svg { transform: none; }
+}
+.sess-group {
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); padding: 12px 12px 4px; margin: 0;
+}
+.sess-group:first-child { padding-top: 6px; }
+.sess-toggle {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; font-size: inherit; font-weight: inherit;
+  letter-spacing: inherit; text-transform: inherit; color: inherit;
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+}
+.sess-toggle::after { content: "▸"; font-size: 10px; margin-left: auto; }
+.sess-toggle[aria-expanded="true"]::after { content: "▾"; }
+.session-row { position: relative; display: flex; align-items: flex-start; gap: 8px; padding: 9px 12px; border-radius: 0; cursor: default; }
+.session-row:hover, .session-row:focus-within { background: var(--panel2); }
+.session-row.active { background: var(--select); }
+.session-row.active .sess-icon { color: var(--accent); }
+.sess-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; margin-top: 3px; color: var(--faint); }
+.sess-icon.running { color: var(--ok); }
+.sess-icon.running svg { animation: sess-pulse 1.6s ease-in-out infinite; }
+@keyframes sess-pulse { 50% { opacity: .45; } }
+.sess-open {
+  flex: 1; min-width: 0; display: flex; gap: 8px; align-items: flex-start;
+  padding: 0; text-align: left;
+  background: none; border: none; border-radius: 6px; color: inherit;
+  font: inherit; cursor: pointer;
+}
+.sess-body { flex: 1; min-width: 0; }
+.sess-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-row .top.sess-line { display: flex; align-items: baseline; gap: 8px; }
+.session-count { font-size: 12px; color: var(--faint); padding: 6px 12px 2px; }
+.session-row .name { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-row .name.unnamed { font-family: var(--mono); font-weight: 500; font-size: 13px; color: var(--dim); }
+.sess-time { flex: none; margin-left: auto; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.session-row .meta.sess-preview { transition: margin-right .15s ease; }
+.session-row:hover .sess-preview, .session-row:focus-within .sess-preview { margin-right: 28px; }
+.session-row .meta.sess-preview { display: block; color: var(--dim); font-size: 12.5px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-empty { color: var(--dim); font-size: 13px; padding: 12px; }
+.config-btn {
+  position: absolute; right: 12px; bottom: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: 8px; color: var(--faint);
+  padding: 4px; cursor: pointer; opacity: 0; visibility: hidden;
+}
+.session-row:hover .config-btn, .session-row:focus-within .config-btn, .config-btn:focus-visible { opacity: 1; visibility: visible; }
+@media (hover: none) {
+  .config-btn { opacity: 1; visibility: visible; }
+  .session-row .sess-preview { margin-right: 28px; }
+}
+@media (pointer: coarse) {
+  .config-btn { opacity: 1; visibility: visible; }
+  .session-row .sess-preview { margin-right: 28px; }
+}
+.config-btn:hover { color: var(--fg); }
+.config-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.config-btn svg { display: block; transition: transform 600ms cubic-bezier(0.4, 0, 0.2, 1); }
+.config-btn .line {
+  fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 3;
+  transition: stroke-dasharray 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    stroke-dashoffset 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.config-btn .line-top-bottom { stroke-dasharray: 12 63; }
+.config-btn[aria-expanded="true"] svg { transform: rotate(-45deg); }
+.config-btn[aria-expanded="true"] .line-top-bottom { stroke-dasharray: 20 300; stroke-dashoffset: -32.42; }
+@media (prefers-reduced-motion: reduce) {
+  .session-row .meta.sess-preview { transition: none; }
+  .config-btn svg { transition: none; }
+  .config-btn .line { transition: none; }
+  .sess-icon.running svg { animation: none; }
+  #btn-refresh-sessions.spin svg { animation: none; }
+  #btn-settings.spin svg { animation: none; }
+}
+.row-menu {
+  position: absolute; top: calc(100% - 2px); right: 6px; z-index: 20;
+  min-width: 140px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+}
+.row-menu[hidden] { display: none; }
+.row-menu.flip { top: auto; bottom: calc(100% - 2px); }
+.row-menu { max-height: min(240px, 60vh); overflow-y: auto; }
+.row-opt {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: none; border-radius: 8px;
+  color: var(--fg); padding: 6px 12px; font-size: 13px;
+}
+.row-opt:hover { background: var(--panel2); }
+.row-opt:focus-visible { background: var(--panel2); outline: 2px solid var(--accent); outline-offset: -1px; }
+.row-opt.danger:hover, .row-opt.danger:focus-visible { color: var(--err); }
+#scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 25; }
+
+/* center column */
+#center { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+#notice {
+  margin: 8px 12px 0; padding: 8px 12px; border-radius: 999px; font-size: 13px;
+  background: var(--warnBg); border: 1px solid var(--warn); color: var(--warnFg);
+}
+#toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; row-gap: 6px; padding: 7px 12px; flex: none;
+  border-bottom: none; font-size: 12px;
+}
+/* welcome: centered composer, transcript opens on first message */
+#center.is-welcome { justify-content: center; }
+#center.is-welcome #toolbar,
+#center.is-welcome #terminal,
+#center.is-welcome #jump-latest { display: none; }
+#center.is-welcome #composer-wrap { border-top: none; background: none; padding: 0 16px; }
+#center.is-welcome #btn-stop { display: none; }
+#center.is-welcome #composer { max-width: 680px; }
+#center.is-welcome #hintbar { justify-content: center; }
+#toolbar .spacer { flex: 1; }
+#toolbar .dim, .chip.dim { color: var(--dim); }
+#btn-older {
+  background: none; border: 1px solid var(--line); color: var(--dim);
+  border-radius: 999px; padding: 2px 9px; font-size: 12px; cursor: pointer;
+}
+#btn-older:hover { color: var(--fg); border-color: var(--accent); }
+#btn-older:disabled { opacity: .4; cursor: default; }
+.chip {
+  padding: 1px 9px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line);
+}
+.chip.idle { color: var(--dim); }
+.chip.running { color: var(--chipInk); background: var(--light); border-color: var(--light); font-weight: 600; }
+#sess-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 38vw; }
+#cursor-chip { font-family: var(--mono); font-size: 11px; max-width: 22vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* transcript: edgeless, no left borders */
+#terminal {
+  flex: 1; overflow-y: auto; padding: 14px 16px 18px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6;
+  display: flex; flex-direction: column; gap: 10px;
+  border: none;
+}
+/* Bottom-anchored like a terminal: first lines print just above the
+   composer, history pushes up as new lines arrive, and the pane scrolls
+   once content exceeds the viewport. margin-top:auto (not
+   justify-content) keeps the top reachable when overflowing. */
+#terminal > :first-child { margin-top: auto; }
+.tline { display: flex; gap: 10px; padding: 2px 0; border: none; background: none; scroll-margin: 8px; }
+.tline .gut { display: none; }
+.tline .body { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+.tline .head { font-size: 11px; color: var(--faint); margin-bottom: 2px; }
+.tline.user { justify-content: flex-end; }
+.tline.user .body {
+  flex: 0 1 auto; max-width: 50%;
+  display: flex; flex-direction: column; align-items: flex-end;
+  background: none; border: none; padding: 0;
+}
+.tline.user .txt {
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 14px;
+  border-top-right-radius: 4px;
+  padding: 8px 12px; max-width: 100%;
+  line-height: 1.5; overflow-wrap: break-word;
+}
+.tline.user .head { order: 2; margin-top: 3px; }
+.tline.agent { background: none; border: none; }
+.tline.tool { color: var(--dim); font-size: 12.5px; font-family: var(--mono); border: none; background: none; }
+.tline.system { color: var(--faint); font-style: italic; font-size: 12.5px; }
+.tline.thinking { color: var(--dim); font-size: 13px; }
+.tline.thinking .body { white-space: pre-wrap; }
+/* Looping bold wave sweeping through the thinking text. */
+.tline.thinking .wv {
+  display: inline-block;
+  animation: think-wave 1.4s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.08s);
+}
+@keyframes think-wave {
+  0%, 100% { font-weight: 400; }
+  50% { font-weight: 700; }
+}
+/* Three-body generation spinner (Uiverse.io by dovatgabriel),
+   themed to the app accent; sized to the thinking row. */
+.three-body {
+  --uib-size: 26px;
+  --uib-speed: 0.8s;
+  --uib-color: #6ea8fe; --uib-color: var(--accent);
+  position: relative;
+  display: inline-block;
+  height: var(--uib-size);
+  width: var(--uib-size);
+  flex: none; align-self: center; margin-right: 8px;
+  animation: spin78236 calc(var(--uib-speed) * 2.5) infinite linear;
+}
+.three-body__dot {
+  position: absolute;
+  height: 100%;
+  width: 30%;
+}
+.three-body__dot:after {
+  content: '';
+  position: absolute;
+  height: 0%;
+  width: 100%;
+  padding-bottom: 100%;
+  background-color: var(--uib-color);
+  border-radius: 50%;
+}
+.three-body__dot:nth-child(1) {
+  bottom: 5%;
+  left: 0;
+  transform: rotate(60deg);
+  transform-origin: 50% 85%;
+}
+.three-body__dot:nth-child(1)::after {
+  bottom: 0;
+  left: 0;
+  animation: wobble1 var(--uib-speed) infinite ease-in-out;
+  animation-delay: calc(var(--uib-speed) * -0.3);
+}
+.three-body__dot:nth-child(2) {
+  bottom: 5%;
+  right: 0;
+  transform: rotate(-60deg);
+  transform-origin: 50% 85%;
+}
+.three-body__dot:nth-child(2)::after {
+  bottom: 0;
+  left: 0;
+  animation: wobble1 var(--uib-speed) infinite
+    calc(var(--uib-speed) * -0.15) ease-in-out;
+}
+.three-body__dot:nth-child(3) {
+  bottom: -5%;
+  left: 0;
+  transform: translateX(116.666%);
+}
+.three-body__dot:nth-child(3)::after {
+  top: 0;
+  left: 0;
+  animation: wobble2 var(--uib-speed) infinite ease-in-out;
+}
+@keyframes spin78236 {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes wobble1 {
+  0%, 100% {
+    transform: translateY(0%) scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-66%) scale(0.65);
+    opacity: 0.8;
+  }
+}
+@keyframes wobble2 {
+  0%, 100% {
+    transform: translateY(0%) scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(66%) scale(0.65);
+    opacity: 0.8;
+  }
+}
+.tline.error { border: none; color: var(--errFg); }
+.tline.streaming { border: none; }
+@keyframes blink { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) {
+  .tline.streaming .gut, .tline .caret { animation: none; }
+  .tline.thinking .wv { animation: none; }
+  .three-body, .three-body__dot::after { animation: none; }
+}
+.tline details { margin-top: 4px; }
+.tline summary { cursor: pointer; color: var(--faint); font-size: 11px; }
+/* Consecutive same-tool runs collapse into one expandable group row. */
+.tool-group {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 3px 10px 5px; margin: 4px 0;
+}
+.tool-group-head {
+  cursor: pointer; color: var(--dim);
+  font-family: var(--mono); font-size: 12.5px;
+  list-style: none;
+}
+.tool-group-head::-webkit-details-marker { display: none; }
+.tool-group-head::before { content: "▸ "; color: var(--faint); }
+.tool-group details[open] > .tool-group-head::before { content: "▾ "; }
+.tool-group-items { display: flex; flex-direction: column; }
+.tool-group-items .tline.tool { padding: 4px 0; border-top: 1px solid var(--line); }
+.tool-group-items .tline.tool:first-child { border-top: none; }
+/* Failed rows stay loud: tinted row, group, and turn head; failed
+ * groups force themselves open (see refreshToolGroup). */
+.tline.tool[data-failed="1"] { color: var(--errFg); }
+.tool-group[data-failed="1"] { border-color: var(--err); }
+.tool-group[data-failed="1"] > details > .tool-group-head { color: var(--errFg); }
+/* Turn rollup: a borderless section (not a card) with a one-line head
+ * that collapses the whole turn. */
+.turn-block { margin: 2px 0; }
+.turn-block.collapsed > .turn-items { display: none; }
+.turn-head {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; padding: 2px 0;
+  font-family: var(--mono); font-size: 11.5px; color: var(--faint);
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.turn-head::before { content: "▾ "; }
+.turn-block.collapsed > .turn-head::before { content: "▸ "; }
+.turn-head.failed { color: var(--errFg); }
+/* Long-output toggle inside tool rows. */
+.out-toggle {
+  display: block; margin-top: 4px; padding: 0;
+  background: none; border: none; cursor: pointer;
+  color: var(--faint); font-size: 11px; font-family: inherit;
+}
+.out-toggle:hover { color: var(--accent); }
+/* Transcript filter chips in the toolbar. */
+#tx-filters { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 2px; }
+#tx-filters button {
+  background: none; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--dim); font-size: 12px; padding: 2px 10px; cursor: pointer;
+}
+#tx-filters button[aria-pressed="true"] { color: var(--fg); border-color: var(--accent); }
+.tline pre.raw {
+  margin: 5px 0 0; padding: 7px 9px; background: var(--codeBg); border: 1px solid var(--line);
+  border-radius: 10px; overflow-x: auto; font-size: 11.5px; color: var(--dim);
+  white-space: pre; max-height: 260px; overflow-y: auto;
+}
+.tline .caret { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; animation: blink 1s infinite; }
+/* markdown-rendered transcript bodies (agent/user, completed items) */
+.tline .txt.md { white-space: normal; }
+.tline .txt.md p { margin: 0 0 6px; }
+.tline .txt.md p:last-child { margin-bottom: 0; }
+.tline .txt.md h1, .tline .txt.md h2, .tline .txt.md h3,
+.tline .txt.md h4, .tline .txt.md h5, .tline .txt.md h6 {
+  margin: 8px 0 4px; line-height: 1.3; font-size: 13.5px;
+}
+.tline .txt.md h1 { font-size: 15px; }
+.tline .txt.md h1:first-child, .tline .txt.md h2:first-child,
+.tline .txt.md p:first-child { margin-top: 0; }
+.tline .txt.md ul, .tline .txt.md ol { margin: 4px 0 8px; padding-left: 22px; }
+.tline .txt.md li { margin: 1px 0; }
+.tline .txt.md li::marker { color: var(--faint); }
+.tline .txt.md code {
+  font-family: var(--mono); font-size: .92em;
+  background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 999px;
+}
+.tline .txt.md pre {
+  margin: 6px 0; padding: 7px 9px; background: var(--codeBg);
+  border: 1px solid var(--line); border-radius: 10px;
+  overflow-x: auto; font-size: 11.5px;
+}
+.tline .txt.md pre code { background: none; padding: 0; }
+/* fenced-block wrapper owns the copy button so it stays top-right even
+ * when the block itself scrolls horizontally */
+.tline .txt.md .code-wrap { position: relative; }
+.copy-btn {
+  position: absolute; top: 6px; right: 6px;
+  width: 28px; height: 28px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: 8px;
+  color: #fff; color: var(--light); opacity: .65; cursor: pointer;
+}
+.copy-btn:hover { opacity: 1; background: rgba(255, 255, 255, .08); }
+.copy-btn:focus-visible { outline: none; border-color: var(--accent); opacity: 1; }
+.copy-btn svg { width: 14px; height: 14px; }
+@media (prefers-reduced-motion: no-preference) {
+  .copy-btn.pop svg { animation: copy-pop .25s ease; }
+}
+@keyframes copy-pop {
+  0% { transform: scale(.4); opacity: .4; filter: blur(4px); }
+  100% { transform: scale(1); opacity: 1; filter: blur(0); }
+}
+.tline .txt.md blockquote {
+  margin: 4px 0 8px; padding: 2px 10px;
+  border-left: 2px solid var(--line); color: var(--dim);
+}
+.tline .txt.md a { color: var(--accent); }
+.tline .txt.md hr { border: none; border-top: 1px solid var(--line); margin: 8px 0; }
+.tline .txt.md table {
+  border-collapse: collapse; margin: 6px 0; font-size: 12.5px;
+  display: block; overflow-x: auto;
+}
+.tline .txt.md th, .tline .txt.md td { border: 1px solid var(--line); padding: 4px 8px; }
+.tline .txt.md th { background: var(--panel2); }
+.tline .txt.md del { color: var(--dim); }
+#jump-latest {
+  position: sticky; align-self: center; margin-top: -38px; z-index: 5;
+  border-radius: 999px; border: 1px solid var(--accent); background: var(--panel);
+  color: var(--accent); padding: 4px 14px; cursor: pointer; font-size: 12px;
+}
+
+/* approval / input cards */
+#cards { display: flex; flex-direction: column; gap: 8px; padding: 0 12px; max-height: 32vh; overflow-y: auto; flex: none; }
+#cards:empty { padding: 0; }
+.card {
+  border: 1px solid var(--warn); border-radius: 14px; padding: 10px 12px;
+  background: var(--cardBg); font-size: 13px; font-family: system-ui, sans-serif;
+}
+.card h4 { margin: 0 0 5px; font-size: 13.5px; }
+.card pre { margin: 4px 0; font-size: 11.5px; color: var(--dim); overflow-x: auto; max-height: 140px; }
+.card .choices { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+.card button { padding: 6px 13px; border-radius: 999px; border: 1px solid var(--line); cursor: pointer; font-size: 13px; }
+.card button.allow { background: var(--ok); color: var(--onOk); border: none; font-weight: 600; }
+.card button.deny { background: none; color: var(--err); border-color: var(--err); }
+.card input[type="text"] {
+  width: 100%; margin-top: 5px; padding: 7px 9px; border-radius: 999px;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line); font: inherit; font-size: 13px;
+}
+.card .q { margin-top: 7px; font-weight: 600; }
+.card .qhead { margin-top: 9px; font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .04em; }
+.card .opts { display: flex; flex-direction: column; gap: 6px; margin-top: 5px; }
+.card .opts:empty { display: none; }
+.card .opt {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); color: var(--fg); font-size: 13px; font-family: inherit;
+}
+.card .opt:hover { border-color: var(--accent); }
+.card .opt.picked { border-color: var(--accent); background: var(--pickedBg); }
+.card .opt .o-label { display: block; font-weight: 600; }
+.card .opt .o-desc { display: block; color: var(--dim); font-size: 12px; margin-top: 1px; }
+.custom-row { display: flex; gap: 6px; margin-top: 6px; }
+.custom-row input { min-width: 0; flex: 1; }
+.custom-row button { flex: none; }
+.card button.submit:not(.armed) { opacity: .45; }
+
+/* composer: rounded pill, centered, icon buttons */
+#composer-wrap { flex: none; border-top: none; background: none; position: relative; }
+#composer {
+  display: flex; gap: 8px; align-items: flex-end;
+  width: min(760px, 100%); margin: 0 auto; padding: 10px 12px 6px;
+}
+#composer:focus-within { outline: none; }
+#input {
+  flex: 1; resize: none; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--fg); padding: 14px 22px; font: inherit; font-size: 14px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-height: 30vh; line-height: 1.45;
+  transition: box-shadow .4s ease, border-color .4s ease;
+  overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none;
+}
+#input::-webkit-scrollbar { display: none; }
+#input:focus { outline: none; border-color: var(--accent); }
+/* Frozen at the single-line pill's curvature (~half its height) so
+ * the corners stop growing into the text as the box gets taller. */
+#input.multiline { border-radius: 25px; }
+/* idle glow: orb-style aura on the composer while no turn runs */
+#input.idle-glow {
+  --glow-color: 110, 168, 254;
+  border-color: rgba(var(--glow-color), .45);
+  box-shadow:
+    inset 0 0 12px 1px rgba(var(--glow-color), .12),
+    0 0 22px 1px rgba(var(--glow-color), .22);
+}
+#input.idle-glow:focus {
+  border-color: rgba(var(--glow-color), .7);
+  box-shadow:
+    inset 0 0 14px 2px rgba(var(--glow-color), .18),
+    0 0 32px 4px rgba(var(--glow-color), .32);
+}
+@media (prefers-reduced-motion: no-preference) {
+  #input.idle-glow { animation: input-breathe 4s ease-in-out infinite; }
+}
+@keyframes input-breathe {
+  50% {
+    box-shadow:
+      inset 0 0 12px 1px rgba(var(--glow-color), .12),
+      0 0 30px 4px rgba(var(--glow-color), .3);
+  }
+}
+.composer-btns { display: flex; flex-direction: row; align-items: center; gap: 8px; padding-bottom: 2px; }
+.composer-btns button {
+  width: 38px; height: 38px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border-radius: 50%; border: 1px solid transparent; cursor: pointer; font-size: 16px; line-height: 1;
+}
+#btn-send { background: var(--fg); color: var(--bg); font-weight: 700; }
+#btn-send:hover { background: var(--light); }
+#btn-stop { background: var(--fg); border-color: transparent; color: var(--bg); }
+#btn-stop svg { display: block; }
+#btn-stop:not(:disabled):hover { background: var(--light); }
+#btn-stop:disabled { opacity: .4; cursor: default; }
+#hintbar {
+  display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px;
+  color: var(--dim); padding: 3px 12px calc(7px + env(safe-area-inset-bottom));
+  overflow: hidden; white-space: nowrap;
+}
+#hintbar span { overflow: hidden; text-overflow: ellipsis; }
+
+/* workflow panel: collapsible run/plan progress below the composer.
+ * Quiet by design (theme tokens only): a header row carrying overall
+ * progress (counts + bar), a run-setup row (status pill + definition,
+ * run id, trigger, start, elapsed), plus a step list. Hidden until the first
+ * published workflow/todo event lands. */
+#workflow-panel { width: min(760px, 100%); margin: 0 auto; padding: 0 12px 4px; font-size: 13px; }
+#workflow-panel[hidden] { display: none; }
+#workflow-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; border-radius: 6px; padding: 4px 10px;
+  color: var(--dim); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left;
+}
+#workflow-head:hover { color: var(--fg); }
+#workflow-caret { color: var(--faint); flex: none; width: 1em; }
+#workflow-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#workflow-count { color: var(--faint); white-space: nowrap; }
+#workflow-panel:not(.open) #workflow-body { display: none; }
+#workflow-body {
+  margin: 2px 0 0; padding: 2px 10px 2px 26px; max-height: 22vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 1px; overscroll-behavior-y: contain;
+}
+.wf-step { display: flex; gap: 8px; align-items: baseline; color: var(--dim); }
+.wf-step .g { flex: none; width: 1.1em; text-align: center; }
+.wf-step .t { overflow-wrap: break-word; min-width: 0; }
+.wf-step .s { color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+.wf-step.wf-done { color: var(--dim); }
+.wf-step.wf-done .g { color: var(--ok); }
+.wf-step.wf-active { color: var(--fg); }
+.wf-step.wf-active .g { color: var(--accent); }
+.wf-step.wf-failed .g { color: var(--errFg); }
+.wf-step.wf-cancelled { text-decoration: line-through; }
+.wf-step.wf-cancelled .g { text-decoration: none; }
+/* Per-step live detail in the transcript details-group idiom: the
+ * summary keeps the glyph+label row (▸/▾ marker), the body carries
+ * status text, timestamps, and the step's streamed output. */
+.wf-step .wf-detail { flex: 1; min-width: 0; }
+.wf-sum { display: flex; gap: 8px; align-items: baseline; cursor: pointer; list-style: none; }
+.wf-sum::-webkit-details-marker { display: none; }
+.wf-sum::before { content: "▸ "; color: var(--faint); flex: none; }
+.wf-detail[open] > .wf-sum::before { content: "▾ "; }
+.wf-step.wf-failed .wf-sum { color: var(--errFg); }
+.wf-info {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 2px 0 3px 1.4em; font-size: 11.5px; color: var(--faint);
+}
+.wf-info .wf-line { overflow-wrap: break-word; }
+.wf-log {
+  margin: 3px 0 0; padding: 6px 8px;
+  background: var(--codeBg); border: 1px solid var(--line); border-radius: 8px;
+  font-size: 11.5px; color: var(--dim);
+  white-space: pre; overflow: auto; max-height: 160px;
+}
+#workflow-meta {
+  display: flex; align-items: center; gap: 8px; padding: 1px 10px 0 26px;
+  font-size: 11.5px; color: var(--faint);
+  overflow: hidden; white-space: nowrap;
+}
+#workflow-meta[hidden] { display: none; }
+#workflow-meta [hidden] { display: none; }
+.wf-pill {
+  flex: none; padding: 0 8px; border-radius: 999px;
+  border: 1px solid var(--line); font-size: 11px; line-height: 1.7;
+}
+.wf-pill.wf-done { color: var(--ok); border-color: var(--ok); }
+.wf-pill.wf-active { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.wf-pill.wf-failed { color: var(--errFg); border-color: var(--errFg); }
+.wf-pill.wf-cancelled { color: var(--faint); }
+.wf-pill.wf-pending { color: var(--dim); }
+.wf-meta { overflow: hidden; text-overflow: ellipsis; flex: none; }
+#workflow-runid { font-family: var(--mono); }
+#workflow-def { font-family: var(--mono); max-width: 240px; }
+#workflow-elapsed { margin-left: auto; }
+/* Run-level annotations rollup: failure lines aggregated above the
+ * step list. Outside #workflow-body so the collapse rule leaves it
+ * visible with the meta row. */
+#workflow-annotations {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 1px 10px 0 26px; font-size: 11.5px;
+  max-height: 12vh; overflow-y: auto;
+}
+#workflow-annotations[hidden] { display: none; }
+.wf-ann-head { color: var(--errFg); font-weight: 600; white-space: nowrap; }
+.wf-ann { color: var(--dim); overflow-wrap: break-word; }
+
+/* slash popup: overlay floating above the composer (anchored to the
+   positioned #composer-wrap) so opening the preview never moves the input
+   box; always opaque, since it floats over the transcript instead of
+   pushing it up. '/' text aligns above input text via the left padding. */
+#slash-popup {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 5;
+  width: min(760px, 100%); box-sizing: border-box;
+  margin: 0 auto; padding: 6px 12px 6px 35px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+  max-height: 240px; overflow-y: auto;
+}
+#center.is-welcome #slash-popup { width: min(680px, 100%); }
+.slash-item { padding: 3px 0; cursor: pointer; display: flex; gap: 10px; font-size: 13px; background: none; min-width: 0; }
+.slash-item .cmd { font-family: var(--mono); color: var(--dim); font-weight: 400; flex: none; min-width: 96px; white-space: pre; }
+.slash-item .desc { color: var(--faint); flex: 1; min-width: 0; overflow-wrap: break-word; }
+.slash-item.sel { background: none; }
+.slash-item.sel .cmd { color: var(--fg); font-weight: 700; }
+.slash-item.sel .desc { color: var(--dim); }
+
+/* inspector */
+#inspector {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(84vw, 320px); z-index: 30;
+  background: var(--panel); border-left: 1px solid var(--line);
+  display: none; flex-direction: column;
+  padding-top: env(safe-area-inset-top); padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+#inspector.open { display: flex; }
+.tabs { display: flex; border-bottom: 1px solid var(--line); flex: none; }
+.tab { flex: 1; background: none; border: none; color: var(--dim); padding: 10px 4px; cursor: pointer; font-size: 13px; }
+.tab.active { color: var(--fg); border-bottom: 2px solid var(--accent); }
+#btn-close-inspector {
+  display: none; background: none; border: none; color: var(--dim);
+  padding: 10px 12px; cursor: pointer; font-size: 14px; flex: none;
+}
+.tabpanel { flex: 1; overflow-y: auto; padding: 10px; font-size: 13px; }
+#inspector .card { margin-bottom: 8px; }
+.tool-row { border: 1px solid var(--line); border-radius: 10px; padding: 7px 9px; margin-bottom: 7px; font-family: var(--mono); font-size: 12px; }
+.tool-row .t { color: var(--warn); font-weight: 700; }
+.tool-row .s { color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: hidden; }
+#tab-session label { display: block; margin-bottom: 10px; font-size: 12px; color: var(--dim); }
+/* Session info keeps only a pointer to the approval control. */
+.approval-ref {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  margin-bottom: 10px; font-size: 12px; color: var(--dim);
+}
+.approval-ref strong { color: var(--fg); font-weight: 600; }
+#btn-approval-settings {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--accent); font-size: 12px;
+  white-space: nowrap; flex: none;
+}
+#btn-approval-settings:hover { color: var(--fg); text-decoration: underline; }
+#approval-mode { display: block; width: 100%; margin-top: 4px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 999px; padding: 6px; }
+.approval-warn {
+  margin: 0 0 10px; padding: 7px 9px; border-radius: 10px; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--fg);
+}
+.approval-warn p { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 8px; }
+.approval-warn svg { flex: none; color: var(--warn); margin-top: 1px; }
+.approval-warn .row-btns { margin-bottom: 0; }
+#approval-confirm-yes {
+  background: none; color: var(--err); border-color: var(--err);
+  font-weight: 700;
+}
+.row-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.row-btns button {
+  flex: 1; padding: 6px 4px; border-radius: 999px; cursor: pointer; font-size: 12px;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line); white-space: nowrap;
+}
+pre.detail { font-family: var(--mono); font-size: 11px; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
+
+/* settings panel: centered overlay window (dir-dialog idiom) — a
+ * lightweight grouped window with a segmented group nav up top, one
+ * quiet label-plus-control row per setting. Future groups need no CSS:
+ * they reuse .setting-row and the nav pills. */
+#settings {
+  position: fixed; inset: 0; z-index: 60;
+  display: none; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(0,0,0,.55);
+}
+#settings.open { display: flex; }
+.settings-box {
+  width: min(480px, 100%); max-height: min(70vh, 600px);
+  display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+  padding: 4px 4px 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+}
+.settings-head { display: flex; align-items: center; gap: 8px; padding: 10px 6px 8px 12px; flex: none; }
+.settings-head strong { flex: 1; font-size: 13px; }
+#btn-close-settings {
+  display: block; background: none; border: none; color: var(--dim);
+  padding: 10px 12px; cursor: pointer; font-size: 14px; flex: none;
+}
+#btn-close-settings:hover { color: var(--fg); }
+/* Pressed gear reads active while its panel is open. */
+#btn-settings[aria-pressed="true"] { color: var(--fg); border-color: var(--line); }
+#topbar #btn-settings { font-size: 16px; }
+#topbar #btn-settings svg { display: block; width: 16px; height: 16px; }
+/* One-shot 360° on every press: same effect/keyframes as the session refresh. */
+#btn-settings.spin svg { animation: sess-spin-once 0.65s cubic-bezier(0.34, 1.4, 0.64, 1); }
+#settings-nav {
+  display: flex; gap: 6px; padding: 0 10px 8px; flex: none;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto; scrollbar-width: thin;
+}
+#settings-nav button {
+  flex: 1 0 auto; min-width: max-content; max-width: 220px;
+  background: none; border: 1px solid transparent; border-radius: 999px;
+  color: var(--dim); padding: 6px 12px; font: inherit; font-size: 12.5px; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#settings-nav button:hover { color: var(--fg); }
+#settings-nav button.active { color: var(--fg); background: var(--panel2); border-color: var(--line); font-weight: 600; }
+.settings-body { flex: 1; overflow-y: auto; padding: 4px 12px 12px; }
+.settings-body:focus { outline: none; }
+.settings-body:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.setting-row { display: flex; gap: 10px; row-gap: 8px; flex-wrap: wrap; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.setting-row:last-child { border-bottom: none; }
+.setting-label { flex: 1; min-width: min(160px, 100%); }
+.setting-title { font-size: 13px; font-weight: 600; }
+.setting-desc { font-size: 12px; color: var(--dim); margin-top: 2px; }
+.setting-control { flex: none; display: flex; align-items: center; margin-left: auto; max-width: 100%; }
+.setting-error { padding: 12px 4px; font-size: 13px; color: var(--errFg); }
+.setting-select {
+  max-width: min(260px, 55vw); background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 8px; font-size: 13px;
+}
+.setting-select:focus { outline: none; border-color: var(--accent); }
+/* switch in the stars-toggle idiom, but in-flow (no fixed position) */
+.setting-toggle {
+  width: 34px; height: 20px; padding: 0 1px; flex: none;
+  display: flex; align-items: center; justify-content: flex-start;
+  border-radius: 999px; border: 1px solid transparent;
+  background: var(--line); cursor: pointer; outline: none;
+}
+.setting-toggle[aria-checked="true"] { background: var(--accent); justify-content: flex-end; }
+.setting-toggle:hover { border-color: var(--faint); }
+.setting-toggle:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--glow-color), .3); }
+.setting-toggle .setting-thumb {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  background: var(--light); pointer-events: none;
+}
+.setting-checkbox {
+  width: 16px; height: 16px; flex: none; margin: 2px;
+  accent-color: var(--accent); cursor: pointer;
+}
+
+/* directory explorer dialog */
+#dir-dialog {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+#dir-dialog[hidden] { display: none; }
+.dir-box {
+  width: min(560px, 100%); max-height: min(76vh, 640px);
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+  padding: 12px;
+}
+.dir-head { display: flex; align-items: center; gap: 8px; }
+.dir-head strong { flex: 1; font-size: 14px; }
+.dir-head button { background: none; border: none; color: var(--fg); font-size: 15px; cursor: pointer; }
+.dir-pathrow { display: flex; gap: 6px; }
+#dir-path {
+  flex: 1; min-width: 0; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 7px 9px;
+  font-family: var(--mono); font-size: 13px;
+}
+#dir-path:focus { outline: none; border-color: var(--accent); }
+.dir-pathrow button, .dir-navrow button, .dir-foot button {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; flex: none;
+}
+.dir-pathrow button:hover, .dir-navrow button:hover, .dir-foot button:hover { border-color: var(--accent); }
+.dir-error { color: var(--errFg); font-size: 12.5px; }
+.dir-navrow { display: flex; flex-wrap: wrap; gap: 6px; }
+.dir-crumbs { display: flex; gap: 2px; flex-wrap: wrap; font-size: 12.5px; }
+.dir-crumbs button {
+  background: none; border: none; color: var(--dim); cursor: pointer;
+  padding: 2px 4px; font-size: 12.5px; font-family: var(--mono);
+}
+.dir-crumbs button:hover { color: var(--accent); }
+.dir-crumbs button.cur { color: var(--fg); font-weight: 700; }
+.dir-crumbs .sep { color: var(--faint); }
+.dir-list {
+  flex: 1; min-height: 180px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+}
+.dir-row {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: none; border-bottom: 1px solid var(--line);
+  color: var(--fg); padding: 7px 10px; font-size: 13px; font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dir-row:last-child { border-bottom: none; }
+.dir-row:hover { background: var(--panel2); }
+.dir-row.isdir { color: var(--fg); }
+.dir-row.isfile { color: var(--faint); cursor: default; }
+.dir-row .tail { color: var(--faint); }
+.dir-empty { padding: 12px; color: var(--dim); font-size: 13px; }
+.dir-foot { display: flex; flex-wrap: wrap; gap: 8px; row-gap: 6px; align-items: center; }
+.dir-foot .spacer { flex: 1; }
+.dir-foot .primary { background: var(--accent); color: var(--onAccent); border: none; font-weight: 700; }
+
+/* starfield toggle: small bottom-right switch (32x20 track, 16px thumb,
+ * 19px pressed width, focus ring) after the animate-ui Switch pattern */
+#stars-toggle {
+  position: fixed; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 40;
+  width: 32px; height: 20px; padding: 0 1px; flex: none;
+  display: flex; align-items: center; justify-content: flex-start;
+  border-radius: 999px; border: 1px solid transparent;
+  background: var(--line); cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  outline: none;
+}
+#stars-toggle[aria-checked="true"] { background: var(--accent); justify-content: flex-end; }
+#stars-toggle:hover { border-color: var(--faint); }
+#stars-toggle:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--glow-color), .3); }
+#stars-toggle .stars-thumb {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  background: var(--light); pointer-events: none;
+  transition: width .15s ease;
+}
+#stars-toggle:active .stars-thumb { width: 19px; }
+@media (prefers-reduced-motion: reduce) {
+  #stars-toggle .stars-thumb { transition: none; }
+}
+/* mobile: the floating corner switch crowds the composer send/stop
+ * buttons, so narrow screens dock it into the hintbar status row
+ * instead (see placeStarsToggle): in-flow, spaced by the row gap.
+ * Desktop keeps the corner. */
+@media (max-width: 899px) {
+  #hintbar #stars-toggle {
+    position: relative; right: auto; bottom: auto; z-index: auto;
+    align-self: center;
+  }
+  /* 44x40 touch target without moving the 32x20 switch */
+  #hintbar #stars-toggle::before {
+    content: ""; position: absolute; inset: -10px -6px;
+  }
+}
+
+/* toast */
+#toast {
+  position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+  background: var(--panel2); border: 1px solid var(--accent); color: var(--fg);
+  padding: 8px 16px; border-radius: 999px; font-size: 13px; z-index: 50; max-width: 88vw;
+}
+#toast.err { border-color: var(--err); }
+
+/* keyboard focus: one shared ring (same 2px idiom as
+ * .sess-open/.config-btn/.row-opt) for every control that previously
+ * had only :hover styling, so keyboard users get the themed ring
+ * instead of the browser default; mouse users see no change.
+ * The ring uses --focus, not --accent: accent fails 3:1 on the
+ * default theme's light surfaces (1.5-2.3:1), while --focus is
+ * verified >= 3:1 per theme (see tests/test_focus_rings.py). */
+#topbar button:focus-visible, #btn-progress:focus-visible,
+#model-picker:focus-visible, #effort-picker:focus-visible,
+.side-head button:focus-visible, .sess-toggle:focus-visible,
+#btn-older:focus-visible, #tx-filters button:focus-visible,
+#jump-latest:focus-visible, .tab:focus-visible,
+#btn-close-inspector:focus-visible, #btn-settings:focus-visible,
+#btn-close-settings:focus-visible, #settings-nav button:focus-visible,
+.setting-toggle:focus-visible, .setting-select:focus-visible, .setting-checkbox:focus-visible,
+#approval-mode:focus-visible,
+.card button:focus-visible, .card .opt:focus-visible,
+.row-btns button:focus-visible,
+.repo-pill:focus-visible, .repo-opt:focus-visible,
+.composer-btns button:focus-visible, #selection-ticker:focus-visible,
+#workflow-head:focus-visible, .wf-sum:focus-visible,
+.out-toggle:focus-visible,
+.dir-head button:focus-visible, .dir-pathrow button:focus-visible,
+.dir-navrow button:focus-visible, .dir-crumbs button:focus-visible,
+.dir-row:focus-visible, .dir-foot button:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 1px;
+}
+
+/* touch: no double-tap zoom delay, no scroll chaining out of panes */
+button, select, input, textarea, .session-row, .slash-item, .card .opt, .tab,
+#settings-nav button, .setting-toggle, .setting-select, .setting-checkbox {
+  touch-action: manipulation;
+}
+#terminal, #session-list, .tabpanel, .settings-body, #slash-popup, #cards {
+  overscroll-behavior-y: contain;
+}
+
+/* mobile */
+@media (max-width: 899px) {
+  /* 16px inputs: iOS Safari zooms on focus below this. */
+  #input, #session-filter, .card input[type="text"], #model-picker, #effort-picker, #dir-path, #approval-mode, .setting-select { font-size: 16px; }
+  .composer-btns button { width: 44px; height: 44px; }
+  .row-opt { padding: 8px 14px; }
+  #btn-older { padding: 6px 12px; font-size: 13px; }
+  #btn-close-inspector { display: block; }
+  #btn-close-settings { display: block; }
+  #slash-popup { width: 100%; max-height: 38vh; }
+}
+/* narrow phones: declutter the topbar and toolbar */
+@media (max-width: 560px) {
+  #topbar { gap: 2px; padding: calc(6px + env(safe-area-inset-top)) calc(6px + env(safe-area-inset-right)) 6px calc(6px + env(safe-area-inset-left)); }
+  .tline.user .body { max-width: 85%; }
+  /* static, tighter glow: no bloom or motion on small screens */
+  #input.idle-glow {
+    animation: none;
+    box-shadow:
+      inset 0 0 10px 1px rgba(var(--glow-color), .12),
+      0 0 14px 1px rgba(var(--glow-color), .2);
+  }
+  #btn-progress { display: none; }
+  #model-picker { max-width: 26vw; }
+  #effort-picker { max-width: 22vw; }
+  #sess-meta { display: none; }
+  #cursor-chip { max-width: 30vw; }
+  /* narrow phones: slash rows stack (usage above, description below) —
+   * the padded usage column no longer fits beside the description. */
+  .slash-item { flex-direction: column; gap: 2px; padding: 6px 0; }
+  .slash-item .cmd { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+}
+/* mobile: effort + model pickers leave the crowded topbar for a full-width
+ * second row below, freeing the first row for the title and icon buttons. */
+@media (max-width: 899px) {
+  #topbar { flex-wrap: wrap; row-gap: 6px; }
+  #picker-row {
+    display: flex; gap: 8px; flex: 1 1 100%; order: 10;
+    min-width: 0; padding: 0 2px 2px;
+  }
+  #picker-row #effort-picker, #picker-row #model-picker {
+    flex: 1 1 0; min-width: 0; max-width: none;
+    padding: 7px 10px;
+  }
+}
+
+/* desktop: persistent side panels */
+@media (min-width: 900px) {
+  #btn-close-sessions, #scrim { display: none !important; }
+  #sessions { position: static; width: 264px; flex: none; border-right: 1px solid var(--line); }
+  #center { max-width: 880px; margin: 0 auto; width: 100%; border: none; }
+  #inspector { position: static; width: 264px; flex: none; }
+  #inspector.open { display: flex; }
+  #terminal { padding: 16px 20px 20px; }
+  /* Star-mode translucency is a desktop treat: phones stay opaque so the
+   * transcript never bleeds through the drawers. */
+  body.stars-on #sessions, body.stars-on #inspector { background: var(--scrim); }
+}
+@media (min-width: 1300px) {
+  #center { max-width: 980px; }
+}
+
+/* composer repo/branch pills: small fully-rounded selectors above the input */
+#repo-bar {
+  display: flex; flex-wrap: wrap; gap: 8px; row-gap: 6px; align-items: center;
+  width: min(760px, 100%); margin: 0 auto; padding: 8px 12px 0;
+}
+#repo-bar[hidden] { display: none; }
+#center.is-welcome #repo-bar { width: min(680px, 100%); }
+.pill-wrap { position: relative; flex: none; }
+.pill-wrap[hidden] { display: none; }
+/* Pearl repo pill (Uiverse marcelodolza), base colors mapped to the
+ * theme scheme: surface var(--panel), ink var(--dim)/var(--fg), edge
+ * var(--line)/var(--accent). The gloss recipe below is baked for dark
+ * surfaces; body[data-pearl="light"] (marked from the live panel
+ * luminance by syncPearlTone in app.js) retunes it for light palettes,
+ * where faint white highlights vanish and black shades go harsh. The
+ * light block adds no hex literals (rgba()/var() only) so the
+ * test_theme no-hex rule keeps passing. */
+.repo-pill {
+  --pearl-radius: 999px;
+  position: relative;
+  display: inline-flex; align-items: center;
+  padding: 0; border-radius: var(--pearl-radius); cursor: pointer;
+  outline: none;
+  background-color: var(--panel); color: var(--dim); border: 1px solid var(--line);
+  font-size: 12px; line-height: 1.6; max-width: 44vw;
+  transition: box-shadow 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+  box-shadow:
+    inset 0 0.12rem 0.3rem rgba(255, 255, 255, 0.18),
+    inset 0 -0.06rem 0.12rem rgba(0, 0, 0, 0.6),
+    inset 0 -0.15rem 0.4rem rgba(255, 255, 255, 0.22),
+    0 0.6rem 0.9rem rgba(0, 0, 0, 0.22),
+    0 0.25rem 0.45rem -0.2rem rgba(0, 0, 0, 0.6);
+}
+.repo-pill .pearl-wrap {
+  display: block;
+  padding: 6px 14px;
+  border-radius: inherit;
+  position: relative;
+  overflow: hidden;
+  max-width: 100%;
+}
+.repo-pill .pearl-row {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0;
+  max-width: 100%;
+  transform: translateY(2%);
+  transition: transform 0.2s ease;
+  mask-image: linear-gradient(to bottom, white 45%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, white 45%, transparent);
+}
+.repo-pill .pearl-wrap::before,
+.repo-pill .pearl-wrap::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.repo-pill .pearl-wrap::before {
+  left: -15%; right: -15%; bottom: 25%; top: -100%;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.06);
+}
+.repo-pill .pearl-wrap::after {
+  left: 6%; right: 6%; top: 12%; bottom: 42%;
+  border-radius: 22px 22px 0 0;
+  box-shadow: inset 0 6px 6px -6px rgba(255, 255, 255, 0.45);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.16) 0%,
+    rgba(0, 0, 0, 0) 55%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+.repo-pill:hover {
+  color: var(--fg); border-color: var(--accent);
+  box-shadow:
+    inset 0 0.12rem 0.25rem rgba(255, 255, 255, 0.24),
+    inset 0 -0.06rem 0.12rem rgba(0, 0, 0, 0.6),
+    inset 0 -0.15rem 0.4rem rgba(255, 255, 255, 0.32),
+    0 0.6rem 0.9rem rgba(0, 0, 0, 0.22),
+    0 0.25rem 0.45rem -0.2rem rgba(0, 0, 0, 0.6);
+}
+.repo-pill:hover .pearl-wrap::before { transform: translateY(-5%); }
+.repo-pill:hover .pearl-wrap::after { opacity: 0.4; transform: translateY(5%); }
+.repo-pill:hover .pearl-row { transform: translateY(-4%); }
+.repo-pill:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 0.12rem 0.25rem rgba(255, 255, 255, 0.26),
+    inset 0 -0.06rem 0.12rem rgba(0, 0, 0, 0.7),
+    inset 0 -0.15rem 0.4rem rgba(255, 255, 255, 0.2),
+    0 0.4rem 0.6rem rgba(0, 0, 0, 0.2),
+    0 0.15rem 0.3rem -0.15rem rgba(0, 0, 0, 0.5);
+}
+#branch-pill { max-width: 28vw; }
+.repo-pill:disabled { opacity: .55; cursor: default; transform: none; }
+.repo-pill svg { flex: none; }
+.repo-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-pill .pearl-wrap { min-width: 0; }
+.repo-pill.picked { color: var(--fg); }
+/* Light-surface treatment: no glow. White highlights vanish against
+ * near-white panels and read as haze, so light palettes get a flat
+ * pill instead: theme surface, a faint ink-tinted foot, and a soft
+ * drop shadow, with the accent edge on hover. The pearl sheen layers
+ * stay off behind this hook. */
+body[data-pearl="light"] .repo-pill {
+  --pearl-lo: rgba(93, 74, 58, 0.22);
+  --pearl-lo: color-mix(in srgb, var(--fg) 22%, transparent);
+  box-shadow:
+    inset 0 -0.06rem 0.1rem var(--pearl-lo),
+    0 0.4rem 0.8rem rgba(0, 0, 0, 0.10),
+    0 0.15rem 0.35rem -0.15rem rgba(0, 0, 0, 0.16);
+}
+body[data-pearl="light"] .repo-pill .pearl-wrap::before,
+body[data-pearl="light"] .repo-pill .pearl-wrap::after {
+  display: none;
+}
+body[data-pearl="light"] .repo-pill:hover {
+  box-shadow:
+    inset 0 -0.06rem 0.1rem var(--pearl-lo),
+    0 0.5rem 1rem rgba(0, 0, 0, 0.12),
+    0 0.2rem 0.4rem -0.15rem rgba(0, 0, 0, 0.18);
+}
+body[data-pearl="light"] .repo-pill:active {
+  box-shadow:
+    inset 0 -0.06rem 0.1rem var(--pearl-lo),
+    0 0.25rem 0.5rem rgba(0, 0, 0, 0.10),
+    0 0.1rem 0.25rem -0.1rem rgba(0, 0, 0, 0.14);
+}
+@media (prefers-reduced-motion: reduce) {
+  .repo-pill, .repo-pill .pearl-row,
+  .repo-pill .pearl-wrap::before, .repo-pill .pearl-wrap::after {
+    transition: none;
+  }
+  .repo-pill .pearl-row, .repo-pill:hover .pearl-row,
+  .repo-pill:hover .pearl-wrap::before, .repo-pill:hover .pearl-wrap::after,
+  .repo-pill:active {
+    transform: none;
+  }
+}
+/* menus open upward from the pills */
+.repo-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0;
+  min-width: 220px; max-width: min(340px, 78vw); max-height: 240px;
+  overflow-y: auto; z-index: 30;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 4px;
+}
+.repo-menu[hidden] { display: none; }
+#branch-menu { min-width: 110px; max-width: min(170px, 39vw); }
+.repo-opt {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: none; border-radius: 8px;
+  color: var(--fg); padding: 6px 10px; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.repo-opt:hover { background: var(--panel2); }
+.repo-opt .sub { color: var(--faint); font-size: 11px; margin-left: 6px; }
+.repo-opt.dim { color: var(--dim); cursor: default; }
+.repo-opt.dim:hover { background: none; }
+/* Fetch loader (Uiverse aryamitra06): three bars in front of the
+ * status text while `gh` lists repos/branches, shrunk to sit inside a
+ * menu row. Bars rest on --dim and peak on --fg so the pulse reads on
+ * light and dark palettes alike; no hex literals (see test_theme's
+ * no-hex rule). */
+.repo-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.repo-loading-label {
+  /* Same size as the "select a repo" pill text. */
+  font-size: 12px; line-height: 1.6;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.loader {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 2px 0;
+}
+.bar {
+  display: inline-block;
+  width: 2px;
+  height: 4px;
+  background-color: var(--dim);
+  border-radius: 3px;
+  animation: repo-bar-grow 1s linear infinite;
+}
+.bar:nth-child(2) {
+  height: 7px;
+  margin: 0 2px;
+  animation-delay: .25s;
+}
+.bar:nth-child(3) {
+  animation-delay: .5s;
+}
+@keyframes repo-bar-grow {
+  20% {
+    background-color: var(--fg);
+    transform: scaleY(1.5);
+  }
+  40% {
+    transform: scaleY(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loader .bar {
+    animation: none;
+  }
+}
